@@ -21,6 +21,24 @@ from scanners.models import SASTScanResult, ScannerType, Severity, Vulnerability
 logger = logging.getLogger("cybersecuritybot.sast_scanner")
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
+# List of directories to ignore during all code traversals and static analysis
+IGNORED_DIRS = {
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+    "build",
+    "dist",
+    ".dart_tool",
+    ".idea",
+    "__pycache__",
+    ".pytest_cache",
+    ".tox",
+    ".mypy_cache",
+    "site-packages",
+}
+
 
 class PythonASTSecurityVisitor(ast.NodeVisitor):
     """AST Visitor that inspects Python AST for critical security patterns."""
@@ -224,30 +242,33 @@ class SASTScanner:
         return mapping.get(bandit_sev.upper(), Severity.LOW)
 
     async def run_ast_analyzer(self, target_path: Path) -> List[VulnerabilityFinding]:
-        """Analyze Python files using built-in AST security visitor."""
+        """Analyze Python files using built-in AST security visitor with directory pruning."""
         findings: List[VulnerabilityFinding] = []
-        py_files = list(target_path.glob("**/*.py"))
 
-        for py_file in py_files:
-            # Skip virtual environments and hidden paths
-            if any(part.startswith(".") or part in ["venv", "env", ".venv"] for part in py_file.parts):
-                continue
+        for root, dirs, files in os.walk(target_path):
+            # Prune ignored directories in-place to prevent os.walk from descending into them
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
 
-            try:
-                content = py_file.read_text(encoding="utf-8", errors="replace")
-                tree = ast.parse(content, filename=str(py_file))
-                visitor = PythonASTSecurityVisitor(py_file, content)
-                visitor.visit(tree)
-                findings.extend(visitor.findings)
-            except Exception as e:
-                logger.debug(f"AST parsing skipped for {py_file}: {e}")
+            for file in files:
+                if file.endswith(".py"):
+                    py_file = Path(root) / file
+                    try:
+                        content = py_file.read_text(encoding="utf-8", errors="replace")
+                        tree = ast.parse(content, filename=str(py_file))
+                        visitor = PythonASTSecurityVisitor(py_file, content)
+                        visitor.visit(tree)
+                        findings.extend(visitor.findings)
+                    except Exception as e:
+                        logger.debug(f"AST parsing skipped for {py_file}: {e}")
 
         return findings
 
     async def run_semgrep(self, target_path: Path) -> Tuple[List[VulnerabilityFinding], Optional[str]]:
-        """Run Semgrep SAST scan over the target directory."""
+        """Run Semgrep SAST scan over the target directory with excluded paths."""
         if not shutil.which("semgrep"):
             return [], "Semgrep binary not found in PATH."
+
+        exclude_args = [f"--exclude={d}" for d in IGNORED_DIRS]
 
         cmd = [
             "semgrep",
@@ -255,7 +276,7 @@ class SASTScanner:
             f"--config={self.semgrep_config}",
             "--json",
             "--quiet",
-            "--no-git-ignore",
+            *exclude_args,
             str(target_path.resolve()),
         ]
 
@@ -299,11 +320,22 @@ class SASTScanner:
             return [], f"Semgrep parse error: {e}"
 
     async def run_bandit(self, target_path: Path) -> Tuple[List[VulnerabilityFinding], Optional[str]]:
-        """Run Bandit security linter for Python files."""
+        """Run Bandit security linter with excluded directories."""
         if not shutil.which("bandit"):
             return [], "Bandit binary not found in PATH."
 
-        cmd = ["bandit", "-r", str(target_path.resolve()), "-f", "json", "-q"]
+        exclude_str = ",".join(IGNORED_DIRS)
+        cmd = [
+            "bandit",
+            "-r",
+            str(target_path.resolve()),
+            "-x",
+            exclude_str,
+            "-f",
+            "json",
+            "-q",
+        ]
+
         retcode, stdout, stderr = await self._run_command(cmd)
         if not stdout.strip():
             return [], stderr.strip() or None
@@ -340,11 +372,17 @@ class SASTScanner:
             return [], f"Bandit parse error: {e}"
 
     async def run_pip_audit(self, target_path: Path) -> Tuple[List[VulnerabilityFinding], Optional[str]]:
-        """Run pip-audit on requirements files."""
+        """Run pip-audit on requirements files found outside ignored directories."""
         if not shutil.which("pip-audit"):
             return [], "pip-audit binary not found in PATH."
 
-        req_files = list(target_path.glob("**/requirements*.txt"))
+        req_files: List[Path] = []
+        for root, dirs, files in os.walk(target_path):
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
+            for file in files:
+                if file.startswith("requirements") and file.endswith(".txt"):
+                    req_files.append(Path(root) / file)
+
         if not req_files:
             return [], None
 
@@ -440,3 +478,12 @@ class SASTScanner:
             f"Discovered {len(all_findings)} total findings across {path.name}."
         )
         return result
+
+
+if __name__ == "__main__":
+    import sys
+
+    target = sys.argv[1] if len(sys.argv) > 1 else "."
+    scanner = SASTScanner()
+    scan_result = asyncio.run(scanner.scan(target))
+    print(scan_result.model_dump_json(indent=2))
