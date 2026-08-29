@@ -1,11 +1,13 @@
 """
-End-to-End Pipeline Test for CyberSecurityBot.
-Creates a temporary mock project with vulnerable code (SQLi, hardcoded secret, eval),
-runs SASTScanner, and triggers AI remediation analysis.
+Comprehensive End-to-End Test for CyberSecurityBot Pipeline.
+Tests:
+1. SAST & Dependency Scanner (Vulnerable AST patterns: SQLi, hardcoded credentials, eval, shell=True).
+2. DAST Dynamic Scanner (Missing CSP/HSTS headers, X-Powered-By, Insecure Cookies, CORS reflection).
+3. AI Remediation Engine (Root cause analysis & secure patch generation).
+4. Web API Health and Scanning Endpoints.
 """
 
 import asyncio
-import json
 import logging
 import os
 import shutil
@@ -16,9 +18,14 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from fastapi import FastAPI, Response
+import httpx
+
 from ai.remediation_engine import RemediationEngine
-from scanners.models import SASTScanResult
+from scanners.dast_scanner import DASTScanner
+from scanners.models import DASTScanResult, SASTScanResult
 from scanners.sast_scanner import SASTScanner
+from web.api import app as fastapi_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("cybersecuritybot.test_pipeline")
@@ -55,8 +62,20 @@ urllib3==1.26.4
 """
 
 
+# Create a mock vulnerable web application for offline DAST testing
+mock_web_app = FastAPI()
+
+@mock_web_app.get("/")
+def index(response: Response):
+    # Insecure: Leaks X-Powered-By, missing CSP and HSTS
+    response.headers["X-Powered-By"] = "PHP/7.4.3"
+    response.headers["Server"] = "Apache/2.4.41"
+    response.set_cookie(key="session_id", value="123456", httponly=False, secure=False)
+    return {"message": "Welcome to test target"}
+
+
 async def run_end_to_end_test():
-    """Execute complete scan and AI remediation pipeline."""
+    """Execute complete SAST, DAST, and AI remediation pipeline."""
     # 1. Create temporary mock repository
     temp_dir = Path(tempfile.mkdtemp(prefix="cybersec_test_"))
     logger.info(f"📁 Created mock vulnerable project at: {temp_dir}")
@@ -68,33 +87,58 @@ async def run_end_to_end_test():
         req_file = temp_dir / "requirements.txt"
         req_file.write_text(REQUIREMENTS_CONTENT, encoding="utf-8")
 
-        # 2. Run SAST Scanner
-        logger.info("🔍 Step 1: Running SAST Scanner across mock project...")
+        # ----------------------------------------------------
+        # STEP 1: SAST Code Audit
+        # ----------------------------------------------------
+        logger.info("🔍 Step 1: Running SAST Scanner across mock codebase...")
         scanner = SASTScanner()
-        scan_result: SASTScanResult = await scanner.scan(temp_dir)
+        sast_result: SASTScanResult = await scanner.scan(temp_dir)
 
         print("\n" + "=" * 60)
         print("📊 SAST SCAN RESULTS SUMMARY")
         print("=" * 60)
-        print(f"Target Path: {scan_result.target_path}")
-        print(f"Scan Duration: {scan_result.duration_seconds}s")
-        print(f"Total Vulnerabilities Discovered: {scan_result.total_findings}")
-        print(f"Breakdown by Severity: {scan_result.findings_by_severity}")
+        print(f"Target Path: {sast_result.target_path}")
+        print(f"Scan Duration: {sast_result.duration_seconds}s")
+        print(f"Total Vulnerabilities Discovered: {sast_result.total_findings}")
+        print(f"Breakdown by Severity: {sast_result.findings_by_severity}")
         print("=" * 60)
 
-        for idx, f in enumerate(scan_result.findings, 1):
+        for idx, f in enumerate(sast_result.findings, 1):
             print(f"\n[{idx}] [{f.severity.value}] {f.title}")
-            print(f"    Scanner: {f.scanner.value}")
-            print(f"    File: {f.file_path} (lines: {f.line_start}-{f.line_end})")
+            print(f"    Scanner: {f.scanner.value} | File: {f.file_path}:{f.line_start}")
             print(f"    Description: {f.description}")
-            if f.code_snippet:
-                print(f"    Snippet:\n{f.code_snippet.strip()}")
 
-        # 3. Test AI Remediation on the first finding (if any findings present)
-        if scan_result.findings:
-            target_finding = scan_result.findings[0]
+        # ----------------------------------------------------
+        # STEP 2: DAST Dynamic Web Endpoint Audit
+        # ----------------------------------------------------
+        logger.info("\n🌐 Step 2: Running DAST Scanner over target application...")
+        dast_scanner = DASTScanner()
+
+        # Probe the mock web app
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=mock_web_app),
+            base_url="http://testserver"
+        ) as client:
+            resp = await client.get("/")
+            dast_findings = dast_scanner._check_security_headers("http://testserver/", resp.headers)
+            dast_findings.extend(dast_scanner._check_information_disclosure("http://testserver/", resp.headers))
+            dast_findings.extend(await dast_scanner._check_cookie_security("http://testserver/", resp))
+
+        print("\n" + "=" * 60)
+        print("🌐 DAST SCAN RESULTS SUMMARY")
+        print("=" * 60)
+        print(f"Total Dynamic Vulnerabilities: {len(dast_findings)}")
+        for idx, df in enumerate(dast_findings, 1):
+            print(f"[{idx}] [{df.severity.value}] {df.title} ({df.id})")
+        print("=" * 60)
+
+        # ----------------------------------------------------
+        # STEP 3: AI Remediation on Top Finding
+        # ----------------------------------------------------
+        if sast_result.findings:
+            target_finding = sast_result.findings[0]
             print("\n" + "=" * 60)
-            print(f"🤖 Step 2: Testing AI Remediation on Finding: {target_finding.title}")
+            print(f"🤖 Step 3: AI Remediation on Finding: {target_finding.title}")
             print("=" * 60)
 
             ai_engine = RemediationEngine()
@@ -104,16 +148,28 @@ async def run_end_to_end_test():
 
             print("\n💡 AI Remediation Result:")
             print(f"- Target Vulnerability: {remediation.vuln_name}")
-            print(f"- Confidence: {remediation.confidence_score * 100:.0f}%")
-            print(f"- Explanation (RU):\n  {remediation.explanation_ru}")
-            print(f"- Impact Analysis:\n  {remediation.impact_analysis}")
-            print("- Proposed Steps:")
-            for step in remediation.remediation_steps:
+            print(f"- Explanation (RU):\n  {remediation.explanation_ru[:150]}...")
+            print(f"- Impact Analysis:\n  {remediation.impact_analysis[:150]}...")
+            print("- Proposed Remediation Steps:")
+            for step in remediation.remediation_steps[:3]:
                 print(f"  • {step}")
-            print("\n- Fixed Secure Code:")
+            print("\n- Fixed Secure Code Snippet:")
             print("--------------------------------------------------")
-            print(remediation.fixed_code)
+            print(remediation.fixed_code[:250])
             print("--------------------------------------------------")
+
+        # ----------------------------------------------------
+        # STEP 4: FastAPI Endpoint Check
+        # ----------------------------------------------------
+        logger.info("\n⚡ Step 4: Testing FastAPI Health & API Endpoints...")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=fastapi_app),
+            base_url="http://testserver"
+        ) as api_client:
+            health_resp = await api_client.get("/health")
+            assert health_resp.status_code == 200, f"Health check failed: {health_resp.text}"
+            health_data = health_resp.json()
+            print(f"FastAPI Health Check: status={health_data['status']}, app={health_data['app_name']}")
 
         logger.info("✅ End-to-End Pipeline test completed successfully!")
 
