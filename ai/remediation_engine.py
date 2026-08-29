@@ -4,6 +4,7 @@ Performs root-cause vulnerability analysis and generates secure code patches.
 Supports local Ollama (e.g. Qwen2.5-Coder / DeepSeek-R1) and Google Gemini fallback.
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -55,11 +56,11 @@ class RemediationEngine:
             else settings.gemini_model
         )
 
-        # Initialize OpenAI-compatible client for Ollama
+        # Initialize OpenAI-compatible client for Ollama with hard 45s timeout
         self.ollama_client = AsyncOpenAI(
             base_url=f"{settings.ollama_base_url.rstrip('/')}/v1",
             api_key="ollama",  # Ollama does not require a real key
-            timeout=5.0,
+            timeout=45.0,
             max_retries=1,
         )
 
@@ -95,31 +96,38 @@ class RemediationEngine:
             f"- CWE: {', '.join(finding.cwe) if finding.cwe else 'N/A'}\n"
             f"- CVE: {', '.join(finding.cve) if finding.cve else 'N/A'}\n"
             f"- Рекомендация сканера: {finding.recommendation or 'N/A'}\n\n"
-            f"Фрагмент уязвимого исходного кода:\n"
+            f"Контекст уязвимого кода (окно 30 строк):\n"
             f"```python\n{code_context}\n```\n\n"
             f"Проанализируй уязвимость и верни JSON со структурированным решением и исправленным кодом (fixed_code)."
         )
 
     async def _query_ollama(self, system_prompt: str, user_prompt: str) -> str:
-        """Execute chat completion via local Ollama API."""
+        """Execute chat completion via local Ollama API with 45s hard timeout and 1500 max tokens."""
         try:
-            response = await self.ollama_client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.2,
-                response_format={"type": "json_object"},
+            response = await asyncio.wait_for(
+                self.ollama_client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.2,
+                    max_tokens=1500,
+                    response_format={"type": "json_object"},
+                ),
+                timeout=45.0,
             )
             content = response.choices[0].message.content or ""
             return content.strip()
+        except asyncio.TimeoutError:
+            logger.error("Ollama inference timed out after 45.0 seconds.")
+            raise TimeoutError("Превышен таймаут ответа Ollama (45 сек).")
         except Exception as e:
             logger.warning(f"Ollama inference error: {e}. Attempting fallback...")
             raise e
 
     async def _query_gemini(self, system_prompt: str, user_prompt: str) -> str:
-        """Execute chat completion via Google Gemini API."""
+        """Execute chat completion via Google Gemini API with 45s timeout."""
         if not settings.gemini_api_key:
             raise ValueError("GEMINI_API_KEY is not set in environment or settings.")
 
@@ -129,9 +137,16 @@ class RemediationEngine:
         model = genai.GenerativeModel(
             model_name=settings.gemini_model,
             system_instruction=system_prompt,
-            generation_config={"response_mime_type": "application/json", "temperature": 0.2},
+            generation_config={
+                "response_mime_type": "application/json",
+                "temperature": 0.2,
+                "max_output_tokens": 1500,
+            },
         )
-        response = await model.generate_content_async(user_prompt)
+        response = await asyncio.wait_for(
+            model.generate_content_async(user_prompt),
+            timeout=45.0,
+        )
         return response.text.strip()
 
     def _parse_llm_json_response(
@@ -150,13 +165,12 @@ class RemediationEngine:
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError:
-            # Fallback if model returned partially malformed JSON
             logger.error(f"Failed to parse LLM JSON: {raw_text[:200]}")
             return RemediationResult(
                 finding_id=finding.id,
                 vuln_name=finding.title,
                 severity=finding.severity.value,
-                explanation_ru=raw_text[:500],
+                explanation_ru=raw_text[:500] if raw_text else finding.description,
                 impact_analysis="Требуется ручная проверка уязвимости.",
                 remediation_steps=["Примените безопасные паттерны кодирования."],
                 fixed_code=finding.code_snippet or "# Код требует ручного исправления",
@@ -193,10 +207,60 @@ class RemediationEngine:
         if self.provider == LLMProvider.OLLAMA:
             try:
                 raw_output = await self._query_ollama(system_prompt, user_prompt)
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.warning("Ollama timed out, checking Gemini fallback...")
+                if settings.gemini_api_key:
+                    try:
+                        raw_output = await self._query_gemini(system_prompt, user_prompt)
+                    except Exception as ge:
+                        logger.error(f"Gemini fallback failed after Ollama timeout: {ge}")
+                        return RemediationResult(
+                            finding_id=finding.id,
+                            vuln_name=finding.title,
+                            severity=finding.severity.value,
+                            explanation_ru="⏱️ Превышен таймаут генерации ответа локальной модели Ollama (45 сек).",
+                            impact_analysis="Генерация решения остановлена по таймауту.",
+                            remediation_steps=[
+                                "Убедитесь, что модель qwen2.5-coder загружена в память Ollama (ollama run qwen2.5-coder:14b).",
+                                "Повторите попытку анализа."
+                            ],
+                            fixed_code=context,
+                            diff_patch=None,
+                            confidence_score=0.0,
+                        )
+                else:
+                    return RemediationResult(
+                        finding_id=finding.id,
+                        vuln_name=finding.title,
+                        severity=finding.severity.value,
+                        explanation_ru="⏱️ Превышен таймаут генерации ответа локальной модели Ollama (45 сек).",
+                        impact_analysis="Генерация решения остановлена по таймауту.",
+                        remediation_steps=[
+                            "Убедитесь, что модель qwen2.5-coder загружена в память Ollama (ollama run qwen2.5-coder:14b).",
+                            "Повторите попытку анализа."
+                        ],
+                        fixed_code=context,
+                        diff_patch=None,
+                        confidence_score=0.0,
+                    )
             except Exception as e:
                 logger.warning(f"Ollama failed ({e}), checking Gemini fallback...")
                 if settings.gemini_api_key:
-                    raw_output = await self._query_gemini(system_prompt, user_prompt)
+                    try:
+                        raw_output = await self._query_gemini(system_prompt, user_prompt)
+                    except Exception as ge:
+                        logger.error(f"Gemini fallback error: {ge}")
+                        return RemediationResult(
+                            finding_id=finding.id,
+                            vuln_name=finding.title,
+                            severity=finding.severity.value,
+                            explanation_ru=f"Ошибка генерации: {e}",
+                            impact_analysis="Определяется типом уязвимости.",
+                            remediation_steps=["Проверьте статус Ollama / Gemini API."],
+                            fixed_code=context,
+                            diff_patch=None,
+                            confidence_score=0.0,
+                        )
                 else:
                     return RemediationResult(
                         finding_id=finding.id,
@@ -220,6 +284,16 @@ class RemediationEngine:
                 try:
                     raw_output = await self._query_ollama(system_prompt, user_prompt)
                 except Exception:
-                    raise RuntimeError(f"All LLM providers failed. Last error: {e}")
+                    return RemediationResult(
+                        finding_id=finding.id,
+                        vuln_name=finding.title,
+                        severity=finding.severity.value,
+                        explanation_ru=f"Не удалось получить ответ от AI провайдеров ({e}).",
+                        impact_analysis="Определяется типом уязвимости.",
+                        remediation_steps=["Проверьте доступность Gemini API или запустите Ollama локально."],
+                        fixed_code=context,
+                        diff_patch=None,
+                        confidence_score=0.0,
+                    )
 
         return self._parse_llm_json_response(raw_output, finding)

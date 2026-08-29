@@ -33,11 +33,37 @@ IGNORED_DIRS = {
     ".dart_tool",
     ".idea",
     "__pycache__",
+    "temp_scans",
     ".pytest_cache",
     ".tox",
     ".mypy_cache",
     "site-packages",
 }
+
+
+def extract_code_context(
+    file_path: Union[str, Path], line_number: Optional[int] = None, padding: int = 15
+) -> Optional[str]:
+    """
+    Extract a clean 30-line window (15 lines before, 15 lines after) around the finding line.
+    Prevents overflowing LLM context window with entire large files.
+    """
+    p = Path(file_path)
+    if not p.exists() or not p.is_file():
+        return None
+
+    try:
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        if not lines:
+            return None
+
+        target_line = line_number or 1
+        first_line = max(1, target_line - padding)
+        last_line = min(len(lines), target_line + padding)
+        return "\n".join(lines[first_line - 1 : last_line])
+    except Exception as e:
+        logger.debug(f"Failed to extract code context from {p}: {e}")
+        return None
 
 
 class PythonASTSecurityVisitor(ast.NodeVisitor):
@@ -49,9 +75,12 @@ class PythonASTSecurityVisitor(ast.NodeVisitor):
         self.lines = file_content.splitlines()
         self.findings: List[VulnerabilityFinding] = []
 
-    def _get_snippet(self, start_line: int, end_line: Optional[int] = None) -> str:
+    def _get_snippet(self, start_line: int, end_line: Optional[int] = None, padding: int = 15) -> str:
+        """Extract a 30-line code window (15 lines before, 15 lines after) around the finding."""
         end = end_line or start_line
-        selected = self.lines[max(0, start_line - 1): min(len(self.lines), end)]
+        first_line = max(1, start_line - padding)
+        last_line = min(len(self.lines), end + padding)
+        selected = self.lines[first_line - 1 : last_line]
         return "\n".join(selected)
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -299,16 +328,27 @@ class SASTScanner:
                 raw_cve = metadata.get("cve", [])
                 cve_list = raw_cve if isinstance(raw_cve, list) else [str(raw_cve)] if raw_cve else []
 
+                start_line = res.get("start", {}).get("line")
+                end_line = res.get("end", {}).get("line")
+                file_p = res.get("path", str(target_path))
+
+                # Extract 30-line code window context if file exists
+                snippet = extra.get("lines", None)
+                if not snippet or len(snippet.splitlines()) < 5:
+                    window_ctx = extract_code_context(file_p, start_line, padding=15)
+                    if window_ctx:
+                        snippet = window_ctx
+
                 finding = VulnerabilityFinding(
                     id=check_id,
                     scanner=ScannerType.SEMGREP,
                     title=f"Semgrep: {check_id.split('.')[-1]}",
                     description=message,
                     severity=self._normalize_semgrep_severity(raw_severity),
-                    file_path=res.get("path", str(target_path)),
-                    line_start=res.get("start", {}).get("line"),
-                    line_end=res.get("end", {}).get("line"),
-                    code_snippet=extra.get("lines", None),
+                    file_path=file_p,
+                    line_start=start_line,
+                    line_end=end_line,
+                    code_snippet=snippet,
                     cwe=cwe_list,
                     cve=cve_list,
                     recommendation=metadata.get("fix", metadata.get("shortlink", None)),
@@ -351,16 +391,25 @@ class SASTScanner:
                 if isinstance(cwe_info, dict) and "id" in cwe_info:
                     cwe.append(f"CWE-{cwe_info['id']}")
 
+                filename = res.get("filename", str(target_path))
+                line_num = res.get("line_number")
+
+                # Extract 30-line code window context if available
+                snippet = res.get("code")
+                window_ctx = extract_code_context(filename, line_num, padding=15)
+                if window_ctx:
+                    snippet = window_ctx
+
                 finding = VulnerabilityFinding(
                     id=f"bandit.{test_id}",
                     scanner=ScannerType.BANDIT,
                     title=f"Bandit [{test_id}]: {test_name}",
                     description=res.get("issue_text", ""),
                     severity=self._normalize_bandit_severity(res.get("issue_severity", "LOW")),
-                    file_path=res.get("filename", str(target_path)),
-                    line_start=res.get("line_number"),
-                    line_end=res.get("line_number"),
-                    code_snippet=res.get("code"),
+                    file_path=filename,
+                    line_start=line_num,
+                    line_end=line_num,
+                    code_snippet=snippet,
                     cwe=cwe,
                     cve=[],
                     recommendation=f"Reference: {res.get('more_info')}" if res.get("more_info") else None,

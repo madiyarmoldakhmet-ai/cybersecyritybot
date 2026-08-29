@@ -440,18 +440,28 @@ async def handle_remediation_and_pr(callback: CallbackQuery) -> None:
         parse_mode="Markdown"
     )
 
-    # 1. Run AI Remediation
-    engine = RemediationEngine()
-    remediation: RemediationResult = await engine.analyze_and_remediate(target_finding)
+    # 1. Run AI Remediation with robust error handling
+    try:
+        engine = RemediationEngine()
+        remediation: RemediationResult = await engine.analyze_and_remediate(target_finding)
 
-    analysis_msg = (
-        f"💡 **AI Анализ и Решение:**\n\n"
-        f"📌 **Первопричина:**\n{remediation.explanation_ru}\n\n"
-        f"⚠️ **Impact:**\n{remediation.impact_analysis}\n\n"
-        f"🛠 **План исправления:**\n" + "\n".join(f"• {s}" for s in remediation.remediation_steps) + "\n\n"
-        f"🔒 **Исправленный код:**\n```python\n{remediation.fixed_code[:400]}\n```"
-    )
-    await callback.message.answer(analysis_msg, parse_mode="Markdown")
+        analysis_msg = (
+            f"💡 **AI Анализ и Решение:**\n\n"
+            f"📌 **Первопричина:**\n{remediation.explanation_ru}\n\n"
+            f"⚠️ **Impact:**\n{remediation.impact_analysis}\n\n"
+            f"🛠 **План исправления:**\n" + "\n".join(f"• {s}" for s in remediation.remediation_steps) + "\n\n"
+            f"🔒 **Исправленный код:**\n```python\n{remediation.fixed_code[:600]}\n```"
+        )
+        await callback.message.answer(analysis_msg, parse_mode="Markdown")
+
+    except Exception as ex:
+        logger.exception(f"AI remediation failed: {ex}")
+        await callback.message.answer(
+            f"⚠️ **Ошибка при генерации AI-исправления:**\n`{str(ex)}`\n\n"
+            "Убедитесь, что сервер Ollama запущен (`ollama run qwen2.5-coder:14b`) или задан GEMINI_API_KEY в `.env`."
+        )
+        await callback.answer()
+        return
 
     # 2. Check if Auto-PR can be opened
     can_create_pr = session.get("can_create_pr", False)
@@ -473,30 +483,34 @@ async def handle_remediation_and_pr(callback: CallbackQuery) -> None:
     if "temp_scans" in clean_path:
         clean_path = clean_path.split("/")[-1]
 
-    success, msg, pr_url = await PullRequestCreator.create_remediation_pr(
-        token=github_token,
-        repo_identifier=session["repo_name"],
-        file_path=clean_path,
-        fixed_content=remediation.fixed_code,
-        finding=target_finding,
-        remediation=remediation,
-    )
+    try:
+        success, msg, pr_url = await PullRequestCreator.create_remediation_pr(
+            token=github_token,
+            repo_identifier=session["repo_name"],
+            file_path=clean_path,
+            fixed_content=remediation.fixed_code,
+            finding=target_finding,
+            remediation=remediation,
+        )
 
-    if success and pr_url:
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 Открыть Pull Request на GitHub", url=pr_url)]
-            ]
-        )
-        await pr_status_msg.edit_text(
-            f"🎉 **Pull Request успешно создан!**\n\n"
-            f"Исправление для `{target_finding.title}` отправлено в ваш репозиторий.\n"
-            f"Ссылка: {pr_url}",
-            reply_markup=kb,
-            parse_mode="Markdown"
-        )
-    else:
-        await pr_status_msg.edit_text(f"❌ Не удалось создать PR:\n{msg}")
+        if success and pr_url:
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🔗 Открыть Pull Request на GitHub", url=pr_url)]
+                ]
+            )
+            await pr_status_msg.edit_text(
+                f"🎉 **Pull Request успешно создан!**\n\n"
+                f"Исправление для `{target_finding.title}` отправлено в ваш репозиторий.\n"
+                f"Ссылка: {pr_url}",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+        else:
+            await pr_status_msg.edit_text(f"❌ Не удалось создать PR:\n{msg}")
+    except Exception as pr_ex:
+        logger.exception(f"PR creation unexpected exception: {pr_ex}")
+        await pr_status_msg.edit_text(f"❌ Исключение при создании PR: `{str(pr_ex)}`")
 
     await callback.answer()
 
