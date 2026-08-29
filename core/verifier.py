@@ -54,17 +54,30 @@ class OwnershipVerifier:
         Verify that the provided token has push or admin permissions on the target repository.
         Returns: (is_authorized, status_message)
         """
+        clean_token = token.strip()
+        if not clean_token:
+            return False, "Предоставлен пустой GitHub Token."
+
         repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
         if not repo_full_name:
             return False, f"Неверный формат репозитория: '{repo_identifier}'. Ожидается 'owner/repo' или URL."
 
         def _sync_check() -> Tuple[bool, str]:
             try:
-                auth = Auth.Token(token.strip())
+                # Standard PyGithub 2.x authentication
+                auth = Auth.Token(clean_token)
                 gh = Github(auth=auth, timeout=15)
-                user = gh.get_user()
-                username = user.login
 
+                # 1. Verify token validity and authenticate user
+                try:
+                    user = gh.get_user()
+                    username = user.login
+                except GithubException as auth_err:
+                    if auth_err.status == 401:
+                        return False, "Неверный или просроченный GitHub Token (401 Unauthorized)."
+                    raise auth_err
+
+                # 2. Check repository permissions
                 repo = gh.get_repo(repo_full_name)
                 perms = repo.permissions
 
@@ -89,7 +102,8 @@ class OwnershipVerifier:
                     )
                 if ghe.status == 401:
                     return False, "Неверный или просроченный GitHub Token (401 Unauthorized)."
-                return False, f"Ошибка GitHub API ({ghe.status}): {ghe.data.get('message', str(ghe))}"
+                err_msg = ghe.data.get("message", str(ghe)) if isinstance(ghe.data, dict) else str(ghe)
+                return False, f"Ошибка GitHub API ({ghe.status}): {err_msg}"
             except Exception as e:
                 return False, f"Не удалось выполнить проверку GitHub: {str(e)}"
 

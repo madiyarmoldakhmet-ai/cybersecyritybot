@@ -76,13 +76,17 @@ class PullRequestCreator:
         Create a new branch with the remediated file content and open a Pull Request.
         Returns: (success: bool, message: str, pr_html_url: Optional[str])
         """
+        clean_token = token.strip()
+        if not clean_token:
+            return False, "Предоставлен пустой GitHub Token.", None
+
         repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
         if not repo_full_name:
             return False, f"Неверный идентификатор репозитория: '{repo_identifier}'", None
 
         def _sync_create_pr() -> Tuple[bool, str, Optional[str]]:
             try:
-                auth = Auth.Token(token.strip())
+                auth = Auth.Token(clean_token)
                 gh = Github(auth=auth, timeout=30)
                 repo = gh.get_repo(repo_full_name)
 

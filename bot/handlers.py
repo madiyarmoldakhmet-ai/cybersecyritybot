@@ -210,7 +210,8 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
         return
 
     user_data = await state.get_data()
-    github_token = user_data.get("github_token") or settings.github_token
+    raw_token = user_data.get("github_token") or settings.github_token or ""
+    github_token = raw_token.strip()
 
     if not github_token:
         await message.answer("⚠️ GitHub Token не найден. Начните заново с /start.")
