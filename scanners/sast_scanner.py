@@ -1,13 +1,15 @@
 """
 SAST Scanner Engine for CyberSecurityBot.
-Executes static application security testing (Semgrep, Bandit) and dependency vulnerability checks (Pip-Audit).
+Executes static application security testing (AST Analyzer, Semgrep, Bandit) and dependency vulnerability checks (Pip-Audit).
 Normalized findings are produced for subsequent AI analysis and auto-remediation.
 """
 
+import ast
 import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -18,6 +20,142 @@ from scanners.models import SASTScanResult, ScannerType, Severity, Vulnerability
 
 logger = logging.getLogger("cybersecuritybot.sast_scanner")
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
+
+
+class PythonASTSecurityVisitor(ast.NodeVisitor):
+    """AST Visitor that inspects Python AST for critical security patterns."""
+
+    def __init__(self, file_path: Path, file_content: str) -> None:
+        self.file_path = file_path
+        self.file_content = file_content
+        self.lines = file_content.splitlines()
+        self.findings: List[VulnerabilityFinding] = []
+
+    def _get_snippet(self, start_line: int, end_line: Optional[int] = None) -> str:
+        end = end_line or start_line
+        selected = self.lines[max(0, start_line - 1): min(len(self.lines), end)]
+        return "\n".join(selected)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        # Check for hardcoded API keys or passwords
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                var_name = target.id.lower()
+                is_secret_name = any(
+                    k in var_name for k in ["secret", "api_key", "token", "password", "priv_key"]
+                )
+                if is_secret_name and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    val = node.value.value
+                    if len(val) > 8 and not val.startswith("ENV_") and not val.startswith("${"):
+                        self.findings.append(
+                            VulnerabilityFinding(
+                                id="hardcoded-secret",
+                                scanner=ScannerType.CUSTOM,
+                                title="Hardcoded Sensitive Credential or Secret",
+                                description=f"Variable '{target.id}' contains a hardcoded plaintext secret.",
+                                severity=Severity.HIGH,
+                                file_path=str(self.file_path),
+                                line_start=node.lineno,
+                                line_end=node.end_lineno or node.lineno,
+                                code_snippet=self._get_snippet(node.lineno, node.end_lineno),
+                                cwe=["CWE-798"],
+                                cve=[],
+                                recommendation="Move sensitive credentials to environment variables or a secrets manager."
+                            )
+                        )
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func_name = ""
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            func_name = node.func.attr
+
+        # 1. Insecure eval() / exec()
+        if func_name in ["eval", "exec"]:
+            self.findings.append(
+                VulnerabilityFinding(
+                    id="dynamic-code-eval",
+                    scanner=ScannerType.CUSTOM,
+                    title=f"Insecure Dynamic Code Execution via {func_name}()",
+                    description=f"Use of {func_name}() with dynamic input can lead to Arbitrary Code Execution.",
+                    severity=Severity.HIGH,
+                    file_path=str(self.file_path),
+                    line_start=node.lineno,
+                    line_end=node.end_lineno or node.lineno,
+                    code_snippet=self._get_snippet(node.lineno, node.end_lineno),
+                    cwe=["CWE-95"],
+                    cve=[],
+                    recommendation=f"Avoid using {func_name}(). Use safer alternatives (e.g. ast.literal_eval or dedicated parsers)."
+                )
+            )
+
+        # 2. SQL Injection in cursor.execute()
+        if func_name == "execute" and node.args:
+            first_arg = node.args[0]
+            # Check if string concatenation or f-string is used in SQL query
+            is_dynamic_sql = isinstance(first_arg, (ast.BinOp, ast.JoinedStr))
+            if is_dynamic_sql:
+                self.findings.append(
+                    VulnerabilityFinding(
+                        id="sql-injection-dynamic-query",
+                        scanner=ScannerType.CUSTOM,
+                        title="Potential SQL Injection via Dynamic Query Construction",
+                        description="SQL query is assembled via string concatenation/formatting instead of parameterized placeholders.",
+                        severity=Severity.CRITICAL,
+                        file_path=str(self.file_path),
+                        line_start=node.lineno,
+                        line_end=node.end_lineno or node.lineno,
+                        code_snippet=self._get_snippet(node.lineno, node.end_lineno),
+                        cwe=["CWE-89"],
+                        cve=[],
+                        recommendation="Use parameterized queries (e.g., cursor.execute('SELECT ... WHERE id = ?', (user_id,)))"
+                    )
+                )
+
+        # 3. Insecure subprocess with shell=True
+        if func_name in ["Popen", "run", "call", "check_output"]:
+            for kw in node.keywords:
+                if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    self.findings.append(
+                        VulnerabilityFinding(
+                            id="subprocess-shell-true",
+                            scanner=ScannerType.CUSTOM,
+                            title="Command Injection Risk via subprocess shell=True",
+                            description="subprocess invoked with shell=True can allow arbitrary command injection if arguments contain user input.",
+                            severity=Severity.HIGH,
+                            file_path=str(self.file_path),
+                            line_start=node.lineno,
+                            line_end=node.end_lineno or node.lineno,
+                            code_snippet=self._get_snippet(node.lineno, node.end_lineno),
+                            cwe=["CWE-78"],
+                            cve=[],
+                            recommendation="Set shell=False and pass command arguments as a list of strings."
+                        )
+                    )
+
+        # 4. Insecure deserialization with pickle
+        if func_name in ["loads", "load"] and isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "pickle":
+                self.findings.append(
+                    VulnerabilityFinding(
+                        id="insecure-pickle-deserialization",
+                        scanner=ScannerType.CUSTOM,
+                        title="Insecure Deserialization via pickle",
+                        description="Unpickling untrusted data can lead to Remote Code Execution.",
+                        severity=Severity.CRITICAL,
+                        file_path=str(self.file_path),
+                        line_start=node.lineno,
+                        line_end=node.end_lineno or node.lineno,
+                        code_snippet=self._get_snippet(node.lineno, node.end_lineno),
+                        cwe=["CWE-502"],
+                        cve=[],
+                        recommendation="Use safe serialization formats like JSON, MessagePack, or Protocol Buffers."
+                    )
+                )
+
+        self.generic_visit(node)
 
 
 class SASTScanner:
@@ -62,14 +200,11 @@ class SASTScanner:
                 pass
             return -1, "", f"Timeout error after {self.timeout_seconds} seconds"
         except FileNotFoundError as fnf:
-            logger.warning(f"Scanner binary not found: {cmd[0]}: {fnf}")
             return -2, "", f"Binary '{cmd[0]}' is not installed or not in PATH"
         except Exception as ex:
-            logger.exception(f"Unexpected error running command '{cmd_str}': {ex}")
             return -3, "", str(ex)
 
     def _normalize_semgrep_severity(self, semgrep_sev: str) -> Severity:
-        """Map Semgrep severity to unified Severity enum."""
         mapping = {
             "ERROR": Severity.HIGH,
             "WARNING": Severity.MEDIUM,
@@ -80,7 +215,6 @@ class SASTScanner:
         return mapping.get(semgrep_sev.upper(), Severity.MEDIUM)
 
     def _normalize_bandit_severity(self, bandit_sev: str) -> Severity:
-        """Map Bandit severity to unified Severity enum."""
         mapping = {
             "HIGH": Severity.HIGH,
             "MEDIUM": Severity.MEDIUM,
@@ -89,10 +223,31 @@ class SASTScanner:
         }
         return mapping.get(bandit_sev.upper(), Severity.LOW)
 
+    async def run_ast_analyzer(self, target_path: Path) -> List[VulnerabilityFinding]:
+        """Analyze Python files using built-in AST security visitor."""
+        findings: List[VulnerabilityFinding] = []
+        py_files = list(target_path.glob("**/*.py"))
+
+        for py_file in py_files:
+            # Skip virtual environments and hidden paths
+            if any(part.startswith(".") or part in ["venv", "env", ".venv"] for part in py_file.parts):
+                continue
+
+            try:
+                content = py_file.read_text(encoding="utf-8", errors="replace")
+                tree = ast.parse(content, filename=str(py_file))
+                visitor = PythonASTSecurityVisitor(py_file, content)
+                visitor.visit(tree)
+                findings.extend(visitor.findings)
+            except Exception as e:
+                logger.debug(f"AST parsing skipped for {py_file}: {e}")
+
+        return findings
+
     async def run_semgrep(self, target_path: Path) -> Tuple[List[VulnerabilityFinding], Optional[str]]:
         """Run Semgrep SAST scan over the target directory."""
         if not shutil.which("semgrep"):
-            return [], "Semgrep executable not found. Please install via 'pip install semgrep'."
+            return [], "Semgrep binary not found in PATH."
 
         cmd = [
             "semgrep",
@@ -105,33 +260,23 @@ class SASTScanner:
         ]
 
         retcode, stdout, stderr = await self._run_command(cmd)
+        if not stdout.strip():
+            return [], stderr.strip() or None
 
         findings: List[VulnerabilityFinding] = []
-        if not stdout.strip():
-            err_msg = stderr.strip() if stderr.strip() else None
-            return [], err_msg
-
         try:
             data = json.loads(stdout)
-            results = data.get("results", [])
-            for res in results:
+            for res in data.get("results", []):
                 check_id = res.get("check_id", "semgrep-finding")
                 extra = res.get("extra", {})
                 message = extra.get("message", "No description provided.")
                 raw_severity = extra.get("severity", "WARNING")
                 metadata = extra.get("metadata", {})
 
-                # Extract CWEs
                 raw_cwe = metadata.get("cwe", [])
                 cwe_list = raw_cwe if isinstance(raw_cwe, list) else [str(raw_cwe)] if raw_cwe else []
-
-                # Extract CVEs
                 raw_cve = metadata.get("cve", [])
                 cve_list = raw_cve if isinstance(raw_cve, list) else [str(raw_cve)] if raw_cve else []
-
-                code_snippet = extra.get("lines", None)
-                start_line = res.get("start", {}).get("line")
-                end_line = res.get("end", {}).get("line")
 
                 finding = VulnerabilityFinding(
                     id=check_id,
@@ -140,55 +285,35 @@ class SASTScanner:
                     description=message,
                     severity=self._normalize_semgrep_severity(raw_severity),
                     file_path=res.get("path", str(target_path)),
-                    line_start=start_line,
-                    line_end=end_line,
-                    code_snippet=code_snippet,
+                    line_start=res.get("start", {}).get("line"),
+                    line_end=res.get("end", {}).get("line"),
+                    code_snippet=extra.get("lines", None),
                     cwe=cwe_list,
                     cve=cve_list,
                     recommendation=metadata.get("fix", metadata.get("shortlink", None)),
                     raw_metadata=extra
                 )
                 findings.append(finding)
-
             return findings, None
-
-        except json.JSONDecodeError as jde:
-            logger.error(f"Failed to parse Semgrep JSON output: {jde}. Stdout: {stdout[:300]}")
-            return [], f"JSON parse error from Semgrep: {jde}"
+        except Exception as e:
+            return [], f"Semgrep parse error: {e}"
 
     async def run_bandit(self, target_path: Path) -> Tuple[List[VulnerabilityFinding], Optional[str]]:
         """Run Bandit security linter for Python files."""
         if not shutil.which("bandit"):
-            return [], "Bandit executable not found. Please install via 'pip install bandit'."
+            return [], "Bandit binary not found in PATH."
 
-        cmd = [
-            "bandit",
-            "-r",
-            str(target_path.resolve()),
-            "-f",
-            "json",
-            "-q"
-        ]
-
+        cmd = ["bandit", "-r", str(target_path.resolve()), "-f", "json", "-q"]
         retcode, stdout, stderr = await self._run_command(cmd)
+        if not stdout.strip():
+            return [], stderr.strip() or None
 
         findings: List[VulnerabilityFinding] = []
-        if not stdout.strip():
-            return [], (stderr.strip() if stderr.strip() else None)
-
         try:
             data = json.loads(stdout)
-            results = data.get("results", [])
-            for res in results:
+            for res in data.get("results", []):
                 test_id = res.get("test_id", "B000")
                 test_name = res.get("test_name", "bandit_issue")
-                issue_text = res.get("issue_text", "")
-                issue_severity = res.get("issue_severity", "LOW")
-                filename = res.get("filename", str(target_path))
-                line_num = res.get("line_number")
-                code_snippet = res.get("code")
-                more_info = res.get("more_info")
-
                 cwe = []
                 cwe_info = res.get("issue_cwe", {})
                 if isinstance(cwe_info, dict) and "id" in cwe_info:
@@ -198,97 +323,65 @@ class SASTScanner:
                     id=f"bandit.{test_id}",
                     scanner=ScannerType.BANDIT,
                     title=f"Bandit [{test_id}]: {test_name}",
-                    description=issue_text,
-                    severity=self._normalize_bandit_severity(issue_severity),
-                    file_path=filename,
-                    line_start=line_num,
-                    line_end=line_num,
-                    code_snippet=code_snippet,
+                    description=res.get("issue_text", ""),
+                    severity=self._normalize_bandit_severity(res.get("issue_severity", "LOW")),
+                    file_path=res.get("filename", str(target_path)),
+                    line_start=res.get("line_number"),
+                    line_end=res.get("line_number"),
+                    code_snippet=res.get("code"),
                     cwe=cwe,
                     cve=[],
-                    recommendation=f"Reference: {more_info}" if more_info else None,
+                    recommendation=f"Reference: {res.get('more_info')}" if res.get("more_info") else None,
                     raw_metadata=res
                 )
                 findings.append(finding)
-
             return findings, None
-
-        except json.JSONDecodeError as jde:
-            logger.error(f"Failed to parse Bandit JSON output: {jde}. Stdout: {stdout[:300]}")
-            return [], f"JSON parse error from Bandit: {jde}"
+        except Exception as e:
+            return [], f"Bandit parse error: {e}"
 
     async def run_pip_audit(self, target_path: Path) -> Tuple[List[VulnerabilityFinding], Optional[str]]:
-        """Run pip-audit on requirement files found within the target path."""
+        """Run pip-audit on requirements files."""
         if not shutil.which("pip-audit"):
-            return [], "pip-audit executable not found. Please install via 'pip install pip-audit'."
+            return [], "pip-audit binary not found in PATH."
 
         req_files = list(target_path.glob("**/requirements*.txt"))
         if not req_files:
-            return [], None  # No dependency files to audit
+            return [], None
 
         all_findings: List[VulnerabilityFinding] = []
-        errors: List[str] = []
-
         for req_file in req_files:
-            cmd = [
-                "pip-audit",
-                "-r",
-                str(req_file.resolve()),
-                "-f",
-                "json",
-                "--desc"
-            ]
-
+            cmd = ["pip-audit", "-r", str(req_file.resolve()), "-f", "json", "--desc"]
             retcode, stdout, stderr = await self._run_command(cmd)
-
             if not stdout.strip():
-                if stderr.strip():
-                    errors.append(f"pip-audit error on {req_file.name}: {stderr.strip()}")
                 continue
-
             try:
                 data = json.loads(stdout)
-                # pip-audit JSON structure: list of dependency items or dict with dependencies key
                 dep_list = data if isinstance(data, list) else data.get("dependencies", [])
                 for dep in dep_list:
                     pkg_name = dep.get("name", "unknown")
                     pkg_version = dep.get("version", "unknown")
-                    vulns = dep.get("vulns", [])
-
-                    for v in vulns:
+                    for v in dep.get("vulns", []):
                         vuln_id = v.get("id", "VULN-000")
-                        description = v.get("description", f"Vulnerability in {pkg_name} {pkg_version}")
-                        fix_versions = v.get("fix_versions", [])
-                        recommendation = (
-                            f"Upgrade {pkg_name} to version {', '.join(fix_versions)}"
-                            if fix_versions
-                            else f"Update or replace {pkg_name}"
+                        all_findings.append(
+                            VulnerabilityFinding(
+                                id=vuln_id,
+                                scanner=ScannerType.PIP_AUDIT,
+                                title=f"Dependency Vulnerability: {pkg_name} ({pkg_version})",
+                                description=v.get("description", f"Vulnerability in {pkg_name}"),
+                                severity=Severity.HIGH,
+                                file_path=str(req_file.relative_to(target_path) if req_file.is_relative_to(target_path) else req_file),
+                                code_snippet=f"{pkg_name}=={pkg_version}",
+                                cve=[vuln_id] if vuln_id.startswith("CVE") else [],
+                                recommendation=f"Upgrade {pkg_name} to version {', '.join(v.get('fix_versions', []))}",
+                                raw_metadata=v
+                            )
                         )
-
-                        finding = VulnerabilityFinding(
-                            id=vuln_id,
-                            scanner=ScannerType.PIP_AUDIT,
-                            title=f"Dependency Vulnerability: {pkg_name} ({pkg_version})",
-                            description=description,
-                            severity=Severity.HIGH if vuln_id.startswith("CVE") or vuln_id.startswith("GHSA") else Severity.MEDIUM,
-                            file_path=str(req_file.relative_to(target_path) if req_file.is_relative_to(target_path) else req_file),
-                            line_start=None,
-                            line_end=None,
-                            code_snippet=f"{pkg_name}=={pkg_version}",
-                            cwe=[],
-                            cve=[vuln_id] if vuln_id.startswith("CVE") else [],
-                            recommendation=recommendation,
-                            raw_metadata=v
-                        )
-                        all_findings.append(finding)
-
-            except json.JSONDecodeError as jde:
-                errors.append(f"Failed to parse pip-audit JSON for {req_file.name}: {jde}")
-
-        return all_findings, ("; ".join(errors) if errors else None)
+            except Exception:
+                pass
+        return all_findings, None
 
     async def scan(self, target_path: Union[str, Path]) -> SASTScanResult:
-        """Run all available SAST scanners concurrently and aggregate results."""
+        """Run SAST scanners concurrently and aggregate results."""
         start_time = time.time()
         path = Path(target_path).resolve()
 
@@ -297,19 +390,25 @@ class SASTScanner:
 
         logger.info(f"Starting SAST security audit for: {path}")
 
-        # Run scanners concurrently for maximum DevSecOps speed
+        # Run built-in AST analyzer and CLI tools concurrently
+        ast_task = asyncio.create_task(self.run_ast_analyzer(path))
         semgrep_task = asyncio.create_task(self.run_semgrep(path))
         bandit_task = asyncio.create_task(self.run_bandit(path))
         pip_audit_task = asyncio.create_task(self.run_pip_audit(path))
 
-        (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err) = await asyncio.gather(
-            semgrep_task, bandit_task, pip_audit_task, return_exceptions=False
+        ast_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err) = await asyncio.gather(
+            ast_task, semgrep_task, bandit_task, pip_audit_task, return_exceptions=False
         )
 
+        # Merge findings, avoiding duplicate IDs on identical lines
+        seen_keys = set()
         all_findings: List[VulnerabilityFinding] = []
-        all_findings.extend(semgrep_findings)
-        all_findings.extend(bandit_findings)
-        all_findings.extend(pip_findings)
+
+        for f in (bandit_findings + semgrep_findings + ast_findings + pip_findings):
+            key = f"{f.file_path}:{f.line_start}:{f.id}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                all_findings.append(f)
 
         errors: List[str] = []
         if semgrep_err:
@@ -319,13 +418,12 @@ class SASTScanner:
         if pip_err:
             errors.append(f"Pip-Audit: {pip_err}")
 
-        # Calculate severity breakdown
         severity_counts: Dict[Severity, int] = {sev: 0 for sev in Severity}
         for f in all_findings:
             severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
 
         duration = round(time.time() - start_time, 2)
-        scanners_run = [ScannerType.SEMGREP, ScannerType.BANDIT, ScannerType.PIP_AUDIT]
+        scanners_run = [ScannerType.CUSTOM, ScannerType.SEMGREP, ScannerType.BANDIT, ScannerType.PIP_AUDIT]
 
         result = SASTScanResult(
             target_path=str(path),
@@ -342,12 +440,3 @@ class SASTScanner:
             f"Discovered {len(all_findings)} total findings across {path.name}."
         )
         return result
-
-
-if __name__ == "__main__":
-    import sys
-
-    target = sys.argv[1] if len(sys.argv) > 1 else "."
-    scanner = SASTScanner()
-    scan_result = asyncio.run(scanner.scan(target))
-    print(scan_result.model_dump_json(indent=2))
