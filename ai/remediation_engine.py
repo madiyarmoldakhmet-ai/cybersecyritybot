@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
 from core.config import settings
+from core.queue_manager import ollama_limiter
 from scanners.models import VulnerabilityFinding
 
 logger = logging.getLogger("cybersecuritybot.ai_engine")
@@ -83,28 +84,29 @@ class RemediationEngine:
         )
 
     async def _query_ollama(self, system_prompt: str, user_prompt: str) -> str:
-        """Запрос к Ollama с таймаутом 45 сек."""
-        try:
-            response = await asyncio.wait_for(
-                self.ollama_client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=0.2,
-                    max_tokens=1500,
-                    response_format={"type": "json_object"},
-                ),
-                timeout=45.0,
-            )
-            return response.choices[0].message.content.strip()
-        except asyncio.TimeoutError:
-            logger.error("Ollama timeout")
-            raise TimeoutError("Ollama ответил дольше 45 секунд.")
-        except Exception as e:
-            logger.error(f"Ollama error: {e}")
-            raise
+        """Запрос к Ollama с таймаутом 45 сек и контролем параллелизма."""
+        async with ollama_limiter.acquire_slot(f"Ollama:{self.model_name}"):
+            try:
+                response = await asyncio.wait_for(
+                    self.ollama_client.chat.completions.create(
+                        model=self.model_name,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=0.2,
+                        max_tokens=1500,
+                        response_format={"type": "json_object"},
+                    ),
+                    timeout=45.0,
+                )
+                return response.choices[0].message.content.strip()
+            except asyncio.TimeoutError:
+                logger.error("Ollama timeout")
+                raise TimeoutError("Ollama ответил дольше 45 секунд.")
+            except Exception as e:
+                logger.error(f"Ollama error: {e}")
+                raise
 
     @staticmethod
     def _clean_json(raw: str) -> str:

@@ -38,6 +38,10 @@ class Settings(BaseSettings):
         default_factory=list,
         description="List of allowed Telegram User IDs for access control"
     )
+    default_telegram_chat_id: Optional[int] = Field(
+        default=None,
+        description="Default Telegram Chat ID for Webhook Commit Guardian alerts"
+    )
 
     # GitHub OAuth & Integration
     github_token: Optional[str] = Field(
@@ -51,6 +55,16 @@ class Settings(BaseSettings):
     github_client_secret: Optional[str] = Field(
         default=None,
         description="GitHub OAuth App Client Secret"
+    )
+    github_webhook_secret: Optional[str] = Field(
+        default=None,
+        description="GitHub Webhook HMAC Secret for signature validation"
+    )
+
+    # Concurrency & Queue Settings
+    max_concurrent_llm_jobs: int = Field(
+        default=1,
+        description="Maximum concurrent inference requests to local Ollama model to protect host resources"
     )
 
     # AI / LLM Engine Settings

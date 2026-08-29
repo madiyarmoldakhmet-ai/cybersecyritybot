@@ -18,10 +18,12 @@ import httpx
 from ai.remediation_engine import RemediationEngine, RemediationResult
 from core.config import settings
 from core.pr_creator import PullRequestCreator
+from core.queue_manager import ollama_limiter, task_queue
 from core.verifier import OwnershipVerifier
 from scanners.dast_scanner import DASTScanner
 from scanners.models import DASTScanResult, SASTScanResult, VulnerabilityFinding
 from scanners.sast_scanner import SASTScanner
+from web.webhook import router as webhook_router
 
 logger = logging.getLogger("cybersecuritybot.api")
 
@@ -32,6 +34,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Include Commit Guardian Webhook router
+app.include_router(webhook_router)
 
 # Enable CORS for future dashboard integration
 app.add_middleware(
@@ -93,12 +98,20 @@ async def root():
         "docs": "/docs",
         "endpoints": {
             "health": "/health",
+            "metrics": "/api/v1/metrics",
+            "github_webhook": "/api/v1/webhook/github",
             "sast_scan": "/api/v1/scan/sast",
             "dast_scan": "/api/v1/scan/dast",
             "remediation": "/api/v1/remediate",
             "create_pr": "/api/v1/pr"
         }
     }
+
+
+@app.get("/api/v1/metrics", tags=["General"])
+async def get_system_metrics():
+    """Retrieve operational queue and concurrency metrics."""
+    return task_queue.get_metrics()
 
 
 @app.get("/health", response_model=HealthResponse, tags=["General"])
