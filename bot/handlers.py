@@ -279,12 +279,14 @@ async def process_repo_input(message: Message, state: FSMContext) -> None:
         )
 
         instruction_msg = (
-            f"📝 **Подтверждение владения через коммит:**\n\n"
+            f"📝 **Подтверждение владения через Commit / verify.txt:**\n\n"
             f"📁 **Репозиторий:** `{repo_name}`\n"
             f"🔑 **Код подтверждения:** `{challenge_code}`\n\n"
-            f"Выполните в терминале вашего проекта команду:\n"
+            f"**Вариант 1 (Быстрый пустой коммит):**\n"
             f"```bash\ngit commit --allow-empty -m \"{challenge_code}\" && git push origin main\n```\n\n"
-            f"После отправки коммита на GitHub нажмите кнопку ниже:"
+            f"**Вариант 2 (Через файл verify.txt):**\n"
+            f"```bash\necho \"{challenge_code}\" > verify.txt && git add verify.txt && git commit -m \"verify ownership\" && git push origin main\n```\n\n"
+            f"После отправки изменений на GitHub нажмите кнопку ниже:"
         )
         await message.answer(instruction_msg, reply_markup=kb, parse_mode="Markdown")
         return

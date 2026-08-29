@@ -58,36 +58,52 @@ class OwnershipVerifier:
         repo_identifier: str, challenge_code: str
     ) -> Tuple[bool, str]:
         """
-        Verify repository ownership by checking if the challenge code exists in the latest commits.
-        Uses public GitHub Commits API.
+        Verify repository ownership by checking:
+        1. Presence of challenge_code in 'verify.txt' at repository root.
+        2. Presence of challenge_code in any of the last 10 commit messages.
         """
+        clean_code = challenge_code.strip()
         repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
         if not repo_full_name:
             return False, f"Неверный формат репозитория: '{repo_identifier}'."
 
-        url = f"https://api.github.com/repos/{repo_full_name}/commits?per_page=5"
         headers = {
             "User-Agent": "CyberSecurityBot-Verifier/1.0",
             "Accept": "application/vnd.github.v3+json",
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, headers=headers)
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                # 1. Check verify.txt in main / master branches
+                for branch in ["main", "master"]:
+                    raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/{branch}/verify.txt"
+                    try:
+                        raw_resp = await client.get(raw_url)
+                        if raw_resp.status_code == 200 and clean_code in raw_resp.text:
+                            return (
+                                True,
+                                f"Код подтверждения найден в файле `verify.txt` (ветка `{branch}`)! Авторство репозитория {repo_full_name} успешно подтверждено.",
+                            )
+                    except Exception as raw_ex:
+                        logger.debug(f"Could not fetch {raw_url}: {raw_ex}")
+
+                # 2. Check the last 10 commits
+                commits_url = f"https://api.github.com/repos/{repo_full_name}/commits?per_page=10"
+                resp = await client.get(commits_url, headers=headers)
                 if resp.status_code == 200:
                     commits = resp.json()
                     for commit in commits:
                         commit_msg = commit.get("commit", {}).get("message", "")
-                        if challenge_code in commit_msg:
+                        if clean_code in commit_msg:
                             author = commit.get("commit", {}).get("author", {}).get("name", "Unknown")
                             sha = commit.get("sha", "")[:7]
                             return (
                                 True,
-                                f"Код подтверждения найден в коммите `{sha}` от {author}! Авторство репозитория {repo_full_name} подтверждено.",
+                                f"Код подтверждения найден в коммите `{sha}` от {author}! Авторство репозитория {repo_full_name} успешно подтверждено.",
                             )
                     return (
                         False,
-                        f"Код '{challenge_code}' не найден в последних 5 коммитах репозитория {repo_full_name}. Убедитесь, что вы выполнили `git push`.",
+                        f"Код '{clean_code}' не найден в файле `verify.txt` или в последних 10 коммитах репозитория {repo_full_name}. Убедитесь, что вы выполнили `git push`.",
                     )
                 elif resp.status_code == 404:
                     return False, f"Репозиторий '{repo_full_name}' не найден на GitHub."
