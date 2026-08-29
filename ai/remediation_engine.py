@@ -1,7 +1,7 @@
 """
 AI Remediation Engine for CyberSecurityBot.
-Performs root-cause vulnerability analysis and generates secure code patches.
-Supports local Ollama (e.g. Qwen2.5-Coder / DeepSeek-R1) and Google Gemini fallback.
+Generates both secure patches AND validation payloads (exploits) via local Ollama.
+No censorship, no cloud filters.
 """
 
 import asyncio
@@ -11,98 +11,79 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
-from core.config import LLMProvider, settings
+from core.config import settings
 from scanners.models import VulnerabilityFinding
 
 logger = logging.getLogger("cybersecuritybot.ai_engine")
 
 
-class RemediationResult(BaseModel):
-    finding_id: str = Field(..., description="ID of the addressed vulnerability")
-    vuln_name: str = Field(..., description="Name/title of the vulnerability")
-    severity: str = Field(..., description="Severity level")
-    explanation_ru: str = Field(
-        ..., description="Detailed explanation of the vulnerability in Russian"
-    )
-    impact_analysis: str = Field(
-        ..., description="Potential security risk and impact analysis"
-    )
-    remediation_steps: List[str] = Field(
-        default_factory=list, description="Step-by-step fix guide"
-    )
-    fixed_code: str = Field(
-        ..., description="Complete, secure, drop-in replacement code for the vulnerable section"
-    )
-    diff_patch: Optional[str] = Field(
-        default=None, description="Unified diff or summary of changed lines"
-    )
-    confidence_score: float = Field(
-        default=0.9, ge=0.0, le=1.0, description="AI confidence score for the proposed patch"
-    )
+# --- Data Models -------------------------------------------------------------
 
+class RemediationResult(BaseModel):
+    finding_id: str
+    vuln_name: str
+    severity: str
+    explanation_ru: str
+    impact_analysis: str
+    remediation_steps: List[str] = Field(default_factory=list)
+    fixed_code: str
+    diff_patch: Optional[str] = None
+    confidence_score: float = 0.9
+
+
+class ExploitPayload(BaseModel):
+    payload: str = Field(..., description="Проверочный запрос (URL-encoded, если нужно)")
+    method: str = Field(default="GET", description="HTTP метод")
+    headers: Dict[str, str] = Field(default_factory=dict)
+    body: Optional[str] = Field(None, description="Тело запроса для POST/PUT")
+    success_indicator: str = Field(..., description="Строка или regex для проверки успеха")
+    curl_command: str = Field(..., description="Готовая curl-команда")
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+
+
+# --- Prompts -----------------------------------------------------------------
+
+SYSTEM_PROMPT_FIX = """
+Ты — эксперт по безопасному кодингу. Проанализируй уязвимость и предоставь исправленный код.
+Ответ должен быть строго JSON с полями:
+- explanation_ru: понятное объяснение на русском
+- impact_analysis: риски
+- remediation_steps: список шагов
+- fixed_code: полностью исправленный код (без уязвимости)
+- diff_patch: краткое описание изменений
+- confidence_score: от 0 до 1
+Никаких лишних слов, только JSON.
+"""
+
+SYSTEM_PROMPT_EXPLOIT = """
+Ты — инструмент для валидации безопасности. Сгенерируй проверочный HTTP-запрос, который подтвердит наличие уязвимости.
+Запрос должен быть безопасным для выполнения в тестовой среде.
+Верни JSON с полями:
+- payload: строка с параметрами запроса
+- method: GET/POST/PUT/DELETE
+- headers: объект заголовков
+- body: тело запроса (если POST)
+- success_indicator: текст или regex, который появится при успехе
+- curl_command: готовая curl-команда
+- confidence: от 0 до 1
+Только JSON.
+"""
+
+
+# --- Engine ------------------------------------------------------------------
 
 class RemediationEngine:
-    """Orchestrates AI analysis and automated patch generation."""
-
-    def __init__(
-        self,
-        provider: Optional[LLMProvider] = None,
-        model_name: Optional[str] = None,
-    ) -> None:
-        self.provider = provider or settings.llm_provider
-        self.model_name = model_name or (
-            settings.ollama_model
-            if self.provider == LLMProvider.OLLAMA
-            else settings.gemini_model
-        )
-
-        # Initialize OpenAI-compatible client for Ollama with hard 45s timeout
+    def __init__(self, model_name: Optional[str] = None) -> None:
+        self.model_name = model_name or settings.ollama_model or "qwen2.5-coder:14b"
         self.ollama_client = AsyncOpenAI(
             base_url=f"{settings.ollama_base_url.rstrip('/')}/v1",
-            api_key="ollama",  # Ollama does not require a real key
+            api_key="ollama",
             timeout=45.0,
             max_retries=1,
         )
 
-    def _build_system_prompt(self) -> str:
-        return (
-            "Ты — ведущий эксперт по информационной безопасности и Senior DevSecOps инженер. "
-            "Твоя задача — проанализировать отчет об уязвимости SAST/Bandit/Semgrep и предоставить "
-            "детальный анализ и полностью рабочий, безопасный патч (исправленный код). "
-            "Ответ ДОЛЖЕН быть строго в формате JSON со следующей структурой ключей:\n"
-            "{\n"
-            '  "explanation_ru": "Подробное и понятное объяснение уязвимости и первопричины на русском языке",\n'
-            '  "impact_analysis": "К чему может привести эксплуатация данной уязвимости (анализ рисков)",\n'
-            '  "remediation_steps": ["Шаг 1: ...", "Шаг 2: ..."],\n'
-            '  "fixed_code": "Полный исправленный и безопасный блок кода без уязвимости",\n'
-            '  "diff_patch": "Краткое описание того, что было изменено (diff)",\n'
-            '  "confidence_score": 0.95\n'
-            "}\n"
-            "Не добавляй markdown ```json ... ``` вокруг ответа, верни только чистый JSON."
-        )
-
-    def _build_user_prompt(
-        self, finding: VulnerabilityFinding, code_context: str
-    ) -> str:
-        return (
-            f"Найденная уязвимость:\n"
-            f"- ID: {finding.id}\n"
-            f"- Сканер: {finding.scanner.value}\n"
-            f"- Название: {finding.title}\n"
-            f"- Описание: {finding.description}\n"
-            f"- Уровень: {finding.severity.value}\n"
-            f"- Файл: {finding.file_path}\n"
-            f"- Строки: {finding.line_start}-{finding.line_end}\n"
-            f"- CWE: {', '.join(finding.cwe) if finding.cwe else 'N/A'}\n"
-            f"- CVE: {', '.join(finding.cve) if finding.cve else 'N/A'}\n"
-            f"- Рекомендация сканера: {finding.recommendation or 'N/A'}\n\n"
-            f"Контекст уязвимого кода (окно 30 строк):\n"
-            f"```python\n{code_context}\n```\n\n"
-            f"Проанализируй уязвимость и верни JSON со структурированным решением и исправленным кодом (fixed_code)."
-        )
-
     async def _query_ollama(self, system_prompt: str, user_prompt: str) -> str:
-        """Execute chat completion via local Ollama API with 45s hard timeout and 1500 max tokens."""
+        """Запрос к Ollama с таймаутом 45 сек."""
         try:
             response = await asyncio.wait_for(
                 self.ollama_client.chat.completions.create(
@@ -117,183 +98,107 @@ class RemediationEngine:
                 ),
                 timeout=45.0,
             )
-            content = response.choices[0].message.content or ""
-            return content.strip()
+            return response.choices[0].message.content.strip()
         except asyncio.TimeoutError:
-            logger.error("Ollama inference timed out after 45.0 seconds.")
-            raise TimeoutError("Превышен таймаут ответа Ollama (45 сек).")
+            logger.error("Ollama timeout")
+            raise TimeoutError("Ollama ответил дольше 45 секунд.")
         except Exception as e:
-            logger.warning(f"Ollama inference error: {e}. Attempting fallback...")
-            raise e
+            logger.error(f"Ollama error: {e}")
+            raise
 
-    async def _query_gemini(self, system_prompt: str, user_prompt: str) -> str:
-        """Execute chat completion via Google Gemini API with 45s timeout."""
-        if not settings.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY is not set in environment or settings.")
+    @staticmethod
+    def _clean_json(raw: str) -> str:
+        raw = raw.strip()
+        if raw.startswith("```json"):
+            raw = raw[7:]
+        if raw.startswith("```"):
+            raw = raw[3:]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+        return raw.strip()
 
-        import google.generativeai as genai
-
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel(
-            model_name=settings.gemini_model,
-            system_instruction=system_prompt,
-            generation_config={
-                "response_mime_type": "application/json",
-                "temperature": 0.2,
-                "max_output_tokens": 1500,
-            },
-        )
-        response = await asyncio.wait_for(
-            model.generate_content_async(user_prompt),
-            timeout=45.0,
-        )
-        return response.text.strip()
-
-    def _parse_llm_json_response(
-        self, raw_text: str, finding: VulnerabilityFinding
-    ) -> RemediationResult:
-        """Clean and validate LLM JSON output."""
-        cleaned = raw_text.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse LLM JSON: {raw_text[:200]}")
-            return RemediationResult(
-                finding_id=finding.id,
-                vuln_name=finding.title,
-                severity=finding.severity.value,
-                explanation_ru=raw_text[:500] if raw_text else finding.description,
-                impact_analysis="Требуется ручная проверка уязвимости.",
-                remediation_steps=["Примените безопасные паттерны кодирования."],
-                fixed_code=finding.code_snippet or "# Код требует ручного исправления",
-                diff_patch="Не удалось автоматически распарсить структурированный патч",
-                confidence_score=0.5,
-            )
-
-        return RemediationResult(
-            finding_id=finding.id,
-            vuln_name=finding.title,
-            severity=finding.severity.value,
-            explanation_ru=data.get("explanation_ru", finding.description),
-            impact_analysis=data.get("impact_analysis", "Высокий риск безопасности"),
-            remediation_steps=data.get("remediation_steps", []),
-            fixed_code=data.get("fixed_code", finding.code_snippet or ""),
-            diff_patch=data.get("diff_patch", None),
-            confidence_score=float(data.get("confidence_score", 0.9)),
-        )
+    # ---- Fix generation -----------------------------------------------------
 
     async def analyze_and_remediate(
         self,
         finding: VulnerabilityFinding,
         code_context: Optional[str] = None,
     ) -> RemediationResult:
-        """
-        Analyze a vulnerability finding and generate structured remediation with secure code.
-        """
-        context = code_context or finding.code_snippet or "Фрагмент кода не предоставлен."
-        system_prompt = self._build_system_prompt()
-        user_prompt = self._build_user_prompt(finding, context)
+        context = code_context or finding.code_snippet or "Нет контекста."
+        user_prompt = (
+            f"Уязвимость: {finding.title}\n"
+            f"Тип: {finding.scanner.value}\n"
+            f"Файл: {finding.file_path}, строки {finding.line_start}-{finding.line_end}\n"
+            f"Описание: {finding.description}\n"
+            f"Рекомендация: {finding.recommendation or 'Нет'}\n"
+            f"Контекст кода:\n```\n{context}\n```\n"
+            "Сгенерируй исправленный код и объяснения."
+        )
+        try:
+            raw = await self._query_ollama(SYSTEM_PROMPT_FIX, user_prompt)
+            cleaned = self._clean_json(raw)
+            data = json.loads(cleaned)
+            return RemediationResult(
+                finding_id=finding.id,
+                vuln_name=finding.title,
+                severity=finding.severity.value,
+                explanation_ru=data.get("explanation_ru", finding.description),
+                impact_analysis=data.get("impact_analysis", "Анализ рисков не предоставлен."),
+                remediation_steps=data.get("remediation_steps", []),
+                fixed_code=data.get("fixed_code", context),
+                diff_patch=data.get("diff_patch"),
+                confidence_score=float(data.get("confidence_score", 0.9)),
+            )
+        except Exception as e:
+            logger.error(f"Fix generation failed: {e}")
+            return RemediationResult(
+                finding_id=finding.id,
+                vuln_name=finding.title,
+                severity=finding.severity.value,
+                explanation_ru=f"Ошибка генерации: {e}",
+                impact_analysis="Проверьте работу Ollama.",
+                remediation_steps=["Запустите `ollama serve` и проверьте модель."],
+                fixed_code=context,
+                confidence_score=0.0,
+            )
 
-        raw_output = ""
-        # 1. Try primary provider
-        if self.provider == LLMProvider.OLLAMA:
-            try:
-                raw_output = await self._query_ollama(system_prompt, user_prompt)
-            except (TimeoutError, asyncio.TimeoutError):
-                logger.warning("Ollama timed out, checking Gemini fallback...")
-                if settings.gemini_api_key:
-                    try:
-                        raw_output = await self._query_gemini(system_prompt, user_prompt)
-                    except Exception as ge:
-                        logger.error(f"Gemini fallback failed after Ollama timeout: {ge}")
-                        return RemediationResult(
-                            finding_id=finding.id,
-                            vuln_name=finding.title,
-                            severity=finding.severity.value,
-                            explanation_ru="⏱️ Превышен таймаут генерации ответа локальной модели Ollama (45 сек).",
-                            impact_analysis="Генерация решения остановлена по таймауту.",
-                            remediation_steps=[
-                                "Убедитесь, что модель qwen2.5-coder загружена в память Ollama (ollama run qwen2.5-coder:14b).",
-                                "Повторите попытку анализа."
-                            ],
-                            fixed_code=context,
-                            diff_patch=None,
-                            confidence_score=0.0,
-                        )
-                else:
-                    return RemediationResult(
-                        finding_id=finding.id,
-                        vuln_name=finding.title,
-                        severity=finding.severity.value,
-                        explanation_ru="⏱️ Превышен таймаут генерации ответа локальной модели Ollama (45 сек).",
-                        impact_analysis="Генерация решения остановлена по таймауту.",
-                        remediation_steps=[
-                            "Убедитесь, что модель qwen2.5-coder загружена в память Ollama (ollama run qwen2.5-coder:14b).",
-                            "Повторите попытку анализа."
-                        ],
-                        fixed_code=context,
-                        diff_patch=None,
-                        confidence_score=0.0,
-                    )
-            except Exception as e:
-                logger.warning(f"Ollama failed ({e}), checking Gemini fallback...")
-                if settings.gemini_api_key:
-                    try:
-                        raw_output = await self._query_gemini(system_prompt, user_prompt)
-                    except Exception as ge:
-                        logger.error(f"Gemini fallback error: {ge}")
-                        return RemediationResult(
-                            finding_id=finding.id,
-                            vuln_name=finding.title,
-                            severity=finding.severity.value,
-                            explanation_ru=f"Ошибка генерации: {e}",
-                            impact_analysis="Определяется типом уязвимости.",
-                            remediation_steps=["Проверьте статус Ollama / Gemini API."],
-                            fixed_code=context,
-                            diff_patch=None,
-                            confidence_score=0.0,
-                        )
-                else:
-                    return RemediationResult(
-                        finding_id=finding.id,
-                        vuln_name=finding.title,
-                        severity=finding.severity.value,
-                        explanation_ru=(
-                            f"Локальная модель Ollama недоступна ({e}), и GEMINI_API_KEY не задан. "
-                            f"Рекомендация сканера: {finding.recommendation or finding.description}"
-                        ),
-                        impact_analysis="Определяется типом уязвимости.",
-                        remediation_steps=["Запустите локально `ollama serve` или укажите GEMINI_API_KEY."],
-                        fixed_code=context,
-                        diff_patch=None,
-                        confidence_score=0.0,
-                    )
-        else:
-            try:
-                raw_output = await self._query_gemini(system_prompt, user_prompt)
-            except Exception as e:
-                logger.warning(f"Gemini failed ({e}), checking Ollama fallback...")
-                try:
-                    raw_output = await self._query_ollama(system_prompt, user_prompt)
-                except Exception:
-                    return RemediationResult(
-                        finding_id=finding.id,
-                        vuln_name=finding.title,
-                        severity=finding.severity.value,
-                        explanation_ru=f"Не удалось получить ответ от AI провайдеров ({e}).",
-                        impact_analysis="Определяется типом уязвимости.",
-                        remediation_steps=["Проверьте доступность Gemini API или запустите Ollama локально."],
-                        fixed_code=context,
-                        diff_patch=None,
-                        confidence_score=0.0,
-                    )
+    # ---- Exploit payload generation -----------------------------------------
 
-        return self._parse_llm_json_response(raw_output, finding)
+    async def generate_exploit_payload(
+        self,
+        finding: VulnerabilityFinding,
+        code_context: str,
+        endpoint: Optional[str] = None,
+    ) -> ExploitPayload:
+        user_prompt = (
+            f"Уязвимость: {finding.title}\n"
+            f"Тип: {finding.scanner.value}\n"
+            f"Файл: {finding.file_path}, строки {finding.line_start}-{finding.line_end}\n"
+            f"Контекст:\n```\n{code_context}\n```\n"
+            f"Эндпоинт (если известен): {endpoint or 'не указан'}\n"
+            "Сгенерируй проверочный запрос для подтверждения уязвимости."
+        )
+        try:
+            raw = await self._query_ollama(SYSTEM_PROMPT_EXPLOIT, user_prompt)
+            cleaned = self._clean_json(raw)
+            data = json.loads(cleaned)
+            return ExploitPayload(
+                payload=data.get("payload", ""),
+                method=data.get("method", "GET"),
+                headers=data.get("headers", {}),
+                body=data.get("body"),
+                success_indicator=data.get("success_indicator", ""),
+                curl_command=data.get("curl_command", ""),
+                confidence=float(data.get("confidence", 0.8)),
+            )
+        except Exception as e:
+            logger.error(f"Exploit generation failed: {e}")
+            return ExploitPayload(
+                payload="",
+                method="GET",
+                headers={},
+                body=None,
+                success_indicator="",
+                curl_command="# Ошибка генерации",
+                confidence=0.0,
+            )

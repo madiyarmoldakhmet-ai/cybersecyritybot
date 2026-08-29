@@ -14,10 +14,11 @@ uvicorn[standard]>=0.30.0
 # Telegram Bot Interface
 aiogram>=3.7.0
 
-# Security Scanners (SAST & Dependencies)
+# Security Scanners (SAST & Agentic Pentest)
 semgrep>=1.75.0
 bandit>=1.7.8
 pip-audit>=2.7.3
+strix-agent>=0.1.0
 
 # AI & LLM Providers
 google-generativeai>=0.7.0

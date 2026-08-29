@@ -75,6 +75,20 @@ class Settings(BaseSettings):
         description="Gemini model identifier"
     )
 
+    # Strix Deep Agentic Pentest Engine Settings (Apache-2.0)
+    strix_enabled: bool = Field(
+        default=True,
+        description="Enable Strix Deep AI Pentest Engine"
+    )
+    strix_ollama_base_url: str = Field(
+        default="http://localhost:11434/v1",
+        description="Ollama OpenAI-compatible API base URL for Strix"
+    )
+    strix_model: str = Field(
+        default="qwen2.5-coder:14b",
+        description="Local LLM model for Strix Engine (qwen2.5-coder:14b or 7b)"
+    )
+
     # Scanner Settings
     semgrep_config: str = Field(
         default="auto",

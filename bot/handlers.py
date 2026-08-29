@@ -25,12 +25,14 @@ from aiogram.types import (
 )
 import httpx
 
-from ai.remediation_engine import RemediationEngine, RemediationResult
+from ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult
 from core.config import LLMProvider, settings
 from core.pr_creator import PullRequestCreator
 from core.verifier import OwnershipVerifier
-from scanners.models import SASTScanResult, Severity, VulnerabilityFinding
+from exploit.executor import execute_payload
+from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
 from scanners.sast_scanner import SASTScanner
+from scanners.strix_runner import StrixEngine
 
 logger = logging.getLogger("cybersecuritybot.bot")
 router = Router()
@@ -44,6 +46,7 @@ class AuditStates(StatesGroup):
     waiting_for_token = State()
     waiting_for_repo = State()
     waiting_for_commit_check = State()
+    waiting_for_target_url = State()
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -309,17 +312,37 @@ async def process_repo_input(message: Message, state: FSMContext) -> None:
         return
 
     # Authorized successfully
-    await status_msg.edit_text(
-        f"✅ {auth_res['message']}\n\n"
-        f"⏳ **Клонирование репозитория во временную песочницу...**",
-        parse_mode="Markdown"
-    )
-
-    await run_sast_audit_pipeline(
-        status_msg=status_msg,
+    await state.update_data(
         repo_name=repo_name,
         github_token=github_token,
         can_create_pr=auth_res["can_create_pr"]
+    )
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⚡ Быстрый SAST-скан (0.5 сек)",
+                    callback_data="scan_mode_fast"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤖 Deep AI Pentest (Агенты Strix, 1-3 мин)",
+                    callback_data="scan_mode_deep"
+                )
+            ]
+        ]
+    )
+
+    await status_msg.edit_text(
+        f"✅ {auth_res['message']}\n\n"
+        f"🎯 **Выберите режим аудита безопасности:**\n\n"
+        f"• ⚡ **Быстрый SAST-скан:** экспресс-поиск по AST и правилам (Semgrep, Bandit, Pip-Audit, Secrets).\n"
+        f"• 🤖 **Deep AI Pentest (Strix):** мульти-агентный глубокий анализ логики, IDOR и цепочек атак.\n\n"
+        f"_Deep Scanning powered by Strix Engine (Apache 2.0)_",
+        reply_markup=kb,
+        parse_mode="Markdown"
     )
 
 
@@ -360,19 +383,91 @@ async def handle_verify_commit_callback(callback: CallbackQuery, state: FSMConte
         await callback.answer()
         return
 
-    await status_msg.edit_text(
-        f"✅ {msg}\n\n"
-        f"⏳ **Клонирование репозитория во временную песочницу...**",
-        parse_mode="Markdown"
-    )
-
-    await run_sast_audit_pipeline(
-        status_msg=status_msg,
+    await state.update_data(
         repo_name=repo_name,
         github_token="",
         can_create_pr=False
     )
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⚡ Быстрый SAST-скан (0.5 сек)",
+                    callback_data="scan_mode_fast"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤖 Deep AI Pentest (Агенты Strix, 1-3 мин)",
+                    callback_data="scan_mode_deep"
+                )
+            ]
+        ]
+    )
+
+    await status_msg.edit_text(
+        f"✅ {msg}\n\n"
+        f"🎯 **Выберите режим аудита безопасности:**\n\n"
+        f"• ⚡ **Быстрый SAST-скан:** экспресс-поиск по AST и правилам (Semgrep, Bandit, Pip-Audit, Secrets).\n"
+        f"• 🤖 **Deep AI Pentest (Strix):** мульти-агентный глубокий анализ логики, IDOR и цепочек атак.\n\n"
+        f"_Deep Scanning powered by Strix Engine (Apache 2.0)_",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
     await callback.answer()
+
+
+@router.callback_query(F.data == "scan_mode_fast")
+async def handle_scan_mode_fast(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle choice of fast SAST scan."""
+    user_data = await state.get_data()
+    repo_name = user_data.get("repo_name")
+    github_token = user_data.get("github_token", "")
+    can_create_pr = user_data.get("can_create_pr", False)
+
+    if not repo_name:
+        await callback.answer("⚠️ Сессия аудита устарела. Начните заново с /start.", show_alert=True)
+        return
+
+    status_msg = await callback.message.answer(
+        f"⏳ **Клонирование репозитория `{repo_name}` во временную песочницу...**",
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+    await run_sast_audit_pipeline(
+        status_msg=status_msg,
+        repo_name=repo_name,
+        github_token=github_token,
+        can_create_pr=can_create_pr
+    )
+
+
+@router.callback_query(F.data == "scan_mode_deep")
+async def handle_scan_mode_deep(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle choice of deep Strix AI Pentest scan."""
+    user_data = await state.get_data()
+    repo_name = user_data.get("repo_name")
+    github_token = user_data.get("github_token", "")
+    can_create_pr = user_data.get("can_create_pr", False)
+
+    if not repo_name:
+        await callback.answer("⚠️ Сессия аудита устарела. Начните заново с /start.", show_alert=True)
+        return
+
+    status_msg = await callback.message.answer(
+        f"⏳ **Клонирование репозитория `{repo_name}` во временную песочницу...**",
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+    await run_deep_strix_audit_pipeline(
+        status_msg=status_msg,
+        repo_name=repo_name,
+        github_token=github_token,
+        can_create_pr=can_create_pr
+    )
 
 
 async def run_sast_audit_pipeline(
@@ -457,36 +552,49 @@ async def run_sast_audit_pipeline(
             summary_text += (
                 f"🚨 **Главная угроза:** `{top_f.title}`\n"
                 f"📁 Файл: `{top_f.file_path}` (стр. {top_f.line_start or 1})\n\n"
-                f"Нажмите кнопку ниже для просмотра деталей и генерации AI-исправления:"
+                f"Выберите действие ниже для анализа, генерации проверочного запроса или авто-исправления:"
+            )
+            btn_pr_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ и патч"
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🧪 Сгенерировать проверочный запрос",
+                            callback_data=f"exploit_gen_{session_id}_0"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=btn_pr_text,
+                            callback_data=f"remediate_{session_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=f"📋 Список уязвимостей ({scan_result.total_findings})",
+                            callback_data=f"show_findings_{session_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📄 Скачать отчет (Markdown)",
+                            callback_data=f"download_report_{session_id}"
+                        )
+                    ]
+                ]
             )
         else:
             summary_text += "🎉 **Уязвимостей не обнаружено! Репозиторий чист.**"
-
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="📋 Показать список уязвимостей",
-                        callback_data=f"show_findings_{session_id}"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="📄 Скачать отчет (Markdown)",
-                        callback_data=f"download_report_{session_id}"
-                    )
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="📄 Скачать отчет (Markdown)",
+                            callback_data=f"download_report_{session_id}"
+                        )
+                    ]
                 ]
-            ]
-        ) if scan_result.total_findings > 0 else InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="📄 Скачать отчет (Markdown)",
-                        callback_data=f"download_report_{session_id}"
-                    )
-                ]
-            ]
-        )
+            )
 
         await status_msg.edit_text(summary_text, reply_markup=kb, parse_mode="Markdown")
 
@@ -496,9 +604,191 @@ async def run_sast_audit_pipeline(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+async def run_deep_strix_audit_pipeline(
+    status_msg: Message,
+    repo_name: str,
+    github_token: str,
+    can_create_pr: bool
+) -> None:
+    """Clone verified repo, run deep Strix agentic pentest with animated progress, and render results."""
+    session_id = str(uuid.uuid4())[:8]
+    temp_dir = settings.temp_clone_dir / f"scan_{session_id}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    clone_url = (
+        f"https://x-access-token:{github_token}@github.com/{repo_name}.git"
+        if github_token
+        else f"https://github.com/{repo_name}.git"
+    )
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "clone", "--depth", "1", clone_url, str(temp_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+
+        if proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace")
+            await status_msg.edit_text(
+                f"❌ Ошибка клонирования репозитория:\n```\n{err_text[:300]}\n```",
+                parse_mode="Markdown"
+            )
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return
+
+        # Start animation background loop
+        anim_messages = [
+            "🤖 **[Strix Agents]** Агенты ищут уязвимости... 🔍\n⏳ *Инициализация мульти-агентного пентеста*",
+            "🧠 **[Strix Engine]** Агент анализа бизнес-логики и фаззинга в работе... ⚡\n⏳ *Поиск IDOR, инъекций и обходов авторизации*",
+            "🛡️ **[Strix Multi-Agent]** Валидация цепочек эксплуатации и прав доступа... 🔐\n⏳ *Анализ контекста кода и конфигураций*",
+            "📝 **[Strix Reporter]** Формирование верифицированных отчетов... 📊\n⏳ *Подготовка рекомендаций и авто-патчей*",
+        ]
+
+        async def status_animator():
+            idx = 0
+            while True:
+                await asyncio.sleep(4.5)
+                text = anim_messages[idx % len(anim_messages)]
+                try:
+                    await status_msg.edit_text(text, parse_mode="Markdown")
+                except Exception:
+                    pass
+                idx += 1
+
+        anim_task = asyncio.create_task(status_animator())
+
+        # 1. Run Strix Deep Agentic Scanner (Ollama local qwen2.5-coder)
+        strix_engine = StrixEngine()
+        strix_res: SASTScanResult = await strix_engine.scan(temp_dir)
+
+        # 2. Also run AST rule scanner for multi-language rule baseline
+        sast_scanner = SASTScanner()
+        sast_res: SASTScanResult = await sast_scanner.scan(temp_dir)
+
+        # Cancel animation task cleanly
+        anim_task.cancel()
+        try:
+            await anim_task
+        except asyncio.CancelledError:
+            pass
+
+        # Merge findings (Strix first, then AST findings deduplicated)
+        all_findings: List[VulnerabilityFinding] = list(strix_res.findings)
+        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in strix_res.findings}
+
+        for sf in sast_res.findings:
+            key = f"{sf.file_path}:{sf.line_start}:{sf.title}"
+            if key not in seen_keys:
+                all_findings.append(sf)
+                seen_keys.add(key)
+
+        total_duration = round(strix_res.duration_seconds + sast_res.duration_seconds, 2)
+        severity_counts: Dict[Severity, int] = {}
+        for f in all_findings:
+            severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
+
+        combined_result = SASTScanResult(
+            target_path=str(temp_dir),
+            total_findings=len(all_findings),
+            findings_by_severity=severity_counts,
+            findings=all_findings,
+            duration_seconds=total_duration,
+            scanners_run=[ScannerType.STRIX, ScannerType.SEMGREP, ScannerType.BANDIT],
+            errors=strix_res.errors + sast_res.errors,
+        )
+
+        SCAN_SESSIONS[session_id] = {
+            "repo_name": repo_name,
+            "github_token": github_token,
+            "can_create_pr": can_create_pr,
+            "temp_dir": temp_dir,
+            "scan_result": combined_result,
+            "scan_mode": "deep_strix",
+            "remediations": {}
+        }
+
+        # Build Summary Card
+        crit_count = severity_counts.get(Severity.CRITICAL, 0)
+        high_count = severity_counts.get(Severity.HIGH, 0)
+        med_count = severity_counts.get(Severity.MEDIUM, 0)
+        low_count = severity_counts.get(Severity.LOW, 0)
+
+        status_emoji = "🔴" if (crit_count + high_count > 0) else ("🟡" if med_count > 0 else "🟢")
+
+        summary_text = (
+            f"{status_emoji} **Deep AI Pentest `{repo_name}` завершен!**\n"
+            f"_Deep Scanning powered by Strix Engine (Apache 2.0)_\n\n"
+            f"⏱ **Время работы агентов:** `{total_duration} сек`\n"
+            f"🔎 **Всего выявлено проблем:** `{len(all_findings)}`\n\n"
+            f"📊 **Распределение по критичности:**\n"
+            f"• 🔴 Critical: `{crit_count}`\n"
+            f"• 🟠 High: `{high_count}`\n"
+            f"• 🟡 Medium: `{med_count}`\n"
+            f"• 🔵 Low/Info: `{low_count}`\n\n"
+        )
+
+        if len(all_findings) > 0:
+            top_f = all_findings[0]
+            summary_text += (
+                f"🚨 **Главная угроза:** `{top_f.title}`\n"
+                f"📁 Файл: `{top_f.file_path}` (стр. {top_f.line_start or 1})\n\n"
+                f"Выберите действие ниже для анализа, генерации проверочного запроса или авто-исправления:"
+            )
+            btn_pr_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ и патч"
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🧪 Сгенерировать проверочный запрос",
+                            callback_data=f"exploit_gen_{session_id}_0"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=btn_pr_text,
+                            callback_data=f"remediate_{session_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=f"📋 Список уязвимостей ({len(all_findings)})",
+                            callback_data=f"show_findings_{session_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📄 Скачать отчет (Markdown)",
+                            callback_data=f"download_report_{session_id}"
+                        )
+                    ]
+                ]
+            )
+        else:
+            summary_text += "🎉 **Уязвимостей не обнаружено! Репозиторий защищен.**"
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="📄 Скачать отчет (Markdown)",
+                            callback_data=f"download_report_{session_id}"
+                        )
+                    ]
+                ]
+            )
+
+        await status_msg.edit_text(summary_text, reply_markup=kb, parse_mode="Markdown")
+
+    except Exception as ex:
+        logger.exception(f"Deep Strix audit error: {ex}")
+        await status_msg.edit_text(f"❌ Ошибка во время глубокого аудита: `{str(ex)}`")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 @router.callback_query(F.data.startswith("show_findings_"))
-async def handle_show_findings(callback: CallbackQuery) -> None:
-    """Display list of found vulnerabilities with severity."""
+async def handle_show_findings(callback: CallbackQuery, state: FSMContext) -> None:
+    """Display list of found vulnerabilities with interactive buttons per finding."""
     session_id = callback.data.replace("show_findings_", "")
     session = SCAN_SESSIONS.get(session_id)
 
@@ -511,49 +801,304 @@ async def handle_show_findings(callback: CallbackQuery) -> None:
     findings = scan_result.findings[:10]  # Show top 10
 
     lines = [f"🔍 **Топ уязвимостей для `{session['repo_name']}`:**\n"]
-    for idx, f in enumerate(findings, 1):
+    buttons = []
+
+    for idx, f in enumerate(findings):
         sev_icon = "🔴" if f.severity in [Severity.CRITICAL, Severity.HIGH] else ("🟡" if f.severity == Severity.MEDIUM else "🔵")
         lines.append(
-            f"{idx}. {sev_icon} **[{f.severity.value}]** `{f.title}`\n"
+            f"{idx + 1}. {sev_icon} **[{f.severity.value}]** `{f.title}`\n"
             f"   📁 `{f.file_path}` (стр. {f.line_start or 1})\n"
             f"   ℹ️ {f.description[:120]}..."
         )
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{idx + 1}. 🔍 {f.title[:32]}",
+                callback_data=f"view_finding_{session_id}_{idx}"
+            )
+        ])
 
     if len(scan_result.findings) > 10:
         lines.append(f"\n_...и еще {len(scan_result.findings) - 10} уязвимостей._")
 
-    btn_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ уязвимостей и патч"
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=btn_text,
-                    callback_data=f"remediate_{session_id}"
-                )
-            ]
-        ]
-    )
+    # Global action buttons
+    btn_pr_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ уязвимостей и патч"
+    buttons.append([
+        InlineKeyboardButton(
+            text=btn_pr_text,
+            callback_data=f"remediate_{session_id}"
+        )
+    ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="📄 Скачать отчет (Markdown)",
+            callback_data=f"download_report_{session_id}"
+        )
+    ])
 
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.answer("\n\n".join(lines), reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("remediate_"))
-async def handle_remediation_and_pr(callback: CallbackQuery) -> None:
-    """Analyze the top vulnerability with LLM and open a Pull Request (if authorized)."""
-    session_id = callback.data.replace("remediate_", "")
-    session = SCAN_SESSIONS.get(session_id)
+@router.callback_query(F.data.startswith("view_finding_"))
+async def handle_view_finding_detail(callback: CallbackQuery, state: FSMContext) -> None:
+    """Display individual finding card with exploit payload generation and remediation options."""
+    parts = callback.data.split("_")
+    session_id = parts[2]
+    idx = int(parts[3])
 
+    session = SCAN_SESSIONS.get(session_id)
     if not session:
         await callback.answer("⚠️ Сессия аудита устарела.", show_alert=True)
         return
 
     scan_result: SASTScanResult = session["scan_result"]
-    if not scan_result.findings:
-        await callback.answer("Нет уязвимостей для исправления.", show_alert=True)
+    if idx >= len(scan_result.findings):
+        await callback.answer("⚠️ Уязвимость не найдена.", show_alert=True)
         return
 
-    target_finding: VulnerabilityFinding = scan_result.findings[0]
+    f: VulnerabilityFinding = scan_result.findings[idx]
+
+    # Store current active finding in FSM
+    await state.update_data(
+        current_session_id=session_id,
+        current_finding_idx=idx,
+        current_finding=f.model_dump(),
+        code_context=f.code_snippet or ""
+    )
+
+    sev_icon = "🔴" if f.severity in [Severity.CRITICAL, Severity.HIGH] else ("🟡" if f.severity == Severity.MEDIUM else "🔵")
+    detail_text = (
+        f"{sev_icon} **Уязвимость #{idx + 1}: [{f.severity.value}]**\n\n"
+        f"📌 **Название:** `{f.title}`\n"
+        f"📁 **Файл:** `{f.file_path}` (стр. {f.line_start or 1}-{f.line_end or 1})\n"
+        f"🔎 **Сканер:** `{f.scanner.value}`\n"
+        f"📝 **Описание:** {f.description}\n"
+    )
+    if f.cwe:
+        detail_text += f"🏷 **CWE:** `{', '.join(f.cwe)}`\n"
+    if f.recommendation:
+        detail_text += f"💡 **Рекомендация:** {f.recommendation}\n"
+    if f.code_snippet:
+        detail_text += f"\n**Контекст кода:**\n```python\n{f.code_snippet[:400]}\n```"
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🧪 Сгенерировать проверочный запрос",
+                    callback_data=f"exploit_gen_{session_id}_{idx}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤖 Сгенерировать AI-исправление и PR",
+                    callback_data=f"remediate_finding_{session_id}_{idx}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📋 Назад к списку",
+                    callback_data=f"show_findings_{session_id}"
+                )
+            ]
+        ]
+    )
+
+    await callback.message.answer(detail_text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exploit_gen_") | (F.data == "exploit_generate"))
+async def handle_generate_exploit(callback: CallbackQuery, state: FSMContext) -> None:
+    """Generate verification exploit payload using RemediationEngine."""
+    data = await state.get_data()
+    target_finding: Optional[VulnerabilityFinding] = None
+    code_context: str = ""
+
+    if callback.data.startswith("exploit_gen_"):
+        parts = callback.data.split("_")
+        session_id = parts[2]
+        idx = int(parts[3])
+        session = SCAN_SESSIONS.get(session_id)
+        if session and idx < len(session["scan_result"].findings):
+            target_finding = session["scan_result"].findings[idx]
+            code_context = target_finding.code_snippet or ""
+            await state.update_data(
+                current_session_id=session_id,
+                current_finding_idx=idx,
+                current_finding=target_finding.model_dump(),
+                code_context=code_context
+            )
+
+    if not target_finding:
+        raw_finding = data.get("current_finding")
+        if isinstance(raw_finding, dict):
+            target_finding = VulnerabilityFinding(**raw_finding)
+            code_context = data.get("code_context", target_finding.code_snippet or "")
+        elif isinstance(raw_finding, VulnerabilityFinding):
+            target_finding = raw_finding
+            code_context = data.get("code_context", target_finding.code_snippet or "")
+
+    if not target_finding:
+        await callback.answer("⚠️ Нет активной уязвимости для генерации запроса.", show_alert=True)
+        return
+
+    status_msg = await callback.message.answer(
+        f"🧪 **Генерация проверочного запроса для:** `{target_finding.title}`...\n"
+        f"⏳ *ИИ ({settings.ollama_model}) формирует параметры запроса и curl-команду...*",
+        parse_mode="Markdown"
+    )
+
+    try:
+        engine = RemediationEngine()
+        payload = await engine.generate_exploit_payload(
+            finding=target_finding,
+            code_context=code_context,
+            endpoint=data.get("endpoint")
+        )
+
+        # Save ExploitPayload into FSM state
+        await state.update_data(exploit_payload=payload.model_dump())
+
+        msg_text = (
+            f"🧪 **Проверочный запрос для подтверждения уязвимости:**\n\n"
+            f"📌 **Уязвимость:** `{target_finding.title}`\n"
+            f"🎯 **Индикатор успеха:** `{payload.success_indicator}`\n"
+            f"📊 **Уверенность (Confidence):** `{payload.confidence:.2f}`\n\n"
+            f"📋 **cURL команда:**\n"
+            f"```bash\n{payload.curl_command}\n```"
+        )
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🚀 Запустить проверку",
+                        callback_data="exploit_run"
+                    )
+                ]
+            ]
+        )
+
+        await status_msg.edit_text(msg_text, reply_markup=kb, parse_mode="Markdown")
+
+    except Exception as ex:
+        logger.exception(f"Exploit generation failed: {ex}")
+        await status_msg.edit_text(f"⚠️ Ошибка при генерации проверочного запроса: `{str(ex)}`")
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "exploit_run")
+async def handle_run_exploit(callback: CallbackQuery, state: FSMContext) -> None:
+    """Execute stored payload against target URL or ask user for base URL."""
+    data = await state.get_data()
+    payload_data = data.get("exploit_payload")
+    target_url = data.get("target_url")
+
+    if not payload_data:
+        await callback.answer("⚠️ Сначала сгенерируйте проверочный запрос.", show_alert=True)
+        return
+
+    if not target_url:
+        await state.set_state(AuditStates.waiting_for_target_url)
+        await callback.message.answer(
+            "🌐 **Введите базовый URL целевого сервиса для проверки:**\n\n"
+            "*(Пример: `http://localhost:8000` или `https://api.test-app.com`)*",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    await execute_and_display_payload(callback.message, payload_data, target_url)
+    await callback.answer()
+
+
+@router.message(AuditStates.waiting_for_target_url)
+async def process_target_url_input(message: Message, state: FSMContext) -> None:
+    """Receive target URL and run validation payload."""
+    target_url = message.text.strip()
+    if not (target_url.startswith("http://") or target_url.startswith("https://")):
+        await message.answer("⚠️ Пожалуйста, укажите валидный URL, начинающийся с `http://` или `https://`:")
+        return
+
+    await state.update_data(target_url=target_url)
+    data = await state.get_data()
+    payload_data = data.get("exploit_payload")
+
+    if not payload_data:
+        await message.answer("⚠️ Проверочный запрос не найден в сессии. Сгенерируйте его заново.")
+        return
+
+    await execute_and_display_payload(message, payload_data, target_url)
+
+
+async def execute_and_display_payload(
+    message: Message,
+    payload_dict: dict,
+    target_url: str
+) -> None:
+    """Execute payload via executor and render results in Telegram."""
+    status_msg = await message.answer(
+        f"🚀 **Отправка проверочного запроса на `{target_url}`...**\n"
+        f"⏳ *Ожидание ответа сервера...*",
+        parse_mode="Markdown"
+    )
+
+    payload = ExploitPayload(**payload_dict) if isinstance(payload_dict, dict) else payload_dict
+
+    try:
+        success, output = await execute_payload(
+            base_url=target_url,
+            payload=payload.payload,
+            method=payload.method,
+            headers=payload.headers,
+            body=payload.body,
+            success_indicator=payload.success_indicator,
+        )
+
+        status_icon = "✅" if success else "❌"
+        status_title = "Уязвимость подтверждена!" if success else "Уязвимость не подтверждена"
+
+        result_text = (
+            f"{status_icon} **Результат проверки: {status_title}**\n\n"
+            f"🎯 **Индикатор успеха:** `{payload.success_indicator or 'N/A'}`\n"
+            f"🌐 **Целевой URL:** `{target_url}`\n\n"
+            f"📄 **Ответ сервера (первые 500 символов):**\n"
+            f"```\n{output[:500] if output else '(Пустой ответ)'}\n```"
+        )
+
+        await status_msg.edit_text(result_text, parse_mode="Markdown")
+
+    except Exception as ex:
+        logger.exception(f"Execute payload error: {ex}")
+        await status_msg.edit_text(f"❌ Ошибка при выполнении запроса: `{str(ex)}`")
+
+
+@router.callback_query(F.data.startswith("remediate_"))
+async def handle_remediation_and_pr(callback: CallbackQuery, state: FSMContext) -> None:
+    """Analyze finding with LLM and open a Pull Request (if authorized)."""
+    target_finding: Optional[VulnerabilityFinding] = None
+    session_id: Optional[str] = None
+
+    if callback.data.startswith("remediate_finding_"):
+        parts = callback.data.split("_")
+        session_id = parts[2]
+        idx = int(parts[3])
+        session = SCAN_SESSIONS.get(session_id)
+        if session and idx < len(session["scan_result"].findings):
+            target_finding = session["scan_result"].findings[idx]
+    else:
+        session_id = callback.data.replace("remediate_", "")
+        session = SCAN_SESSIONS.get(session_id)
+        if session and session["scan_result"].findings:
+            target_finding = session["scan_result"].findings[0]
+
+    if not session or not target_finding:
+        await callback.answer("⚠️ Сессия аудита устарела.", show_alert=True)
+        return
+
     await callback.message.answer(
         f"🤖 **ИИ ({settings.ollama_model}) анализирует уязвимость:**\n"
         f"`{target_finding.title}` в `{target_finding.file_path}`...\n"
@@ -599,7 +1144,6 @@ async def handle_remediation_and_pr(callback: CallbackQuery) -> None:
 
     pr_status_msg = await callback.message.answer("🚀 **Создаем защищенную ветку и Pull Request на GitHub...**")
 
-    # Relative file path inside repo
     clean_path = target_finding.file_path
     if "temp_scans" in clean_path:
         clean_path = clean_path.split("/")[-1]
@@ -651,7 +1195,7 @@ async def handle_download_report(callback: CallbackQuery) -> None:
 
     report_lines = [
         f"# 🛡️ Отчет по безопасности: {repo_name}",
-        f"**Дата аудита:** {scan_result.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        "> **Deep Scanning powered by Strix Engine (Apache 2.0)**\n",
         f"**Всего уязвимостей:** {scan_result.total_findings}",
         f"**Длительность сканирования:** {scan_result.duration_seconds} сек\n",
         "## 📊 Сводка по критичности:",
