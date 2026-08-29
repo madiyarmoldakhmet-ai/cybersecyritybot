@@ -1,7 +1,10 @@
 """
 SAST Scanner Engine for CyberSecurityBot.
-Executes static application security testing (AST Analyzer, Semgrep, Bandit) and dependency vulnerability checks (Pip-Audit).
-Normalized findings are produced for subsequent AI analysis and auto-remediation.
+Executes multi-language static application security testing:
+- Flutter / Dart / JS / TS / Python / JSON / YAML / HTML / Env security rules
+- Python AST security visitor (SQLi, eval, pickle, subprocess shell=True)
+- Universal heuristic patterns (Firebase/Google API keys, Telegram bot tokens, Private keys, Insecure SSL callbacks, Open Firestore rules, DOM XSS)
+- CLI scanners: Semgrep, Bandit, Pip-Audit
 """
 
 import ast
@@ -13,7 +16,7 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Pattern, Tuple, Union
 
 from core.config import settings
 from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
@@ -38,6 +41,23 @@ IGNORED_DIRS = {
     ".tox",
     ".mypy_cache",
     "site-packages",
+}
+
+# Target file extensions for multi-language security inspection
+TARGET_EXTENSIONS = {
+    ".dart",
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".rules",
+    ".env",
+    ".env.example",
+    ".html",
 }
 
 
@@ -66,8 +86,173 @@ def extract_code_context(
         return None
 
 
+class MultiLanguagePatternScanner:
+    """Universal regex and heuristic security pattern scanner across multi-language source files."""
+
+    RULES: List[Dict[str, Any]] = [
+        # 1. Google / Firebase API Keys
+        {
+            "id": "exposed-google-firebase-key",
+            "regex": re.compile(r"\bAIza[0-9A-Za-z\-_]{30,45}\b"),
+            "title": "Exposed Google / Firebase API Key",
+            "description": "Hardcoded Google/Firebase API key detected in source code.",
+            "severity": Severity.HIGH,
+            "cwe": ["CWE-798"],
+            "cve": [],
+            "recommendation": "Store API keys in environment variables or restrict key permissions in Google Cloud Console.",
+        },
+        # 2. Telegram Bot Tokens
+        {
+            "id": "exposed-telegram-bot-token",
+            "regex": re.compile(r"\b[0-9]{8,10}:[a-zA-Z0-9_-]{35}\b"),
+            "title": "Exposed Telegram Bot Token",
+            "description": "Telegram Bot API token is hardcoded in source code, risking unauthorized bot control.",
+            "severity": Severity.CRITICAL,
+            "cwe": ["CWE-798"],
+            "cve": [],
+            "recommendation": "Revoke this token via @BotFather and pass token via environment variables.",
+        },
+        # 3. Private Cryptographic Keys
+        {
+            "id": "hardcoded-private-key",
+            "regex": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+            "title": "Hardcoded Private Cryptographic Key",
+            "description": "Plaintext private cryptographic key embedded in repository.",
+            "severity": Severity.CRITICAL,
+            "cwe": ["CWE-798", "CWE-312"],
+            "cve": [],
+            "recommendation": "Remove private keys from source code immediately and rotate credentials.",
+        },
+        # 4. Service Secrets (OpenAI, GitHub, Slack)
+        {
+            "id": "hardcoded-service-secret",
+            "regex": re.compile(r"\b(?:sk-live-[0-9a-zA-Z]{24,}|ghp_[0-9a-zA-Z]{36}|gho_[0-9a-zA-Z]{36}|xox[baprs]-[0-9a-zA-Z]{10,})\b"),
+            "title": "Hardcoded Service API Secret (OpenAI / GitHub / Slack)",
+            "description": "Hardcoded live API secret detected.",
+            "severity": Severity.CRITICAL,
+            "cwe": ["CWE-798"],
+            "cve": [],
+            "recommendation": "Revoke the secret immediately and load secrets securely from environment variables.",
+        },
+        # 5. Flutter / Dart Disabled SSL/TLS Validation
+        {
+            "id": "dart-disabled-ssl-validation",
+            "regex": re.compile(r"badCertificateCallback\s*=\s*.*=>\s*true|badCertificateCallback.*\{\s*return\s+true;\s*\}|allowInsecureConnection\s*:\s*true"),
+            "title": "Flutter/Dart: Disabled SSL/TLS Certificate Validation",
+            "description": "SSL certificate verification is bypassed via badCertificateCallback returning true, leaving app vulnerable to MitM attacks.",
+            "severity": Severity.CRITICAL,
+            "cwe": ["CWE-295"],
+            "cve": [],
+            "recommendation": "Enforce strict TLS validation and certificate pinning in production.",
+            "exts": {".dart", ".js", ".ts"},
+        },
+        # 6. Insecure Cleartext HTTP URLs
+        {
+            "id": "insecure-cleartext-http-url",
+            "regex": re.compile(r"""["']http://(?!localhost|127\.0\.0\.1|10\.\d|192\.168|schema\.org|www\.w3\.org)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}[^"']*["']"""),
+            "title": "Insecure Cleartext HTTP Communication URL",
+            "description": "Cleartext HTTP endpoint detected. Network traffic is unencrypted and vulnerable to eavesdropping.",
+            "severity": Severity.MEDIUM,
+            "cwe": ["CWE-319"],
+            "cve": [],
+            "recommendation": "Replace 'http://' with 'https://' to ensure encrypted data transit.",
+            "exts": {".dart", ".js", ".ts", ".jsx", ".tsx", ".py"},
+        },
+        # 7. Open Firestore / Database Rules
+        {
+            "id": "insecure-firestore-open-rules",
+            "regex": re.compile(r"allow\s+read,\s*write\s*:\s*if\s+true\s*;|allow\s+write\s*:\s*if\s+true\s*;"),
+            "title": "Insecure Database / Firestore Public Write Rules",
+            "description": "Database rules allow public unauthenticated read/write access ('if true'), exposing all database records.",
+            "severity": Severity.CRITICAL,
+            "cwe": ["CWE-284", "CWE-732"],
+            "cve": [],
+            "recommendation": "Restrict access rules to authenticated users (e.g. 'if request.auth != null').",
+            "exts": {".json", ".yaml", ".yml", ".rules", ".txt", ".dart"},
+        },
+        # 8. JavaScript DOM XSS via innerHTML / dangerouslySetInnerHTML
+        {
+            "id": "js-dom-xss-innerhtml",
+            "regex": re.compile(r"\b(?:innerHTML|outerHTML)\s*=\s*(?![\"'\`]\s*[\"'\`])|\bdangerouslySetInnerHTML\s*=\s*\{\s*__html\s*:"),
+            "title": "Potential DOM XSS via Unsafe HTML Injection",
+            "description": "Direct assignment to innerHTML or dangerouslySetInnerHTML can lead to Cross-Site Scripting (XSS).",
+            "severity": Severity.HIGH,
+            "cwe": ["CWE-79"],
+            "cve": [],
+            "recommendation": "Use textContent or sanitize HTML with DOMPurify before rendering.",
+            "exts": {".js", ".ts", ".jsx", ".tsx", ".html"},
+        },
+        # 9. JavaScript document.write
+        {
+            "id": "js-document-write-xss",
+            "regex": re.compile(r"\bdocument\.write\s*\("),
+            "title": "Insecure document.write() Invocation",
+            "description": "Use of document.write() is insecure and can introduce DOM XSS vulnerabilities.",
+            "severity": Severity.HIGH,
+            "cwe": ["CWE-79"],
+            "cve": [],
+            "recommendation": "Avoid document.write(). Use standard DOM manipulation APIs (createElement / appendChild).",
+            "exts": {".js", ".ts", ".jsx", ".tsx", ".html"},
+        },
+    ]
+
+    @classmethod
+    def scan_file(cls, file_path: Path, content: str) -> List[VulnerabilityFinding]:
+        """Scan file content line-by-line against universal security pattern rules."""
+        findings: List[VulnerabilityFinding] = []
+        ext = file_path.suffix.lower()
+        # Handle files without standard extension like .env
+        if not ext and file_path.name.startswith(".env"):
+            ext = ".env"
+
+        lines = content.splitlines()
+
+        for rule in cls.RULES:
+            # Check extension filtering if rule specifies target extensions
+            allowed_exts = rule.get("exts")
+            if allowed_exts and ext not in allowed_exts:
+                continue
+
+            pattern: Pattern = rule["regex"]
+
+            for line_idx, line in enumerate(lines, 1):
+                # Skip comments where applicable to reduce false positives
+                line_stripped = line.strip()
+                if line_stripped.startswith("//") or line_stripped.startswith("#") or line_stripped.startswith("/*"):
+                    # Only skip comment lines if not checking for hardcoded secrets
+                    if "key" not in rule["id"] and "secret" not in rule["id"] and "token" not in rule["id"]:
+                        continue
+
+                match = pattern.search(line)
+                if match:
+                    # Extract 30-line code window context
+                    first_line = max(1, line_idx - 15)
+                    last_line = min(len(lines), line_idx + 15)
+                    snippet = "\n".join(lines[first_line - 1 : last_line])
+
+                    findings.append(
+                        VulnerabilityFinding(
+                            id=rule["id"],
+                            scanner=ScannerType.CUSTOM,
+                            title=rule["title"],
+                            description=rule["description"],
+                            severity=rule["severity"],
+                            file_path=str(file_path),
+                            line_start=line_idx,
+                            line_end=line_idx,
+                            code_snippet=snippet,
+                            cwe=rule["cwe"],
+                            cve=rule["cve"],
+                            recommendation=rule["recommendation"],
+                            raw_metadata={"matched_text": match.group(0)[:60]}
+                        )
+                    )
+
+        return findings
+
+
 class PythonASTSecurityVisitor(ast.NodeVisitor):
-    """AST Visitor that inspects Python AST for critical security patterns."""
+    """AST Visitor that inspects Python AST for critical Python-specific security patterns."""
 
     def __init__(self, file_path: Path, file_content: str) -> None:
         self.file_path = file_path
@@ -82,35 +267,6 @@ class PythonASTSecurityVisitor(ast.NodeVisitor):
         last_line = min(len(self.lines), end + padding)
         selected = self.lines[first_line - 1 : last_line]
         return "\n".join(selected)
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        # Check for hardcoded API keys or passwords
-        for target in node.targets:
-            if isinstance(target, ast.Name):
-                var_name = target.id.lower()
-                is_secret_name = any(
-                    k in var_name for k in ["secret", "api_key", "token", "password", "priv_key"]
-                )
-                if is_secret_name and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                    val = node.value.value
-                    if len(val) > 8 and not val.startswith("ENV_") and not val.startswith("${"):
-                        self.findings.append(
-                            VulnerabilityFinding(
-                                id="hardcoded-secret",
-                                scanner=ScannerType.CUSTOM,
-                                title="Hardcoded Sensitive Credential or Secret",
-                                description=f"Variable '{target.id}' contains a hardcoded plaintext secret.",
-                                severity=Severity.HIGH,
-                                file_path=str(self.file_path),
-                                line_start=node.lineno,
-                                line_end=node.end_lineno or node.lineno,
-                                code_snippet=self._get_snippet(node.lineno, node.end_lineno),
-                                cwe=["CWE-798"],
-                                cve=[],
-                                recommendation="Move sensitive credentials to environment variables or a secrets manager."
-                            )
-                        )
-        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         func_name = ""
@@ -141,7 +297,6 @@ class PythonASTSecurityVisitor(ast.NodeVisitor):
         # 2. SQL Injection in cursor.execute()
         if func_name == "execute" and node.args:
             first_arg = node.args[0]
-            # Check if string concatenation or f-string is used in SQL query
             is_dynamic_sql = isinstance(first_arg, (ast.BinOp, ast.JoinedStr))
             if is_dynamic_sql:
                 self.findings.append(
@@ -206,7 +361,7 @@ class PythonASTSecurityVisitor(ast.NodeVisitor):
 
 
 class SASTScanner:
-    """Orchestrates static analysis tools and dependency vulnerability scanners."""
+    """Orchestrates multi-language static analysis tools and dependency vulnerability scanners."""
 
     def __init__(
         self,
@@ -270,8 +425,8 @@ class SASTScanner:
         }
         return mapping.get(bandit_sev.upper(), Severity.LOW)
 
-    async def run_ast_analyzer(self, target_path: Path) -> List[VulnerabilityFinding]:
-        """Analyze Python files using built-in AST security visitor with directory pruning."""
+    async def run_multi_language_analyzer(self, target_path: Path) -> List[VulnerabilityFinding]:
+        """Analyze multi-language source files (Dart, JS, TS, Python, JSON, YAML) with directory pruning."""
         findings: List[VulnerabilityFinding] = []
 
         for root, dirs, files in os.walk(target_path):
@@ -279,16 +434,30 @@ class SASTScanner:
             dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
 
             for file in files:
-                if file.endswith(".py"):
-                    py_file = Path(root) / file
+                file_path = Path(root) / file
+                ext = file_path.suffix.lower()
+                is_env = file.startswith(".env")
+
+                if ext in TARGET_EXTENSIONS or is_env:
                     try:
-                        content = py_file.read_text(encoding="utf-8", errors="replace")
-                        tree = ast.parse(content, filename=str(py_file))
-                        visitor = PythonASTSecurityVisitor(py_file, content)
-                        visitor.visit(tree)
-                        findings.extend(visitor.findings)
+                        content = file_path.read_text(encoding="utf-8", errors="replace")
+
+                        # 1. Universal multi-language pattern checks (Dart, JS, TS, Python, Secrets, Rules)
+                        pattern_findings = MultiLanguagePatternScanner.scan_file(file_path, content)
+                        findings.extend(pattern_findings)
+
+                        # 2. Python-specific AST security visitor
+                        if ext == ".py":
+                            try:
+                                tree = ast.parse(content, filename=str(file_path))
+                                ast_visitor = PythonASTSecurityVisitor(file_path, content)
+                                ast_visitor.visit(tree)
+                                findings.extend(ast_visitor.findings)
+                            except Exception as ast_err:
+                                logger.debug(f"AST parsing skipped for {file_path}: {ast_err}")
+
                     except Exception as e:
-                        logger.debug(f"AST parsing skipped for {py_file}: {e}")
+                        logger.debug(f"Multi-language scanner skipped {file_path}: {e}")
 
         return findings
 
@@ -394,7 +563,6 @@ class SASTScanner:
                 filename = res.get("filename", str(target_path))
                 line_num = res.get("line_number")
 
-                # Extract 30-line code window context if available
                 snippet = res.get("code")
                 window_ctx = extract_code_context(filename, line_num, padding=15)
                 if window_ctx:
@@ -468,30 +636,30 @@ class SASTScanner:
         return all_findings, None
 
     async def scan(self, target_path: Union[str, Path]) -> SASTScanResult:
-        """Run SAST scanners concurrently and aggregate results."""
+        """Run multi-language SAST scanners concurrently and aggregate results."""
         start_time = time.time()
         path = Path(target_path).resolve()
 
         if not path.exists():
             raise FileNotFoundError(f"Target path does not exist: {path}")
 
-        logger.info(f"Starting SAST security audit for: {path}")
+        logger.info(f"Starting multi-language SAST security audit for: {path}")
 
-        # Run built-in AST analyzer and CLI tools concurrently
-        ast_task = asyncio.create_task(self.run_ast_analyzer(path))
+        # Run built-in multi-language analyzer and CLI tools concurrently
+        ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
         semgrep_task = asyncio.create_task(self.run_semgrep(path))
         bandit_task = asyncio.create_task(self.run_bandit(path))
         pip_audit_task = asyncio.create_task(self.run_pip_audit(path))
 
-        ast_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err) = await asyncio.gather(
-            ast_task, semgrep_task, bandit_task, pip_audit_task, return_exceptions=False
+        ml_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err) = await asyncio.gather(
+            ml_task, semgrep_task, bandit_task, pip_audit_task, return_exceptions=False
         )
 
         # Merge findings, avoiding duplicate IDs on identical lines
         seen_keys = set()
         all_findings: List[VulnerabilityFinding] = []
 
-        for f in (bandit_findings + semgrep_findings + ast_findings + pip_findings):
+        for f in (bandit_findings + semgrep_findings + ml_findings + pip_findings):
             key = f"{f.file_path}:{f.line_start}:{f.id}"
             if key not in seen_keys:
                 seen_keys.add(key)
@@ -523,7 +691,7 @@ class SASTScanner:
         )
 
         logger.info(
-            f"SAST audit completed in {duration}s. "
+            f"Multi-language SAST audit completed in {duration}s. "
             f"Discovered {len(all_findings)} total findings across {path.name}."
         )
         return result
