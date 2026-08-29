@@ -19,6 +19,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -61,21 +62,27 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="⚡ Статус AI Движка (Ollama)",
+                    text="🎬 О проекте / Промо",
+                    callback_data="show_promo"
+                ),
+                InlineKeyboardButton(
+                    text="⚡ Статус AI (Ollama)",
                     callback_data="check_ai_status"
                 ),
+            ],
+            [
                 InlineKeyboardButton(
                     text="📖 Справка",
                     callback_data="help_info"
                 )
-            ],
+            ]
         ]
     )
 
 
 @router.message(CommandStart())
 async def handle_start(message: Message, state: FSMContext) -> None:
-    """Handle /start command with rich welcome and status."""
+    """Handle /start command with rich welcome and optional promo animation."""
     await state.clear()
     user_name = message.from_user.first_name if message.from_user else "Разработчик"
 
@@ -84,13 +91,85 @@ async def handle_start(message: Message, state: FSMContext) -> None:
         f"Я — **CyberSecurityBot**, твой автономный DevSecOps & AI Pentester ассистент.\n\n"
         f"🔹 **Что я умею:**\n"
         f"1. 🔐 **Proof of Ownership** — строгая проверка авторства репозитория перед аудитом.\n"
-        f"2. 🔍 **SAST & Multi-Language Scan** — поиск уязвимостей в Flutter/Dart, JS/TS, Python, Firestore и секретах.\n"
+        f"2. 🔍 **SAST & Deep Pentest (Strix)** — поиск уязвимостей в Flutter/Dart, JS/TS, Python, Firestore и секретах.\n"
         f"3. 🧠 **AI Remediation** — анализ ошибок локальной моделью `{settings.ollama_model}`.\n"
         f"4. 🚀 **Auto-PR** — автоматическое открытие Pull Request с готовым исправленным кодом.\n\n"
         f"Нажми кнопку ниже, чтобы начать аудит!"
     )
 
+    promo_path = Path("assets/promo.mp4")
+    gif_path = Path("assets/demo.gif")
+
+    if promo_path.exists():
+        try:
+            video_file = FSInputFile(str(promo_path))
+            await message.answer_video(
+                video=video_file,
+                caption=welcome_text,
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode="Markdown"
+            )
+            return
+        except Exception as e:
+            logger.debug(f"Failed to send promo video: {e}")
+    elif gif_path.exists():
+        try:
+            anim_file = FSInputFile(str(gif_path))
+            await message.answer_animation(
+                animation=anim_file,
+                caption=welcome_text,
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode="Markdown"
+            )
+            return
+        except Exception as e:
+            logger.debug(f"Failed to send demo gif: {e}")
+
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "show_promo")
+@router.message(Command("about"), Command("promo"))
+async def handle_about_promo(event: Message | CallbackQuery) -> None:
+    """Send product promo video and overview."""
+    msg = event.message if isinstance(event, CallbackQuery) else event
+
+    about_text = (
+        "🎬 **О проекте CyberSecurityBot**\n\n"
+        "CyberSecurityBot — автономный DevSecOps & AI Pentester ассистент нового поколения.\n\n"
+        "🌟 **Ключевые преимущества:**\n"
+        "• 🔐 **Proof of Ownership:** Защита от несанкционированного аудита.\n"
+        "• ⚡ **SAST & Multi-Language:** Анализ Dart, JS/TS, Python, Firestore rules.\n"
+        "• 🤖 **Strix Deep Pentest:** Мульти-агентный аудит бизнес-логики и IDOR (Apache 2.0).\n"
+        "• 🧠 **100% Local AI:** Полная конфиденциальность кода через Ollama.\n"
+        "• 🚀 **Auto-PR:** Автоматическое устранение уязвимостей в 1 клик.\n\n"
+        "🔗 **GitHub:** [madiyarmoldakhmet-ai/cybersecyritybot](https://github.com/madiyarmoldakhmet-ai/cybersecyritybot)"
+    )
+
+    promo_path = Path("assets/promo.mp4")
+    gif_path = Path("assets/demo.gif")
+
+    sent = False
+    if promo_path.exists():
+        try:
+            video_file = FSInputFile(str(promo_path))
+            await msg.answer_video(video=video_file, caption=about_text, parse_mode="Markdown")
+            sent = True
+        except Exception as e:
+            logger.debug(f"Failed to send promo video in /about: {e}")
+    elif gif_path.exists() and not sent:
+        try:
+            anim_file = FSInputFile(str(gif_path))
+            await msg.answer_animation(animation=anim_file, caption=about_text, parse_mode="Markdown")
+            sent = True
+        except Exception as e:
+            logger.debug(f"Failed to send demo gif in /about: {e}")
+
+    if not sent:
+        await msg.answer(about_text, parse_mode="Markdown")
+
+    if isinstance(event, CallbackQuery):
+        await event.answer()
 
 
 @router.callback_query(F.data == "help_info")
