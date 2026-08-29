@@ -145,11 +145,10 @@ async def trigger_sast_scan(req: SASTScanRequest):
     if not repo_name:
         raise HTTPException(status_code=400, detail="Invalid GitHub repository format.")
 
-    token = req.github_token or settings.github_token
-    if token:
-        is_owner, msg = await OwnershipVerifier.verify_github_access(token, repo_name)
-        if not is_owner:
-            raise HTTPException(status_code=403, detail=f"Proof of Ownership failed: {msg}")
+    token = (req.github_token or settings.github_token or "").strip()
+    is_accessible, msg, can_create_pr = await OwnershipVerifier.verify_github_access(token, repo_name)
+    if not is_accessible:
+        raise HTTPException(status_code=403, detail=f"Access verification failed: {msg}")
 
     # Clone into temporary directory
     scan_id = str(uuid.uuid4())[:8]

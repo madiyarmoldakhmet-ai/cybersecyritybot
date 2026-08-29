@@ -78,7 +78,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
         f"Я — **CyberSecurityBot**, твой автономный DevSecOps & AI Pentester ассистент.\n\n"
         f"🔹 **Что я умею:**\n"
         f"1. 🔑 **Proof of Ownership** — проверка прав доступа к репозиторию перед аудитом.\n"
-        f"2. 🔍 **SAST & Dependency Scan** — поиск уязвимостей через Semgrep, Bandit и Pip-Audit.\n"
+        f"2. 🔍 **SAST & Dependency Scan** — поиск уязвимостей через Semgrep, Bandit, AST и Pip-Audit.\n"
         f"3. 🧠 **AI Remediation** — анализ ошибок локальной моделью `{settings.ollama_model}`.\n"
         f"4. 🚀 **Auto-PR** — автоматическое открытие Pull Request с готовым исправленным кодом.\n\n"
         f"Нажми кнопку ниже, чтобы начать аудит!"
@@ -93,12 +93,12 @@ async def handle_help(event: Message | CallbackQuery) -> None:
     """Display help information."""
     help_text = (
         "📖 **Справка по работе с CyberSecurityBot**\n\n"
-        "1. **GitHub Token:**\n"
-        "   Для аудита и создания Pull Request требуется Personal Access Token (classic или fine-grained) "
-        "с правами `repo` (чтение кода и создание PR).\n"
+        "1. **Режимы аудита:**\n"
+        "   • **С GitHub токеном:** полный аудит + авто-создание Pull Request с исправленным кодом.\n"
+        "   • **Без токена (Read-Only):** аудит любых публичных репозиториев и генерация отчета.\n\n"
+        "2. **GitHub Token:**\n"
+        "   Для создания Pull Request нужен Personal Access Token с правами `repo` (чтение и запись).\n"
         "   Создать токен: [GitHub Tokens](https://github.com/settings/tokens)\n\n"
-        "2. **Проверка прав (Proof of Ownership):**\n"
-        "   Бот проверяет, что ваш токен имеет права `push` или `admin` на сканируемый репозиторий.\n\n"
         "3. **AI Движок:**\n"
         f"   По умолчанию используется локальный сервер Ollama (`{settings.ollama_base_url}`) "
         f"с моделью `{settings.ollama_model}`."
@@ -150,25 +150,44 @@ async def handle_status(event: Message | CallbackQuery) -> None:
 
 @router.callback_query(F.data == "start_audit")
 async def start_audit_flow(callback: CallbackQuery, state: FSMContext) -> None:
-    """Start audit wizard by requesting GitHub Token."""
-    # Check if global default token is already configured
-    if settings.github_token:
-        await state.update_data(github_token=settings.github_token)
-        await state.set_state(AuditStates.waiting_for_repo)
-        await callback.message.answer(
-            "🔑 Используется системный GitHub Token.\n\n"
-            "🌐 **Введите ссылку на репозиторий для аудита:**\n"
-            "*(Пример: `https://github.com/owner/repo` или `owner/repo`)*",
-            parse_mode="Markdown"
-        )
-    else:
-        await state.set_state(AuditStates.waiting_for_token)
-        await callback.message.answer(
-            "🔑 **Шаг 1: Введите ваш GitHub Personal Access Token**\n\n"
-            "Токен нужен для проверки прав владения (Proof of Ownership) и создания Pull Request.\n"
-            "_(Токен используется только в рамках текущей сессии и не сохраняется на диск)_",
-            parse_mode="Markdown"
-        )
+    """Start audit wizard by requesting GitHub Token or allowing skip for public repos."""
+    await state.clear()
+    await state.set_state(AuditStates.waiting_for_token)
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🌐 Пропустить ввод токена (публичные репозитории)",
+                    callback_data="skip_token"
+                )
+            ]
+        ]
+    )
+
+    await callback.message.answer(
+        "🔑 **Шаг 1: Введите ваш GitHub Personal Access Token**\n\n"
+        "Токен необходим для проверки прав владения и автоматического создания Pull Request с исправлениями.\n"
+        "_(Токен используется только в текущей сессии и не сохраняется на диск)_\n\n"
+        "💡 *Если вы хотите просканировать публичный репозиторий в режиме Read-Only, нажмите кнопку ниже:*",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "skip_token")
+async def handle_skip_token(callback: CallbackQuery, state: FSMContext) -> None:
+    """Skip token entry and switch to Read-Only public repo scan."""
+    await state.update_data(github_token="")
+    await state.set_state(AuditStates.waiting_for_repo)
+
+    await callback.message.answer(
+        "🌐 **Режим аудита: Read-Only (без токена)**\n\n"
+        "Введите ссылку на публичный репозиторий для аудита:\n"
+        "*(Пример: `https://github.com/owner/repo` или `madiyarmoldakhmet-ai/cybersecyritybot`)*",
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
 
@@ -177,7 +196,20 @@ async def process_token_input(message: Message, state: FSMContext) -> None:
     """Save user token and ask for repository."""
     token = message.text.strip()
     if not token or len(token) < 10:
-        await message.answer("⚠️ Некорректный токен. Пожалуйста, отправьте валидный GitHub Token.")
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🌐 Пропустить ввод токена",
+                        callback_data="skip_token"
+                    )
+                ]
+            ]
+        )
+        await message.answer(
+            "⚠️ Некорректный токен. Отправьте валидный GitHub Token или нажмите кнопку ниже, чтобы продолжить без него:",
+            reply_markup=kb
+        )
         return
 
     # Delete message containing token for security
@@ -190,7 +222,7 @@ async def process_token_input(message: Message, state: FSMContext) -> None:
     await state.set_state(AuditStates.waiting_for_repo)
 
     await message.answer(
-        "✅ Токен принят!\n\n"
+        "✅ **Токен принят!**\n\n"
         "🌐 **Шаг 2: Введите ссылку на репозиторий для аудита:**\n"
         "*(Пример: `https://github.com/owner/repo` или `madiyarmoldakhmet-ai/cybersecyritybot`)*",
         parse_mode="Markdown"
@@ -213,28 +245,27 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
     raw_token = user_data.get("github_token") or settings.github_token or ""
     github_token = raw_token.strip()
 
-    if not github_token:
-        await message.answer("⚠️ GitHub Token не найден. Начните заново с /start.")
-        await state.clear()
-        return
-
     status_msg = await message.answer(
-        f"🔐 **Верификация прав доступа к `{repo_name}`...**",
+        f"🔐 **Проверка доступа к `{repo_name}`...**",
         parse_mode="Markdown"
     )
 
-    # 1. Verify ownership permissions
-    is_owner, verify_msg = await OwnershipVerifier.verify_github_access(github_token, repo_name)
-    if not is_owner:
+    # 1. Verify ownership / public accessibility
+    is_accessible, verify_msg, can_create_pr = await OwnershipVerifier.verify_github_access(
+        github_token, repo_name
+    )
+
+    if not is_accessible:
         await status_msg.edit_text(
-            f"❌ **Ошибка верификации прав владения!**\n\n{verify_msg}",
+            f"❌ **Ошибка доступа к репозиторию!**\n\n{verify_msg}",
             parse_mode="Markdown"
         )
         return
 
+    mode_info = "⚡ Режим с поддержкой Auto-PR" if can_create_pr else "👁️ Режим Read-Only (без авто-PR)"
     await status_msg.edit_text(
-        f"✅ {verify_msg}\n\n"
-        f"⏳ **Клонирование репозитория во временную защищенную песочницу...**",
+        f"✅ {verify_msg}\n_{mode_info}_\n\n"
+        f"⏳ **Клонирование репозитория во временную песочницу...**",
         parse_mode="Markdown"
     )
 
@@ -243,7 +274,11 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
     temp_dir = settings.temp_clone_dir / f"scan_{session_id}"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    clone_url = f"https://x-access-token:{github_token}@github.com/{repo_name}.git"
+    clone_url = (
+        f"https://x-access-token:{github_token}@github.com/{repo_name}.git"
+        if github_token
+        else f"https://github.com/{repo_name}.git"
+    )
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -266,7 +301,7 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
         await status_msg.edit_text(
             f"🔍 **Запуск анализа безопасности:**\n"
             f"• 🛡️ Сканирование Semgrep (SAST)\n"
-            f"• 🐍 Анализ кода Bandit (Python AST)\n"
+            f"• 🐍 Анализ кода Bandit & AST (Python)\n"
             f"• 📦 Проверка зависимостей Pip-Audit (CVEs)\n\n"
             f"⏳ *Пожалуйста, подождите...*",
             parse_mode="Markdown"
@@ -279,6 +314,7 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
         SCAN_SESSIONS[session_id] = {
             "repo_name": repo_name,
             "github_token": github_token,
+            "can_create_pr": can_create_pr,
             "temp_dir": temp_dir,
             "scan_result": scan_result,
             "remediations": {}
@@ -303,7 +339,12 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
             summary_card += "🎉 **Поздравляем!** Уязвимостей в кодовой базе не обнаружено."
             buttons = []
         else:
-            summary_card += "Выберите действие для анализа и автоматического исправления:"
+            summary_card += "Выберите действие для анализа и исправления:"
+            pr_button_text = (
+                "🤖 Сгенерировать AI-исправление и PR"
+                if can_create_pr
+                else "💡 AI-анализ уязвимостей и патч"
+            )
             buttons = [
                 [
                     InlineKeyboardButton(
@@ -313,7 +354,7 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🤖 Сгенерировать AI-исправление и PR",
+                        text=pr_button_text,
                         callback_data=f"remediate_{session_id}"
                     )
                 ],
@@ -345,6 +386,7 @@ async def handle_show_findings(callback: CallbackQuery) -> None:
         return
 
     scan_result: SASTScanResult = session["scan_result"]
+    can_create_pr = session.get("can_create_pr", False)
     findings = scan_result.findings[:10]  # Show top 10
 
     lines = [f"🔍 **Топ уязвимостей для `{session['repo_name']}`:**\n"]
@@ -359,11 +401,12 @@ async def handle_show_findings(callback: CallbackQuery) -> None:
     if len(scan_result.findings) > 10:
         lines.append(f"\n_...и еще {len(scan_result.findings) - 10} уязвимостей._")
 
+    btn_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ уязвимостей и патч"
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🤖 Сгенерировать AI-исправление и PR",
+                    text=btn_text,
                     callback_data=f"remediate_{session_id}"
                 )
             ]
@@ -376,7 +419,7 @@ async def handle_show_findings(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("remediate_"))
 async def handle_remediation_and_pr(callback: CallbackQuery) -> None:
-    """Analyze the top vulnerability with LLM and open a Pull Request."""
+    """Analyze the top vulnerability with LLM and open a Pull Request (if authorized)."""
     session_id = callback.data.replace("remediate_", "")
     session = SCAN_SESSIONS.get(session_id)
 
@@ -405,11 +448,24 @@ async def handle_remediation_and_pr(callback: CallbackQuery) -> None:
         f"💡 **AI Анализ и Решение:**\n\n"
         f"📌 **Первопричина:**\n{remediation.explanation_ru}\n\n"
         f"⚠️ **Impact:**\n{remediation.impact_analysis}\n\n"
-        f"🛠 **План исправления:**\n" + "\n".join(f"• {s}" for s in remediation.remediation_steps)
+        f"🛠 **План исправления:**\n" + "\n".join(f"• {s}" for s in remediation.remediation_steps) + "\n\n"
+        f"🔒 **Исправленный код:**\n```python\n{remediation.fixed_code[:400]}\n```"
     )
     await callback.message.answer(analysis_msg, parse_mode="Markdown")
 
-    # 2. Automatically create Pull Request on GitHub
+    # 2. Check if Auto-PR can be opened
+    can_create_pr = session.get("can_create_pr", False)
+    github_token = session.get("github_token", "")
+
+    if not can_create_pr or not github_token:
+        await callback.message.answer(
+            "ℹ️ **Режим Read-Only:** Автоматическое открытие Pull Request недоступно без GitHub токена с правами записи.\n"
+            "Вы можете вручную скопировать предложенный исправленный код выше.",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
     pr_status_msg = await callback.message.answer("🚀 **Создаем защищенную ветку и Pull Request на GitHub...**")
 
     # Relative file path inside repo
@@ -418,7 +474,7 @@ async def handle_remediation_and_pr(callback: CallbackQuery) -> None:
         clean_path = clean_path.split("/")[-1]
 
     success, msg, pr_url = await PullRequestCreator.create_remediation_pr(
-        token=session["github_token"],
+        token=github_token,
         repo_identifier=session["repo_name"],
         file_path=clean_path,
         fixed_content=remediation.fixed_code,

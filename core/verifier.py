@@ -7,6 +7,7 @@ import asyncio
 import logging
 import re
 from typing import Optional, Tuple
+import httpx
 from github import Github, GithubException, Auth
 
 logger = logging.getLogger("cybersecuritybot.verifier")
@@ -48,23 +49,74 @@ class OwnershipVerifier:
 
     @staticmethod
     async def verify_github_access(
-        token: str, repo_identifier: str
-    ) -> Tuple[bool, str]:
+        token: Optional[str], repo_identifier: str
+    ) -> Tuple[bool, str, bool]:
         """
-        Verify that the provided token has push or admin permissions on the target repository.
-        Returns: (is_authorized, status_message)
+        Verify access to the target repository.
+        Returns: (is_accessible: bool, status_message: str, can_create_pr: bool)
         """
-        clean_token = token.strip()
-        if not clean_token:
-            return False, "Предоставлен пустой GitHub Token."
-
+        clean_token = token.strip() if token else ""
         repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
         if not repo_full_name:
-            return False, f"Неверный формат репозитория: '{repo_identifier}'. Ожидается 'owner/repo' или URL."
+            return (
+                False,
+                f"Неверный формат репозитория: '{repo_identifier}'. Ожидается 'owner/repo' или URL.",
+                False,
+            )
 
-        def _sync_check() -> Tuple[bool, str]:
+        # Case 1: Token is not provided - check if repository is public
+        if not clean_token:
             try:
-                # Standard PyGithub 2.x authentication
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(
+                        f"https://api.github.com/repos/{repo_full_name}",
+                        headers={"User-Agent": "CyberSecurityBot-Verifier/1.0"}
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if not data.get("private", False):
+                            return (
+                                True,
+                                f"Публичный репозиторий `{repo_full_name}` доступен в режиме чтения (без прав на создание PR).",
+                                False,
+                            )
+                        else:
+                            return (
+                                False,
+                                f"Репозиторий `{repo_full_name}` приватный. Для доступа требуется GitHub Token.",
+                                False,
+                            )
+                    elif resp.status_code == 404:
+                        return (
+                            False,
+                            f"Репозиторий `{repo_full_name}` не найден или является приватным. Для доступа требуется GitHub Token.",
+                            False,
+                        )
+                    elif resp.status_code == 403:
+                        # API rate limit reached for anonymous, but git clone might still succeed for public repos
+                        return (
+                            True,
+                            f"Публичный репозиторий `{repo_full_name}` (лимит API GitHub исчерпан, запуск клонирования).",
+                            False,
+                        )
+                    else:
+                        return (
+                            False,
+                            f"Ошибка GitHub API при проверке публичного репозитория ({resp.status_code}).",
+                            False,
+                        )
+            except Exception as ex:
+                logger.warning(f"Error checking public repo {repo_full_name}: {ex}")
+                # Fallback: assume accessible for clone
+                return (
+                    True,
+                    f"Режим без токена: запуск проверки доступности `{repo_full_name}`.",
+                    False,
+                )
+
+        # Case 2: Token is provided - authenticate via PyGithub 2.x
+        def _sync_check() -> Tuple[bool, str, bool]:
+            try:
                 auth = Auth.Token(clean_token)
                 gh = Github(auth=auth, timeout=15)
 
@@ -74,38 +126,44 @@ class OwnershipVerifier:
                     username = user.login
                 except GithubException as auth_err:
                     if auth_err.status == 401:
-                        return False, "Неверный или просроченный GitHub Token (401 Unauthorized)."
+                        return (
+                            False,
+                            "Токен недействителен или отозван GitHub (401 Unauthorized).",
+                            False,
+                        )
                     raise auth_err
 
                 # 2. Check repository permissions
-                repo = gh.get_repo(repo_full_name)
-                perms = repo.permissions
+                try:
+                    repo = gh.get_repo(repo_full_name)
+                    perms = repo.permissions
 
-                # Check if user has push (write) or admin access
-                if perms and (perms.push or perms.admin):
-                    perm_type = "Admin" if perms.admin else "Push/Write"
-                    return (
-                        True,
-                        f"Успешная верификация! Пользователь @{username} имеет права {perm_type} на {repo.full_name}."
-                    )
-                else:
-                    return (
-                        False,
-                        f"Отказано в доступе: пользователь @{username} не имеет прав записи (push/admin) в {repo.full_name}."
-                    )
+                    # Check if user has push (write) or admin access
+                    if perms and (perms.push or perms.admin):
+                        perm_type = "Admin" if perms.admin else "Push/Write"
+                        return (
+                            True,
+                            f"Успешная верификация! Пользователь @{username} имеет права {perm_type} на {repo.full_name}.",
+                            True,
+                        )
+                    else:
+                        return (
+                            True,
+                            f"Пользователь @{username} имеет доступ к {repo.full_name} в режиме чтения (нет прав записи для создания PR).",
+                            False,
+                        )
+                except GithubException as ghe:
+                    if ghe.status == 404:
+                        return (
+                            False,
+                            f"Репозиторий '{repo_full_name}' не найден или токен не имеет к нему доступа (404 Not Found).",
+                            False,
+                        )
+                    err_msg = ghe.data.get("message", str(ghe)) if isinstance(ghe.data, dict) else str(ghe)
+                    return False, f"Ошибка GitHub API ({ghe.status}): {err_msg}", False
 
-            except GithubException as ghe:
-                if ghe.status == 404:
-                    return (
-                        False,
-                        f"Репозиторий '{repo_full_name}' не найден или токен не имеет к нему доступа (404 Not Found)."
-                    )
-                if ghe.status == 401:
-                    return False, "Неверный или просроченный GitHub Token (401 Unauthorized)."
-                err_msg = ghe.data.get("message", str(ghe)) if isinstance(ghe.data, dict) else str(ghe)
-                return False, f"Ошибка GitHub API ({ghe.status}): {err_msg}"
             except Exception as e:
-                return False, f"Не удалось выполнить проверку GitHub: {str(e)}"
+                return False, f"Не удалось выполнить проверку GitHub: {str(e)}", False
 
         return await asyncio.to_thread(_sync_check)
 
