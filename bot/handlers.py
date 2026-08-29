@@ -1,6 +1,7 @@
 """
 Telegram Bot Handlers for CyberSecurityBot (aiogram 3.x).
-Provides interactive security audit, ownership verification, AI remediation, and auto-PR workflow.
+Provides interactive security audit, strict ownership verification (Token & Commit Challenge),
+AI remediation, and auto-PR workflow.
 """
 
 import asyncio
@@ -39,8 +40,10 @@ SCAN_SESSIONS: Dict[str, Dict] = {}
 
 
 class AuditStates(StatesGroup):
+    waiting_for_auth_method = State()
     waiting_for_token = State()
     waiting_for_repo = State()
+    waiting_for_commit_check = State()
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -77,8 +80,8 @@ async def handle_start(message: Message, state: FSMContext) -> None:
         f"👋 **Привет, {user_name}!**\n\n"
         f"Я — **CyberSecurityBot**, твой автономный DevSecOps & AI Pentester ассистент.\n\n"
         f"🔹 **Что я умею:**\n"
-        f"1. 🔑 **Proof of Ownership** — проверка прав доступа к репозиторию перед аудитом.\n"
-        f"2. 🔍 **SAST & Dependency Scan** — поиск уязвимостей через Semgrep, Bandit, AST и Pip-Audit.\n"
+        f"1. 🔐 **Proof of Ownership** — строгая проверка авторства репозитория перед аудитом.\n"
+        f"2. 🔍 **SAST & Multi-Language Scan** — поиск уязвимостей в Flutter/Dart, JS/TS, Python, Firestore и секретах.\n"
         f"3. 🧠 **AI Remediation** — анализ ошибок локальной моделью `{settings.ollama_model}`.\n"
         f"4. 🚀 **Auto-PR** — автоматическое открытие Pull Request с готовым исправленным кодом.\n\n"
         f"Нажми кнопку ниже, чтобы начать аудит!"
@@ -93,12 +96,11 @@ async def handle_help(event: Message | CallbackQuery) -> None:
     """Display help information."""
     help_text = (
         "📖 **Справка по работе с CyberSecurityBot**\n\n"
-        "1. **Режимы аудита:**\n"
-        "   • **С GitHub токеном:** полный аудит + авто-создание Pull Request с исправленным кодом.\n"
-        "   • **Без токена (Read-Only):** аудит любых публичных репозиториев и генерация отчета.\n\n"
-        "2. **GitHub Token:**\n"
-        "   Для создания Pull Request нужен Personal Access Token с правами `repo` (чтение и запись).\n"
-        "   Создать токен: [GitHub Tokens](https://github.com/settings/tokens)\n\n"
+        "1. **Proof of Ownership (Проверка авторства):**\n"
+        "   • **GitHub Token:** мгновенная авторизация по токену, проверка прав владельца/контрибьютора и авто-создание PR.\n"
+        "   • **Commit Challenge:** подтверждение владения без передачи токена через разовый коммит с кодом.\n\n"
+        "2. **Поддерживаемые технологии:**\n"
+        "   • Flutter & Dart, JavaScript & TypeScript, Python, HTML, .env, Firestore Rules.\n\n"
         "3. **AI Движок:**\n"
         f"   По умолчанию используется локальный сервер Ollama (`{settings.ollama_base_url}`) "
         f"с моделью `{settings.ollama_model}`."
@@ -150,41 +152,62 @@ async def handle_status(event: Message | CallbackQuery) -> None:
 
 @router.callback_query(F.data == "start_audit")
 async def start_audit_flow(callback: CallbackQuery, state: FSMContext) -> None:
-    """Start audit wizard by requesting GitHub Token or allowing skip for public repos."""
+    """Start audit wizard with choice of ownership verification method."""
     await state.clear()
-    await state.set_state(AuditStates.waiting_for_token)
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🌐 Пропустить ввод токена (публичные репозитории)",
-                    callback_data="skip_token"
+                    text="🔑 GitHub Access Token (Полный доступ + Auto-PR)",
+                    callback_data="auth_method_token"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📝 Commit Challenge (Без токена через коммит)",
+                    callback_data="auth_method_commit"
                 )
             ]
         ]
     )
 
     await callback.message.answer(
-        "🔑 **Шаг 1: Введите ваш GitHub Personal Access Token**\n\n"
-        "Токен необходим для проверки прав владения и автоматического создания Pull Request с исправлениями.\n"
-        "_(Токен используется только в текущей сессии и не сохраняется на диск)_\n\n"
-        "💡 *Если вы хотите просканировать публичный репозиторий в режиме Read-Only, нажмите кнопку ниже:*",
+        "🔐 **Подтверждение авторства (Proof of Ownership)**\n\n"
+        "Для защиты чужих проектов перед запуском аудита бот должен убедиться, что вы являетесь владельцем или автором репозитория.\n\n"
+        "Выберите удобный способ подтверждения:",
         reply_markup=kb,
         parse_mode="Markdown"
     )
     await callback.answer()
 
 
-@router.callback_query(F.data == "skip_token")
-async def handle_skip_token(callback: CallbackQuery, state: FSMContext) -> None:
-    """Skip token entry and switch to Read-Only public repo scan."""
-    await state.update_data(github_token="")
-    await state.set_state(AuditStates.waiting_for_repo)
+@router.callback_query(F.data == "auth_method_token")
+async def handle_auth_token_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    """Prompt user for GitHub Token."""
+    await state.set_state(AuditStates.waiting_for_token)
+    await state.update_data(auth_mode="token")
 
     await callback.message.answer(
-        "🌐 **Режим аудита: Read-Only (без токена)**\n\n"
-        "Введите ссылку на публичный репозиторий для аудита:\n"
+        "🔑 **Шаг 1: Введите ваш GitHub Personal Access Token**\n\n"
+        "Бот проверит ваш логин и права владельца/контрибьютора на репозиторий.\n"
+        "_(Сообщение с токеном будет автоматически удалено после чтения)_\n\n"
+        "Ссылка для создания: [GitHub Settings > Tokens](https://github.com/settings/tokens)",
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "auth_method_commit")
+async def handle_auth_commit_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    """Prompt user for repository name for commit challenge."""
+    await state.set_state(AuditStates.waiting_for_repo)
+    await state.update_data(auth_mode="commit", github_token="")
+
+    await callback.message.answer(
+        "📝 **Режим Commit Challenge (без токена)**\n\n"
+        "Введите ссылку на ваш репозиторий:\n"
         "*(Пример: `https://github.com/owner/repo` или `madiyarmoldakhmet-ai/cybersecyritybot`)*",
         parse_mode="Markdown"
     )
@@ -196,20 +219,7 @@ async def process_token_input(message: Message, state: FSMContext) -> None:
     """Save user token and ask for repository."""
     token = message.text.strip()
     if not token or len(token) < 10:
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🌐 Пропустить ввод токена",
-                        callback_data="skip_token"
-                    )
-                ]
-            ]
-        )
-        await message.answer(
-            "⚠️ Некорректный токен. Отправьте валидный GitHub Token или нажмите кнопку ниже, чтобы продолжить без него:",
-            reply_markup=kb
-        )
+        await message.answer("⚠️ Некорректный токен. Отправьте валидный GitHub Token:")
         return
 
     # Delete message containing token for security
@@ -218,7 +228,7 @@ async def process_token_input(message: Message, state: FSMContext) -> None:
     except Exception:
         pass
 
-    await state.update_data(github_token=token)
+    await state.update_data(github_token=token, auth_mode="token")
     await state.set_state(AuditStates.waiting_for_repo)
 
     await message.answer(
@@ -230,8 +240,8 @@ async def process_token_input(message: Message, state: FSMContext) -> None:
 
 
 @router.message(AuditStates.waiting_for_repo)
-async def process_repo_audit(message: Message, state: FSMContext) -> None:
-    """Verify repo ownership, clone, and execute SAST security audit."""
+async def process_repo_input(message: Message, state: FSMContext) -> None:
+    """Handle repo input and execute appropriate verification flow."""
     repo_input = message.text.strip()
     repo_name = OwnershipVerifier.parse_github_repo(repo_input)
 
@@ -242,34 +252,134 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
         return
 
     user_data = await state.get_data()
-    raw_token = user_data.get("github_token") or settings.github_token or ""
-    github_token = raw_token.strip()
+    auth_mode = user_data.get("auth_mode", "token")
+    github_token = user_data.get("github_token", "")
 
+    # Flow A: Commit Challenge
+    if auth_mode == "commit":
+        challenge_code = OwnershipVerifier.generate_commit_challenge()
+        await state.update_data(repo_name=repo_name, challenge_code=challenge_code)
+        await state.set_state(AuditStates.waiting_for_commit_check)
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔍 Проверить коммит на GitHub",
+                        callback_data="verify_commit_now"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data="start_audit"
+                    )
+                ]
+            ]
+        )
+
+        instruction_msg = (
+            f"📝 **Подтверждение владения через коммит:**\n\n"
+            f"📁 **Репозиторий:** `{repo_name}`\n"
+            f"🔑 **Код подтверждения:** `{challenge_code}`\n\n"
+            f"Выполните в терминале вашего проекта команду:\n"
+            f"```bash\ngit commit --allow-empty -m \"{challenge_code}\" && git push origin main\n```\n\n"
+            f"После отправки коммита на GitHub нажмите кнопку ниже:"
+        )
+        await message.answer(instruction_msg, reply_markup=kb, parse_mode="Markdown")
+        return
+
+    # Flow B: Token Verification (Strict)
     status_msg = await message.answer(
-        f"🔐 **Проверка доступа к `{repo_name}`...**",
+        f"🔐 **Проверка прав владения для `{repo_name}`...**",
         parse_mode="Markdown"
     )
 
-    # 1. Verify ownership / public accessibility
-    is_accessible, verify_msg, can_create_pr = await OwnershipVerifier.verify_github_access(
-        github_token, repo_name
-    )
+    auth_res = await OwnershipVerifier.verify_repo_ownership_strict(github_token, repo_name)
 
-    if not is_accessible:
+    if not auth_res["verified"]:
         await status_msg.edit_text(
-            f"❌ **Ошибка доступа к репозиторию!**\n\n{verify_msg}",
+            f"{auth_res['message']}\n\n"
+            f"🚫 *Аудит чужих репозиториев без подтверждения владения строго заблокирован.*",
             parse_mode="Markdown"
         )
+        await state.clear()
         return
 
-    mode_info = "⚡ Режим с поддержкой Auto-PR" if can_create_pr else "👁️ Режим Read-Only (без авто-PR)"
+    # Authorized successfully
     await status_msg.edit_text(
-        f"✅ {verify_msg}\n_{mode_info}_\n\n"
+        f"✅ {auth_res['message']}\n\n"
         f"⏳ **Клонирование репозитория во временную песочницу...**",
         parse_mode="Markdown"
     )
 
-    # 2. Clone repository to temp sandbox
+    await run_sast_audit_pipeline(
+        status_msg=status_msg,
+        repo_name=repo_name,
+        github_token=github_token,
+        can_create_pr=auth_res["can_create_pr"]
+    )
+
+
+@router.callback_query(F.data == "verify_commit_now")
+async def handle_verify_commit_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """Verify presence of commit challenge on GitHub."""
+    user_data = await state.get_data()
+    repo_name = user_data.get("repo_name")
+    challenge_code = user_data.get("challenge_code")
+
+    if not repo_name or not challenge_code:
+        await callback.answer("Сессия проверки устарела. Начните заново.", show_alert=True)
+        return
+
+    status_msg = await callback.message.answer(
+        f"🔍 **Проверяем последние коммиты в `{repo_name}`...**",
+        parse_mode="Markdown"
+    )
+
+    verified, msg = await OwnershipVerifier.verify_commit_challenge(repo_name, challenge_code)
+
+    if not verified:
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Повторить проверку коммита",
+                        callback_data="verify_commit_now"
+                    )
+                ]
+            ]
+        )
+        await status_msg.edit_text(
+            f"❌ {msg}",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    await status_msg.edit_text(
+        f"✅ {msg}\n\n"
+        f"⏳ **Клонирование репозитория во временную песочницу...**",
+        parse_mode="Markdown"
+    )
+
+    await run_sast_audit_pipeline(
+        status_msg=status_msg,
+        repo_name=repo_name,
+        github_token="",
+        can_create_pr=False
+    )
+    await callback.answer()
+
+
+async def run_sast_audit_pipeline(
+    status_msg: Message,
+    repo_name: str,
+    github_token: str,
+    can_create_pr: bool
+) -> None:
+    """Clone verified repo, run multi-language SAST audit, and render rich results."""
     session_id = str(uuid.uuid4())[:8]
     temp_dir = settings.temp_clone_dir / f"scan_{session_id}"
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -297,11 +407,13 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
             shutil.rmtree(temp_dir, ignore_errors=True)
             return
 
-        # 3. Run SAST Scanners
+        # Run SAST Scanners
         await status_msg.edit_text(
-            f"🔍 **Запуск анализа безопасности:**\n"
-            f"• 🛡️ Сканирование Semgrep (SAST)\n"
-            f"• 🐍 Анализ кода Bandit & AST (Python)\n"
+            f"🔍 **Запуск мультиязычного аудита безопасности:**\n"
+            f"• 📱 Flutter / Dart (SSL bypass, URLs, storage)\n"
+            f"• 🌐 JavaScript / TypeScript / DOM XSS\n"
+            f"• 🐍 Python AST & Bandit (SQLi, eval, subprocess)\n"
+            f"• 🔑 Поиск секретов (Firebase, Telegram, Private Keys)\n"
             f"• 📦 Проверка зависимостей Pip-Audit (CVEs)\n\n"
             f"⏳ *Пожалуйста, подождите...*",
             parse_mode="Markdown"
@@ -310,7 +422,6 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
         scanner = SASTScanner()
         scan_result: SASTScanResult = await scanner.scan(temp_dir)
 
-        # Save scan session
         SCAN_SESSIONS[session_id] = {
             "repo_name": repo_name,
             "github_token": github_token,
@@ -320,42 +431,41 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
             "remediations": {}
         }
 
-        # Build response card
+        # Build Summary Card
         crit_count = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)
         high_count = scan_result.findings_by_severity.get(Severity.HIGH, 0)
         med_count = scan_result.findings_by_severity.get(Severity.MEDIUM, 0)
         low_count = scan_result.findings_by_severity.get(Severity.LOW, 0)
 
-        summary_card = (
-            f"📊 **Результаты аудита безопасности `{repo_name}`**\n\n"
-            f"⏱ Время сканирования: `{scan_result.duration_seconds} сек`\n"
-            f"🚨 Всего обнаружено уязвимостей: **`{scan_result.total_findings}`**\n\n"
-            f"🔴 **Critical / High:** `{crit_count + high_count}`\n"
-            f"🟡 **Medium:** `{med_count}`\n"
-            f"🔵 **Low / Info:** `{low_count}`\n\n"
+        status_emoji = "🔴" if (crit_count + high_count > 0) else ("🟡" if med_count > 0 else "🟢")
+
+        summary_text = (
+            f"{status_emoji} **Аудит безопасности `{repo_name}` завершен!**\n\n"
+            f"⏱ **Время сканирования:** `{scan_result.duration_seconds} сек`\n"
+            f"🔎 **Всего найдено уязвимостей:** `{scan_result.total_findings}`\n\n"
+            f"📊 **Распределение по критичности:**\n"
+            f"• 🔴 Critical: `{crit_count}`\n"
+            f"• 🟠 High: `{high_count}`\n"
+            f"• 🟡 Medium: `{med_count}`\n"
+            f"• 🔵 Low/Info: `{low_count}`\n\n"
         )
 
-        if scan_result.total_findings == 0:
-            summary_card += "🎉 **Поздравляем!** Уязвимостей в кодовой базе не обнаружено."
-            buttons = []
-        else:
-            summary_card += "Выберите действие для анализа и исправления:"
-            pr_button_text = (
-                "🤖 Сгенерировать AI-исправление и PR"
-                if can_create_pr
-                else "💡 AI-анализ уязвимостей и патч"
+        if scan_result.total_findings > 0:
+            top_f = scan_result.findings[0]
+            summary_text += (
+                f"🚨 **Главная угроза:** `{top_f.title}`\n"
+                f"📁 Файл: `{top_f.file_path}` (стр. {top_f.line_start or 1})\n\n"
+                f"Нажмите кнопку ниже для просмотра деталей и генерации AI-исправления:"
             )
-            buttons = [
+        else:
+            summary_text += "🎉 **Уязвимостей не обнаружено! Репозиторий чист.**"
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"📋 Список уязвимостей ({scan_result.total_findings})",
+                        text="📋 Показать список уязвимостей",
                         callback_data=f"show_findings_{session_id}"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=pr_button_text,
-                        callback_data=f"remediate_{session_id}"
                     )
                 ],
                 [
@@ -365,13 +475,22 @@ async def process_repo_audit(message: Message, state: FSMContext) -> None:
                     )
                 ]
             ]
+        ) if scan_result.total_findings > 0 else InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📄 Скачать отчет (Markdown)",
+                        callback_data=f"download_report_{session_id}"
+                    )
+                ]
+            ]
+        )
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await status_msg.edit_text(summary_card, reply_markup=keyboard, parse_mode="Markdown")
+        await status_msg.edit_text(summary_text, reply_markup=kb, parse_mode="Markdown")
 
-    except Exception as e:
-        logger.exception(f"Error during scan: {e}")
-        await status_msg.edit_text(f"❌ Ошибка в процессе аудита: {str(e)}")
+    except Exception as ex:
+        logger.exception(f"Audit pipeline error: {ex}")
+        await status_msg.edit_text(f"❌ Ошибка во время аудита: `{str(ex)}`")
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -522,31 +641,46 @@ async def handle_download_report(callback: CallbackQuery) -> None:
     session = SCAN_SESSIONS.get(session_id)
 
     if not session:
-        await callback.answer("Сессия устарела.", show_alert=True)
+        await callback.answer("⚠️ Сессия аудита не найдена.", show_alert=True)
         return
 
     scan_result: SASTScanResult = session["scan_result"]
     repo_name = session["repo_name"]
 
-    # Generate Markdown content
-    md_content = f"# Security Audit Report for {repo_name}\n\n"
-    md_content += f"- **Generated by:** CyberSecurityBot DevSecOps Engine\n"
-    md_content += f"- **Total Findings:** {scan_result.total_findings}\n"
-    md_content += f"- **Duration:** {scan_result.duration_seconds}s\n\n"
-    md_content += "## Findings Summary\n\n"
+    report_lines = [
+        f"# 🛡️ Отчет по безопасности: {repo_name}",
+        f"**Дата аудита:** {scan_result.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"**Всего уязвимостей:** {scan_result.total_findings}",
+        f"**Длительность сканирования:** {scan_result.duration_seconds} сек\n",
+        "## 📊 Сводка по критичности:",
+        f"- 🔴 Critical: {scan_result.findings_by_severity.get(Severity.CRITICAL, 0)}",
+        f"- 🟠 High: {scan_result.findings_by_severity.get(Severity.HIGH, 0)}",
+        f"- 🟡 Medium: {scan_result.findings_by_severity.get(Severity.MEDIUM, 0)}",
+        f"- 🔵 Low: {scan_result.findings_by_severity.get(Severity.LOW, 0)}\n",
+        "## 🔍 Обнаруженные уязвимости:\n",
+    ]
 
     for idx, f in enumerate(scan_result.findings, 1):
-        md_content += f"### {idx}. [{f.severity.value}] {f.title}\n"
-        md_content += f"- **Scanner:** {f.scanner.value}\n"
-        md_content += f"- **File:** `{f.file_path}` (lines: {f.line_start}-{f.line_end})\n"
-        md_content += f"- **CWE:** {', '.join(f.cwe) if f.cwe else 'N/A'}\n"
-        md_content += f"- **Description:** {f.description}\n"
-        if f.code_snippet:
-            md_content += f"\n```\n{f.code_snippet}\n```\n"
-        md_content += "\n---\n"
+        report_lines.extend([
+            f"### {idx}. [{f.severity.value}] {f.title}",
+            f"- **ID:** `{f.id}`",
+            f"- **Сканер:** `{f.scanner.value}`",
+            f"- **Файл:** `{f.file_path}` (стр. {f.line_start}-{f.line_end})",
+            f"- **CWE:** {', '.join(f.cwe) if f.cwe else 'N/A'}",
+            f"- **Описание:** {f.description}",
+            f"- **Рекомендация:** {f.recommendation or 'N/A'}\n",
+            "```python",
+            f"{f.code_snippet or '# No snippet'}",
+            "```\n",
+        ])
 
-    file_bytes = md_content.encode("utf-8")
-    doc = BufferedInputFile(file_bytes, filename=f"audit_report_{session_id}.md")
+    report_content = "\n".join(report_lines)
+    file_bytes = report_content.encode("utf-8")
+    doc = BufferedInputFile(file_bytes, filename=f"security_report_{repo_name.replace('/', '_')}.md")
 
-    await callback.message.answer_document(doc, caption=f"📄 Полный отчет аудита для `{repo_name}`")
+    await callback.message.answer_document(
+        document=doc,
+        caption=f"📄 **Полный отчет по безопасности для `{repo_name}`**",
+        parse_mode="Markdown"
+    )
     await callback.answer()

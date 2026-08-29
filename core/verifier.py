@@ -1,12 +1,14 @@
 """
 Proof of Ownership & Access Verification Module.
 Ensures security audits and remediations are only performed on authorized repositories and assets.
+Supports strict token-based ownership checks and zero-token commit challenge verification.
 """
 
 import asyncio
 import logging
 import re
-from typing import Optional, Tuple
+import uuid
+from typing import Any, Dict, Optional, Tuple
 import httpx
 from github import Github, GithubException, Auth
 
@@ -29,7 +31,6 @@ class OwnershipVerifier:
         if not input_clean:
             return None
 
-        # Regex for HTTPS and SSH GitHub links
         https_pattern = r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/\s.]+)(?:\.git)?"
         ssh_pattern = r"git@github\.com:([^/]+)/([^/\s.]+)(?:\.git)?"
 
@@ -40,7 +41,6 @@ class OwnershipVerifier:
         if match:
             return f"{match.group(1)}/{match.group(2)}"
 
-        # If already formatted as 'owner/repo'
         parts = [p for p in input_clean.split("/") if p]
         if len(parts) == 2 and not input_clean.startswith("http"):
             return f"{parts[0]}/{parts[1]}"
@@ -48,124 +48,227 @@ class OwnershipVerifier:
         return None
 
     @staticmethod
-    async def verify_github_access(
-        token: Optional[str], repo_identifier: str
-    ) -> Tuple[bool, str, bool]:
+    def generate_commit_challenge() -> str:
+        """Generate a unique random verification token for commit-based proof of ownership."""
+        unique_id = uuid.uuid4().hex[:10]
+        return f"cybersec-verify-{unique_id}"
+
+    @staticmethod
+    async def verify_commit_challenge(
+        repo_identifier: str, challenge_code: str
+    ) -> Tuple[bool, str]:
         """
-        Verify access to the target repository.
-        Returns: (is_accessible: bool, status_message: str, can_create_pr: bool)
+        Verify repository ownership by checking if the challenge code exists in the latest commits.
+        Uses public GitHub Commits API.
+        """
+        repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
+        if not repo_full_name:
+            return False, f"Неверный формат репозитория: '{repo_identifier}'."
+
+        url = f"https://api.github.com/repos/{repo_full_name}/commits?per_page=5"
+        headers = {
+            "User-Agent": "CyberSecurityBot-Verifier/1.0",
+            "Accept": "application/vnd.github.v3+json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    commits = resp.json()
+                    for commit in commits:
+                        commit_msg = commit.get("commit", {}).get("message", "")
+                        if challenge_code in commit_msg:
+                            author = commit.get("commit", {}).get("author", {}).get("name", "Unknown")
+                            sha = commit.get("sha", "")[:7]
+                            return (
+                                True,
+                                f"Код подтверждения найден в коммите `{sha}` от {author}! Авторство репозитория {repo_full_name} подтверждено.",
+                            )
+                    return (
+                        False,
+                        f"Код '{challenge_code}' не найден в последних 5 коммитах репозитория {repo_full_name}. Убедитесь, что вы выполнили `git push`.",
+                    )
+                elif resp.status_code == 404:
+                    return False, f"Репозиторий '{repo_full_name}' не найден на GitHub."
+                elif resp.status_code == 403:
+                    return False, "Превышен лимит запросов GitHub API. Попробуйте подтверждение через токен."
+                else:
+                    return False, f"GitHub API вернул статус {resp.status_code} при проверке коммитов."
+        except Exception as e:
+            logger.warning(f"Error checking commit challenge for {repo_full_name}: {e}")
+            return False, f"Сетевая ошибка при проверке коммитов: {str(e)}"
+
+    @staticmethod
+    async def verify_repo_ownership_strict(
+        token: str, repo_identifier: str
+    ) -> Dict[str, Any]:
+        """
+        Strictly verify repository ownership and author permissions using GitHub Token.
+        Returns:
+            {
+                "verified": bool,
+                "username": str,
+                "repo_owner": str,
+                "role": str, # "Owner" | "Admin" | "Contributor" | "None"
+                "message": str,
+                "can_create_pr": bool
+            }
         """
         clean_token = token.strip() if token else ""
         repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
-        if not repo_full_name:
-            return (
-                False,
-                f"Неверный формат репозитория: '{repo_identifier}'. Ожидается 'owner/repo' или URL.",
-                False,
-            )
 
-        # Case 1: Token is not provided - check if repository is public
         if not clean_token:
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(
-                        f"https://api.github.com/repos/{repo_full_name}",
-                        headers={"User-Agent": "CyberSecurityBot-Verifier/1.0"}
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if not data.get("private", False):
-                            return (
-                                True,
-                                f"Публичный репозиторий `{repo_full_name}` доступен в режиме чтения (без прав на создание PR).",
-                                False,
-                            )
-                        else:
-                            return (
-                                False,
-                                f"Репозиторий `{repo_full_name}` приватный. Для доступа требуется GitHub Token.",
-                                False,
-                            )
-                    elif resp.status_code == 404:
-                        return (
-                            False,
-                            f"Репозиторий `{repo_full_name}` не найден или является приватным. Для доступа требуется GitHub Token.",
-                            False,
-                        )
-                    elif resp.status_code == 403:
-                        # API rate limit reached for anonymous, but git clone might still succeed for public repos
-                        return (
-                            True,
-                            f"Публичный репозиторий `{repo_full_name}` (лимит API GitHub исчерпан, запуск клонирования).",
-                            False,
-                        )
-                    else:
-                        return (
-                            False,
-                            f"Ошибка GitHub API при проверке публичного репозитория ({resp.status_code}).",
-                            False,
-                        )
-            except Exception as ex:
-                logger.warning(f"Error checking public repo {repo_full_name}: {ex}")
-                # Fallback: assume accessible for clone
-                return (
-                    True,
-                    f"Режим без токена: запуск проверки доступности `{repo_full_name}`.",
-                    False,
-                )
+            return {
+                "verified": False,
+                "username": "",
+                "repo_owner": "",
+                "role": "None",
+                "message": "GitHub Personal Access Token не предоставлен для проверки авторства.",
+                "can_create_pr": False,
+            }
 
-        # Case 2: Token is provided - authenticate via PyGithub 2.x
-        def _sync_check() -> Tuple[bool, str, bool]:
+        if not repo_full_name:
+            return {
+                "verified": False,
+                "username": "",
+                "repo_owner": "",
+                "role": "None",
+                "message": f"Неверный формат репозитория: '{repo_identifier}'. Ожидается 'owner/repo'.",
+                "can_create_pr": False,
+            }
+
+        def _sync_check() -> Dict[str, Any]:
             try:
                 auth = Auth.Token(clean_token)
                 gh = Github(auth=auth, timeout=15)
 
-                # 1. Verify token validity and authenticate user
+                # 1. Get authenticated user
                 try:
-                    user = gh.get_user()
-                    username = user.login
+                    current_user = gh.get_user().login
                 except GithubException as auth_err:
                     if auth_err.status == 401:
-                        return (
-                            False,
-                            "Токен недействителен или отозван GitHub (401 Unauthorized).",
-                            False,
-                        )
+                        return {
+                            "verified": False,
+                            "username": "",
+                            "repo_owner": "",
+                            "role": "None",
+                            "message": "Токен недействителен или отозван GitHub (401 Unauthorized).",
+                            "can_create_pr": False,
+                        }
                     raise auth_err
 
-                # 2. Check repository permissions
+                # 2. Get repository details and permissions
                 try:
                     repo = gh.get_repo(repo_full_name)
+                    repo_owner = repo.owner.login
                     perms = repo.permissions
+                except GithubException as ghe:
+                    if ghe.status == 404:
+                        return {
+                            "verified": False,
+                            "username": current_user,
+                            "repo_owner": "",
+                            "role": "None",
+                            "message": f"Репозиторий '{repo_full_name}' не найден или у вас нет к нему доступа.",
+                            "can_create_pr": False,
+                        }
+                    err_msg = ghe.data.get("message", str(ghe)) if isinstance(ghe.data, dict) else str(ghe)
+                    return {
+                        "verified": False,
+                        "username": current_user,
+                        "repo_owner": "",
+                        "role": "None",
+                        "message": f"Ошибка GitHub API ({ghe.status}): {err_msg}",
+                        "can_create_pr": False,
+                    }
 
-                    # Check if user has push (write) or admin access
-                    if perms and (perms.push or perms.admin):
-                        perm_type = "Admin" if perms.admin else "Push/Write"
+                # 3. Ownership / Push / Admin check
+                is_owner = current_user.lower() == repo_owner.lower()
+                has_admin = perms and perms.admin
+                has_push = perms and perms.push
+
+                if is_owner:
+                    role = "Owner"
+                elif has_admin:
+                    role = "Admin"
+                elif has_push:
+                    role = "Contributor"
+                else:
+                    role = "None"
+
+                if is_owner or has_admin or has_push:
+                    return {
+                        "verified": True,
+                        "username": current_user,
+                        "repo_owner": repo_owner,
+                        "role": role,
+                        "message": f"Вы авторизованы как @{current_user}. Проверяем ваши права на репозиторий {repo.full_name}... Авторизация подтверждена! (Роль: {role})",
+                        "can_create_pr": True,
+                    }
+                else:
+                    return {
+                        "verified": False,
+                        "username": current_user,
+                        "repo_owner": repo_owner,
+                        "role": "ReadOnly",
+                        "message": f"⛔ Доступ запрещен! Вы (@{current_user}) не являетесь владельцем или контрибьютором репозитория {repo_full_name}.",
+                        "can_create_pr": False,
+                    }
+
+            except Exception as ex:
+                logger.error(f"Unexpected error in strict ownership check: {ex}")
+                return {
+                    "verified": False,
+                    "username": "",
+                    "repo_owner": "",
+                    "role": "Error",
+                    "message": f"Ошибка при проверке прав репозитория: {str(ex)}",
+                    "can_create_pr": False,
+                }
+
+        return await asyncio.to_thread(_sync_check)
+
+    @staticmethod
+    async def verify_github_access(
+        token: Optional[str], repo_identifier: str
+    ) -> Tuple[bool, str, bool]:
+        """Legacy helper delegating to strict verification or public repo check."""
+        clean_token = token.strip() if token else ""
+        if clean_token:
+            res = await OwnershipVerifier.verify_repo_ownership_strict(clean_token, repo_identifier)
+            return res["verified"], res["message"], res["can_create_pr"]
+
+        repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
+        if not repo_full_name:
+            return False, f"Неверный формат репозитория: '{repo_identifier}'.", False
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"https://api.github.com/repos/{repo_full_name}",
+                    headers={"User-Agent": "CyberSecurityBot-Verifier/1.0"}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if not data.get("private", False):
                         return (
                             True,
-                            f"Успешная верификация! Пользователь @{username} имеет права {perm_type} на {repo.full_name}.",
-                            True,
+                            f"Публичный репозиторий `{repo_full_name}` доступен в режиме чтения.",
+                            False,
                         )
                     else:
                         return (
-                            True,
-                            f"Пользователь @{username} имеет доступ к {repo.full_name} в режиме чтения (нет прав записи для создания PR).",
+                            False,
+                            f"Репозиторий `{repo_full_name}` приватный. Для доступа требуется подтверждение авторства.",
                             False,
                         )
-                except GithubException as ghe:
-                    if ghe.status == 404:
-                        return (
-                            False,
-                            f"Репозиторий '{repo_full_name}' не найден или токен не имеет к нему доступа (404 Not Found).",
-                            False,
-                        )
-                    err_msg = ghe.data.get("message", str(ghe)) if isinstance(ghe.data, dict) else str(ghe)
-                    return False, f"Ошибка GitHub API ({ghe.status}): {err_msg}", False
-
-            except Exception as e:
-                return False, f"Не удалось выполнить проверку GitHub: {str(e)}", False
-
-        return await asyncio.to_thread(_sync_check)
+                elif resp.status_code == 404:
+                    return False, f"Репозиторий `{repo_full_name}` не найден на GitHub.", False
+                else:
+                    return True, f"Репозиторий `{repo_full_name}` (запуск проверки).", False
+        except Exception:
+            return True, f"Репозиторий `{repo_full_name}` (запуск проверки).", False
 
     @staticmethod
     async def verify_domain_txt_record(
