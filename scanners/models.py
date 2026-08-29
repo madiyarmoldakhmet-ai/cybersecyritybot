@@ -22,6 +22,7 @@ class ScannerType(str, Enum):
     PIP_AUDIT = "pip-audit"
     DAST = "dast"
     STRIX = "strix"
+    MOBILE = "mobile"
     CUSTOM = "custom"
 
 

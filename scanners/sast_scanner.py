@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Pattern, Tuple, Union
 
 from core.config import settings
+from scanners.mobile_scanner import MobileSecurityScanner
 from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
 
 logger = logging.getLogger("cybersecuritybot.sast_scanner")
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
@@ -361,15 +363,18 @@ class PythonASTSecurityVisitor(ast.NodeVisitor):
 
 
 class SASTScanner:
-    """Orchestrates multi-language static analysis tools and dependency vulnerability scanners."""
+    """Orchestrates multi-language static analysis tools, mobile DevSecOps rules, and dependency vulnerability scanners."""
 
     def __init__(
         self,
         semgrep_config: Optional[str] = None,
-        timeout_seconds: Optional[int] = None
+        timeout_seconds: Optional[int] = None,
+        min_secret_entropy: float = 3.6,
     ) -> None:
         self.semgrep_config = semgrep_config or settings.semgrep_config
         self.timeout_seconds = timeout_seconds or settings.scan_timeout_seconds
+        self.mobile_scanner = MobileSecurityScanner()
+        self.sanitizer = FalsePositiveSanitizer(min_secret_entropy=min_secret_entropy)
 
     async def _run_command(
         self, cmd: List[str], cwd: Optional[Path] = None
@@ -633,37 +638,35 @@ class SASTScanner:
                         )
             except Exception:
                 pass
-        return all_findings, None
+            return all_findings, None
 
     async def scan(self, target_path: Union[str, Path]) -> SASTScanResult:
-        """Run multi-language SAST scanners concurrently and aggregate results."""
+        """Run multi-language SAST, Mobile DevSecOps rules, and dependency scanners concurrently with zero-noise sanitization."""
         start_time = time.time()
         path = Path(target_path).resolve()
 
         if not path.exists():
             raise FileNotFoundError(f"Target path does not exist: {path}")
 
-        logger.info(f"Starting multi-language SAST security audit for: {path}")
+        logger.info(f"Starting multi-language SAST & Mobile security audit for: {path}")
 
-        # Run built-in multi-language analyzer and CLI tools concurrently
+        # Run built-in multi-language analyzer, mobile scanner, and CLI tools concurrently
         ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
+        mobile_task = asyncio.create_task(self.mobile_scanner.scan(path))
         semgrep_task = asyncio.create_task(self.run_semgrep(path))
         bandit_task = asyncio.create_task(self.run_bandit(path))
         pip_audit_task = asyncio.create_task(self.run_pip_audit(path))
 
-        ml_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err) = await asyncio.gather(
-            ml_task, semgrep_task, bandit_task, pip_audit_task, return_exceptions=False
+        ml_findings, mobile_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err) = await asyncio.gather(
+            ml_task, mobile_task, semgrep_task, bandit_task, pip_audit_task, return_exceptions=False
         )
 
-        # Merge findings, avoiding duplicate IDs on identical lines
-        seen_keys = set()
-        all_findings: List[VulnerabilityFinding] = []
+        raw_findings: List[VulnerabilityFinding] = (
+            mobile_findings + bandit_findings + semgrep_findings + ml_findings + (pip_findings or [])
+        )
 
-        for f in (bandit_findings + semgrep_findings + ml_findings + pip_findings):
-            key = f"{f.file_path}:{f.line_start}:{f.id}"
-            if key not in seen_keys:
-                seen_keys.add(key)
-                all_findings.append(f)
+        # Apply Zero-Noise False-Positive Sanitizer (Shannon Entropy & Test Filter)
+        clean_findings = self.sanitizer.sanitize_findings(raw_findings)
 
         errors: List[str] = []
         if semgrep_err:
@@ -674,25 +677,31 @@ class SASTScanner:
             errors.append(f"Pip-Audit: {pip_err}")
 
         severity_counts: Dict[Severity, int] = {sev: 0 for sev in Severity}
-        for f in all_findings:
+        for f in clean_findings:
             severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
 
         duration = round(time.time() - start_time, 2)
-        scanners_run = [ScannerType.CUSTOM, ScannerType.SEMGREP, ScannerType.BANDIT, ScannerType.PIP_AUDIT]
+        scanners_run = [
+            ScannerType.MOBILE,
+            ScannerType.CUSTOM,
+            ScannerType.SEMGREP,
+            ScannerType.BANDIT,
+            ScannerType.PIP_AUDIT,
+        ]
 
         result = SASTScanResult(
             target_path=str(path),
-            total_findings=len(all_findings),
+            total_findings=len(clean_findings),
             findings_by_severity=severity_counts,
-            findings=all_findings,
+            findings=clean_findings,
             duration_seconds=duration,
             scanners_run=scanners_run,
             errors=errors
         )
 
         logger.info(
-            f"Multi-language SAST audit completed in {duration}s. "
-            f"Discovered {len(all_findings)} total findings across {path.name}."
+            f"SAST & Mobile DevSecOps audit completed in {duration}s. "
+            f"Discovered {len(clean_findings)} validated findings (sanitized from {len(raw_findings)} raw candidates)."
         )
         return result
 

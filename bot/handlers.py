@@ -947,11 +947,22 @@ async def handle_view_finding_detail(callback: CallbackQuery, state: FSMContext)
     )
 
     sev_icon = "🔴" if f.severity in [Severity.CRITICAL, Severity.HIGH] else ("🟡" if f.severity == Severity.MEDIUM else "🔵")
+    scanner_names = {
+        ScannerType.MOBILE: "📱 Mobile DevSecOps (Flutter/Firebase)",
+        ScannerType.STRIX: "🤖 Strix Deep Pentest Engine (Apache-2.0)",
+        ScannerType.SEMGREP: "🛡️ Semgrep SAST",
+        ScannerType.BANDIT: "🐍 Bandit AST Linter",
+        ScannerType.PIP_AUDIT: "📦 Pip-Audit (CVEs)",
+        ScannerType.CUSTOM: "🔍 Static Security Inspector",
+        ScannerType.DAST: "🌐 DAST Web Auditor",
+    }
+    scanner_title = scanner_names.get(f.scanner, f.scanner.value)
+
     detail_text = (
         f"{sev_icon} **Уязвимость #{idx + 1}: [{f.severity.value}]**\n\n"
         f"📌 **Название:** `{f.title}`\n"
         f"📁 **Файл:** `{f.file_path}` (стр. {f.line_start or 1}-{f.line_end or 1})\n"
-        f"🔎 **Сканер:** `{f.scanner.value}`\n"
+        f"🔎 **Сканер:** `{scanner_title}`\n"
         f"📝 **Описание:** {f.description}\n"
     )
     if f.cwe:
