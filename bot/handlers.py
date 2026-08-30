@@ -1145,6 +1145,66 @@ async def handle_generate_exploit(callback: CallbackQuery, state: FSMContext) ->
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("exploit_poc_gen_"))
+async def handle_generate_poc_screenshot(callback: CallbackQuery, state: FSMContext) -> None:
+    """Generate DAST PoC screenshot for XSS vulnerabilities."""
+    parts = callback.data.split("_")
+    session_id = parts[3]
+    idx = int(parts[4])
+
+    session = SCAN_SESSIONS.get(session_id)
+    if not session:
+        await callback.answer("⚠️ Сессия аудита устарела.", show_alert=True)
+        return
+
+    scan_result: SASTScanResult = session["scan_result"]
+    if idx >= len(scan_result.findings):
+        await callback.answer("⚠️ Уязвимость не найдена.", show_alert=True)
+        return
+
+    target_finding = scan_result.findings[idx]
+    code_context = target_finding.code_snippet or ""
+
+    status_msg = await callback.message.answer(
+        f"📸 **Генерация Proof-of-Concept скриншота для:** `{target_finding.title}`...\n"
+        f"⏳ *Бот разворачивает headless-браузер и инжектит пэйлоад...*",
+        parse_mode="Markdown"
+    )
+
+    try:
+        from scanners.dast_scanner import DASTScanner
+        scanner = DASTScanner()
+        
+        # We generate a simple payload for POC
+        payload = "<img src=x onerror=window.STRIX_XSS=true>"
+        
+        success, screenshot_path = await scanner.verify_xss_poc(code_context, payload)
+        
+        if success and screenshot_path and os.path.exists(screenshot_path):
+            photo = FSInputFile(screenshot_path)
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=f"🔥 **STRIX DAST:** Уязвимость `{target_finding.title}` успешно подтверждена!\n\n"
+                        f"Бот внедрил пэйлоад `{payload}` и он выполнился в браузере.\n"
+                        f"Спорь с этим, вибкодер 😈",
+                parse_mode="Markdown"
+            )
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text(
+                f"🛡️ **DAST сканирование завершено**\n\n"
+                f"Не удалось подтвердить уязвимость автоматически. Возможно, в коде есть экранирование (CSP или санитизация), "
+                f"либо сниппет слишком сложен для автоматической мок-среды."
+            )
+    except Exception as ex:
+        logger.exception(f"DAST PoC generation failed: {ex}")
+        await status_msg.edit_text(
+            f"⚠️ Ошибка при генерации DAST PoC: `{str(ex)[:200]}`"
+        )
+
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("static_verify_"))
 async def handle_static_verification(callback: CallbackQuery, state: FSMContext) -> None:
     """Generate local static verification for code quality vulnerabilities."""
