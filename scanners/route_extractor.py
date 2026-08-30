@@ -89,6 +89,8 @@ class RouteExtractor:
                         endpoints.extend(self._scan_python_file(file_path, rel_path))
                     elif ext in {".js", ".ts", ".jsx", ".tsx"}:
                         endpoints.extend(self._scan_javascript_file(file_path, rel_path))
+                    elif file.endswith(("swagger.json", "openapi.yaml", "openapi.json")):
+                        endpoints.extend(self._scan_openapi_file(file_path, rel_path))
                 except Exception as ex:
                     logger.debug(f"Failed to extract routes from {rel_path}: {ex}")
 
