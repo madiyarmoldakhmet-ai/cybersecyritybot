@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     )
 
     # AI / LLM Engine Settings
+    use_local_llm: bool = Field(
+        default=False,
+        description="Force use of local Ollama for all AI operations"
+    )
     llm_provider: LLMProvider = Field(
         default=LLMProvider.OPENROUTER,
         description="Active LLM provider: 'ollama', 'gemini' or 'openrouter'"
