@@ -12,11 +12,11 @@ import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
-from strix.aiogram import F, Router
-from strix.aiogram.filters import Command, CommandStart
-from strix.aiogram.fsm.context import FSMContext
-from strix.aiogram.fsm.state import State, StatesGroup
-from strix.aiogram.types import (
+from aiogram import F, Router
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     FSInputFile,
