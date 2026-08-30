@@ -13,8 +13,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from strix.aiogram import Bot
-from strix.aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
 from strix.core.config import settings
