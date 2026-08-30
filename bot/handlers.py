@@ -1560,3 +1560,74 @@ async def handle_download_report(callback: CallbackQuery) -> None:
         parse_mode="Markdown"
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("download_pdf_report_"))
+async def handle_download_pdf_report(callback: CallbackQuery) -> None:
+    """Generate and send PDF vulnerability audit report including SCA."""
+    session_id = callback.data.replace("download_pdf_report_", "")
+    session = SCAN_SESSIONS.get(session_id)
+
+    if not session:
+        await callback.answer("⚠️ Сессия аудита не найдена.", show_alert=True)
+        return
+
+    scan_result: SASTScanResult = session["scan_result"]
+    repo_name = session["repo_name"]
+    temp_dir = session["temp_dir"]
+
+    status_msg = await callback.message.answer(
+        f"⏳ **Генерация Enterprise PDF-отчета для `{repo_name}`...**\n"
+        f"🔍 *Запуск SCA-сканирования (проверка зависимостей)...*",
+        parse_mode="Markdown"
+    )
+
+    try:
+        # Run SCA Scanner
+        from scanners.sca_scanner import SCAScanner
+        sca_scanner = SCAScanner()
+        sca_findings = await sca_scanner.scan(temp_dir)
+        
+        if sca_findings:
+            # Merge SCA findings into scan_result
+            scan_result.findings.extend(sca_findings)
+            scan_result.total_findings += len(sca_findings)
+            
+            for finding in sca_findings:
+                if finding.severity not in scan_result.findings_by_severity:
+                    scan_result.findings_by_severity[finding.severity] = 0
+                scan_result.findings_by_severity[finding.severity] += 1
+
+        await status_msg.edit_text(
+            f"⏳ **Генерация Enterprise PDF-отчета для `{repo_name}`...**\n"
+            f"📑 *Верстка документа...*",
+            parse_mode="Markdown"
+        )
+
+        # Generate PDF
+        from scanners.pdf_generator import PDFReportGenerator
+        
+        pdf_path = f"/tmp/strix_report_{session_id}.pdf"
+        generator = PDFReportGenerator(pdf_path)
+        
+        # We don't have DAST screenshots saved in the session natively, 
+        # but if we wanted, we could pass them here. For now, empty list.
+        success = generator.generate(scan_result, repo_name, dast_screenshots=[])
+        
+        if success and os.path.exists(pdf_path):
+            doc = FSInputFile(pdf_path, filename=f"Strix_Report_{repo_name.replace('/', '_')}.pdf")
+            await callback.message.answer_document(
+                document=doc,
+                caption=f"📄 **Финальный PDF-отчет по безопасности для `{repo_name}`**\n"
+                        f"(Включает результаты SAST и SCA)",
+                parse_mode="Markdown"
+            )
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text("❌ Ошибка при формировании PDF файла.")
+
+    except Exception as ex:
+        logger.exception(f"PDF generation failed: {ex}")
+        await status_msg.edit_text(f"❌ Ошибка генерации отчета: `{str(ex)[:200]}`", parse_mode="Markdown")
+
+    await callback.answer()
