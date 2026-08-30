@@ -829,19 +829,23 @@ class SASTScanner:
 
         logger.info(f"Starting multi-language SAST & Mobile security audit for: {path}")
 
+        from scanners.secret_scanner import SecretScanner
+        secret_scanner = SecretScanner()
+
         # Run built-in multi-language analyzer, mobile scanner, and CLI tools concurrently
         ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
         mobile_task = asyncio.create_task(self.mobile_scanner.scan(path))
         semgrep_task = asyncio.create_task(self.run_semgrep(path))
         bandit_task = asyncio.create_task(self.run_bandit(path))
         pip_audit_task = asyncio.create_task(self.run_pip_audit(path))
+        secret_task = asyncio.create_task(secret_scanner.scan(path))
 
-        ml_findings, mobile_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err) = await asyncio.gather(
-            ml_task, mobile_task, semgrep_task, bandit_task, pip_audit_task, return_exceptions=False
+        ml_findings, mobile_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err), secret_findings = await asyncio.gather(
+            ml_task, mobile_task, semgrep_task, bandit_task, pip_audit_task, secret_task, return_exceptions=False
         )
 
         raw_findings: List[VulnerabilityFinding] = (
-            mobile_findings + bandit_findings + semgrep_findings + ml_findings + (pip_findings or [])
+            mobile_findings + bandit_findings + semgrep_findings + ml_findings + (pip_findings or []) + secret_findings
         )
 
         # Apply Zero-Noise False-Positive Sanitizer (Shannon Entropy & Test Filter)
@@ -872,6 +876,7 @@ class SASTScanner:
             ScannerType.SEMGREP,
             ScannerType.BANDIT,
             ScannerType.PIP_AUDIT,
+            ScannerType.SECRET,
         ]
 
         result = SASTScanResult(
