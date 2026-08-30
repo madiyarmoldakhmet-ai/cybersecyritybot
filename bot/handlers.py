@@ -690,6 +690,12 @@ async def run_sast_audit_pipeline(
                             text="📄 Скачать отчет (Markdown)",
                             callback_data=f"download_report_{session_id}"
                         )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📄 Сгенерировать финальный PDF-отчет",
+                            callback_data=f"download_pdf_report_{session_id}"
+                        )
                     ]
                 ]
             )
@@ -701,6 +707,12 @@ async def run_sast_audit_pipeline(
                         InlineKeyboardButton(
                             text="📄 Скачать отчет (Markdown)",
                             callback_data=f"download_report_{session_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📄 Сгенерировать финальный PDF-отчет",
+                            callback_data=f"download_pdf_report_{session_id}"
                         )
                     ]
                 ]
