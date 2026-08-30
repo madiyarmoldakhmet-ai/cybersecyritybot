@@ -1045,6 +1045,12 @@ async def handle_view_finding_detail(callback: CallbackQuery, state: FSMContext)
             ],
             [
                 InlineKeyboardButton(
+                    text="🛠 Сгенерировать Auto-Fix",
+                    callback_data=f"autofix_{session_id}_{idx}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="📋 Назад к списку",
                     callback_data=f"show_findings_{session_id}"
                 )
