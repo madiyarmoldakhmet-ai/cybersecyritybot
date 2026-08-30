@@ -16,9 +16,9 @@ from typing import Any, Dict, List, Optional, Set
 
 from openai import AsyncOpenAI
 
-from core.config import settings
-from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
-from scanners.route_extractor import DiscoveredEndpoint, RouteExtractor
+from strix.core.config import settings
+from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.route_extractor import DiscoveredEndpoint, RouteExtractor
 
 logger = logging.getLogger("cybersecuritybot.strix_runner")
 

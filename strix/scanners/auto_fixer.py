@@ -3,8 +3,8 @@ import os
 from typing import Optional
 from openai import AsyncOpenAI
 
-from core.config import settings
-from scanners.models import VulnerabilityFinding
+from strix.core.config import settings
+from strix.scanners.models import VulnerabilityFinding
 
 logger = logging.getLogger("cybersecuritybot.auto_fixer")
 

@@ -11,10 +11,10 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
-from core.config import settings
-from core.queue_manager import ollama_limiter
-from scanners.models import VulnerabilityFinding
-from scanners.vuln_classifier import VulnCategory, classify_vulnerability
+from strix.core.config import settings
+from strix.core.queue_manager import ollama_limiter
+from strix.scanners.models import VulnerabilityFinding
+from strix.scanners.vuln_classifier import VulnCategory, classify_vulnerability
 
 logger = logging.getLogger("cybersecuritybot.ai_engine")
 

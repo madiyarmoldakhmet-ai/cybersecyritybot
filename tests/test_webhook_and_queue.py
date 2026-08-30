@@ -14,8 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.config import settings
-from core.queue_manager import BackgroundTaskQueue, OllamaConcurrencyLimiter, ollama_limiter, task_queue
+from strix.core.config import settings
+from strix.core.queue_manager import BackgroundTaskQueue, OllamaConcurrencyLimiter, ollama_limiter, task_queue
 from web.api import app
 from web.webhook import verify_github_signature
 

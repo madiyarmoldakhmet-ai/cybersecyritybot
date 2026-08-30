@@ -15,14 +15,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import httpx
 
-from ai.remediation_engine import RemediationEngine, RemediationResult
-from core.config import settings
-from core.pr_creator import PullRequestCreator
-from core.queue_manager import ollama_limiter, task_queue
-from core.verifier import OwnershipVerifier
-from scanners.dast_scanner import DASTScanner
-from scanners.models import DASTScanResult, SASTScanResult, VulnerabilityFinding
-from scanners.sast_scanner import SASTScanner
+from strix.ai.remediation_engine import RemediationEngine, RemediationResult
+from strix.core.config import settings
+from strix.core.pr_creator import PullRequestCreator
+from strix.core.queue_manager import ollama_limiter, task_queue
+from strix.core.verifier import OwnershipVerifier
+from strix.scanners.dast_scanner import DASTScanner
+from strix.scanners.models import DASTScanResult, SASTScanResult, VulnerabilityFinding
+from strix.scanners.sast_scanner import SASTScanner
 from web.webhook import router as webhook_router
 
 logger = logging.getLogger("cybersecuritybot.api")
@@ -189,7 +189,7 @@ async def trigger_sast_scan(req: SASTScanRequest):
             )
 
         # 1. Run Strix Deep Agentic Scanner
-        from scanners.strix_runner import StrixEngine
+        from strix.scanners.strix_runner import StrixEngine
         strix_engine = StrixEngine()
         strix_res_task = asyncio.create_task(strix_engine.scan(temp_dir))
 

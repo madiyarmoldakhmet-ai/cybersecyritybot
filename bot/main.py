@@ -6,13 +6,13 @@ Initializes aiogram Dispatcher, middlewares, and starts polling.
 import asyncio
 import logging
 import sys
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from strix.aiogram import Bot, Dispatcher
+from strix.aiogram.client.default import DefaultBotProperties
+from strix.aiogram.enums import ParseMode
+from strix.aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.handlers import router
-from core.config import settings
+from strix.core.config import settings
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),

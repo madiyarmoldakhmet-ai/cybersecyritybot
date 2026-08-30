@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 import uuid
 
-from scanners.models import ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.models import ScannerType, Severity, VulnerabilityFinding
 
 logger = logging.getLogger("cybersecuritybot.secret_scanner")
 

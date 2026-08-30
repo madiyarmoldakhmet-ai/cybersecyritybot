@@ -13,14 +13,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from strix.aiogram import Bot
+from strix.aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
-from core.config import settings
-from core.queue_manager import task_queue
-from scanners.models import SASTScanResult, Severity, VulnerabilityFinding
-from scanners.sast_scanner import SASTScanner
+from strix.core.config import settings
+from strix.core.queue_manager import task_queue
+from strix.scanners.models import SASTScanResult, Severity, VulnerabilityFinding
+from strix.scanners.sast_scanner import SASTScanner
 
 logger = logging.getLogger("cybersecuritybot.webhook")
 router = APIRouter(prefix="/api/v1", tags=["Commit Guardian Webhooks"])
@@ -136,12 +136,12 @@ async def process_guardian_audit(
         await asyncio.wait_for(proc.communicate(), timeout=45.0)
 
         # 1. Run Strix Deep Agentic Scanner
-        from scanners.strix_runner import StrixEngine
+        from strix.scanners.strix_runner import StrixEngine
         strix_engine = StrixEngine()
         strix_res_task = asyncio.create_task(strix_engine.scan(temp_dir))
 
         # 2. Run AST rule scanner
-        from scanners.sast_scanner import SASTScanner
+        from strix.scanners.sast_scanner import SASTScanner
         sast_scanner = SASTScanner()
         sast_res_task = asyncio.create_task(sast_scanner.scan(temp_dir))
 

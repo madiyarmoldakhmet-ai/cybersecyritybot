@@ -19,11 +19,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Pattern, Tuple, Union, Set
 
-from core.config import settings
-from scanners.ai_filter import AIFalsePositiveFilter
-from scanners.mobile_scanner import MobileSecurityScanner
-from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
-from scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
+from strix.core.config import settings
+from strix.scanners.ai_filter import AIFalsePositiveFilter
+from strix.scanners.mobile_scanner import MobileSecurityScanner
+from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
 
 logger = logging.getLogger("cybersecuritybot.sast_scanner")
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
@@ -829,7 +829,7 @@ class SASTScanner:
 
         logger.info(f"Starting multi-language SAST & Mobile security audit for: {path}")
 
-        from scanners.secret_scanner import SecretScanner
+        from strix.scanners.secret_scanner import SecretScanner
         secret_scanner = SecretScanner()
 
         # Run built-in multi-language analyzer, mobile scanner, and CLI tools concurrently

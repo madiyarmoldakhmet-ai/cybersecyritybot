@@ -9,7 +9,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
 
-from scanners.models import SASTScanResult, Severity, VulnerabilityFinding
+from strix.scanners.models import SASTScanResult, Severity, VulnerabilityFinding
 
 logger = logging.getLogger("cybersecuritybot.pdf_generator")
 

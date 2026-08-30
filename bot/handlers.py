@@ -12,11 +12,11 @@ import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
-from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
+from strix.aiogram import F, Router
+from strix.aiogram.filters import Command, CommandStart
+from strix.aiogram.fsm.context import FSMContext
+from strix.aiogram.fsm.state import State, StatesGroup
+from strix.aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     FSInputFile,
@@ -26,15 +26,15 @@ from aiogram.types import (
 )
 import httpx
 
-from ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult, StaticVerification
-from core.config import LLMProvider, settings
-from core.pr_creator import PullRequestCreator
-from core.verifier import OwnershipVerifier
+from strix.ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult, StaticVerification
+from strix.core.config import LLMProvider, settings
+from strix.core.pr_creator import PullRequestCreator
+from strix.core.verifier import OwnershipVerifier
 from exploit.executor import execute_payload
-from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
-from scanners.sast_scanner import SASTScanner
-from scanners.strix_runner import StrixEngine
-from scanners.vuln_classifier import VulnCategory, classify_vulnerability
+from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.sast_scanner import SASTScanner
+from strix.scanners.strix_runner import StrixEngine
+from strix.scanners.vuln_classifier import VulnCategory, classify_vulnerability
 
 logger = logging.getLogger("cybersecuritybot.bot")
 router = Router()
@@ -1190,7 +1190,7 @@ async def handle_generate_poc_screenshot(callback: CallbackQuery, state: FSMCont
     )
 
     try:
-        from scanners.dast_scanner import DASTScanner
+        from strix.scanners.dast_scanner import DASTScanner
         scanner = DASTScanner()
         
         # We generate a simple payload for POC
@@ -1551,7 +1551,7 @@ async def handle_autofix(callback: CallbackQuery, state: FSMContext) -> None:
 
     status_msg = await callback.message.answer("⏳ **LLM генерирует патч... Пожалуйста, подождите.**")
     
-    from scanners.auto_fixer import AIAutoFixer
+    from strix.scanners.auto_fixer import AIAutoFixer
     fixer = AIAutoFixer()
     
     fixed_code = await fixer.generate_fix(finding)
@@ -1653,7 +1653,7 @@ async def handle_download_pdf_report(callback: CallbackQuery) -> None:
 
     try:
         # Run SCA Scanner
-        from scanners.sca_scanner import SCAScanner
+        from strix.scanners.sca_scanner import SCAScanner
         sca_scanner = SCAScanner()
         sca_findings = await sca_scanner.scan(temp_dir)
         
@@ -1674,7 +1674,7 @@ async def handle_download_pdf_report(callback: CallbackQuery) -> None:
         )
 
         # Generate PDF
-        from scanners.pdf_generator import PDFReportGenerator
+        from strix.scanners.pdf_generator import PDFReportGenerator
         
         pdf_path = f"/tmp/strix_report_{session_id}.pdf"
         generator = PDFReportGenerator(pdf_path)

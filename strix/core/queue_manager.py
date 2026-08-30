@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Dict, Optional
 
-from core.config import settings
+from strix.core.config import settings
 
 logger = logging.getLogger("cybersecuritybot.queue_manager")
 

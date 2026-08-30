@@ -5,8 +5,8 @@ from typing import List, Optional
 
 from openai import AsyncOpenAI
 
-from core.config import settings
-from scanners.models import VulnerabilityFinding, Severity
+from strix.core.config import settings
+from strix.scanners.models import VulnerabilityFinding, Severity
 
 logger = logging.getLogger("cybersecuritybot.ai_filter")
 

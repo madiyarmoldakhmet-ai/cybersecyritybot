@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import httpx
 
-from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
 import uuid
 
 logger = logging.getLogger("cybersecuritybot.sca_scanner")

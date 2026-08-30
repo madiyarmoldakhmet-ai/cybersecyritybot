@@ -6,10 +6,10 @@ import asyncio
 from pathlib import Path
 import pytest
 
-from scanners.models import ScannerType, Severity, VulnerabilityFinding
-from scanners.route_extractor import RouteExtractor
-from scanners.vuln_classifier import VulnCategory, classify_vulnerability
-from scanners.dast_scanner import DASTScanner
+from strix.scanners.models import ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.route_extractor import RouteExtractor
+from strix.scanners.vuln_classifier import VulnCategory, classify_vulnerability
+from strix.scanners.dast_scanner import DASTScanner
 
 
 def test_route_extractor_discovery(tmp_path: Path):
