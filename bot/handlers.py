@@ -651,9 +651,16 @@ async def run_sast_audit_pipeline(
                 f"Выберите действие ниже для анализа, генерации проверочного запроса или авто-исправления:"
             )
             btn_pr_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ и патч"
-            # Adaptive button: exploit for remote vulns, verify for static
+            # Adaptive button: exploit for remote vulns, verify for static, POC for XSS
             top_vuln_category = classify_vulnerability(top_f)
-            if top_vuln_category == VulnCategory.EXPLOITABLE_REMOTE:
+            
+            verify_btn = None
+            if "xss" in top_f.title.lower() or "cross-site scripting" in top_f.title.lower() or "innerhtml" in top_f.title.lower():
+                verify_btn = InlineKeyboardButton(
+                    text="📸 Сгенерировать скриншот взлома (PoC)",
+                    callback_data=f"exploit_poc_gen_{session_id}_0"
+                )
+            elif top_vuln_category == VulnCategory.EXPLOITABLE_REMOTE:
                 verify_btn = InlineKeyboardButton(
                     text="🧪 Сгенерировать проверочный запрос",
                     callback_data=f"exploit_gen_{session_id}_0"
