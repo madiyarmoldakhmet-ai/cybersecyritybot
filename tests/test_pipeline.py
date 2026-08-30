@@ -21,10 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI, Response
 import httpx
 
-from ai.remediation_engine import RemediationEngine
-from scanners.dast_scanner import DASTScanner
-from scanners.models import DASTScanResult, SASTScanResult
-from scanners.sast_scanner import SASTScanner
+from strix.ai.remediation_engine import RemediationEngine
+from strix.scanners.dast_scanner import DASTScanner
+from strix.scanners.models import DASTScanResult, SASTScanResult
+from strix.scanners.sast_scanner import SASTScanner
 from web.api import app as fastapi_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")

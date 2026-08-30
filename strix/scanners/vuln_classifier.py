@@ -7,7 +7,7 @@ or requires static/local code verification only.
 from enum import Enum
 from typing import Set
 
-from scanners.models import ScannerType, VulnerabilityFinding
+from strix.scanners.models import ScannerType, VulnerabilityFinding
 
 
 class VulnCategory(str, Enum):

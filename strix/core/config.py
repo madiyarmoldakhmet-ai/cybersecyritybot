@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class LLMProvider(str, Enum):
     OLLAMA = "ollama"
     GEMINI = "gemini"
+    OPENROUTER = "openrouter"
 
 
 class Settings(BaseSettings):
@@ -68,9 +69,13 @@ class Settings(BaseSettings):
     )
 
     # AI / LLM Engine Settings
+    use_local_llm: bool = Field(
+        default=False,
+        description="Force use of local Ollama for all AI operations"
+    )
     llm_provider: LLMProvider = Field(
-        default=LLMProvider.GEMINI,
-        description="Active LLM provider: 'ollama' or 'gemini'"
+        default=LLMProvider.OPENROUTER,
+        description="Active LLM provider: 'ollama', 'gemini' or 'openrouter'"
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434",
@@ -87,6 +92,14 @@ class Settings(BaseSettings):
     gemini_model: str = Field(
         default="gemini-2.5-flash",
         description="Gemini model identifier"
+    )
+    openrouter_api_key: Optional[str] = Field(
+        default=None,
+        description="OpenRouter API key for Claude 3.5/GPT-4o cloud inference"
+    )
+    openrouter_model: str = Field(
+        default="anthropic/claude-sonnet-5",
+        description="OpenRouter model identifier"
     )
 
     # Strix Deep Agentic Pentest Engine Settings (Apache-2.0)

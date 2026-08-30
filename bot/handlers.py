@@ -26,15 +26,15 @@ from aiogram.types import (
 )
 import httpx
 
-from ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult, StaticVerification
-from core.config import LLMProvider, settings
-from core.pr_creator import PullRequestCreator
-from core.verifier import OwnershipVerifier
+from strix.ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult, StaticVerification
+from strix.core.config import LLMProvider, settings
+from strix.core.pr_creator import PullRequestCreator
+from strix.core.verifier import OwnershipVerifier
 from exploit.executor import execute_payload
-from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
-from scanners.sast_scanner import SASTScanner
-from scanners.strix_runner import StrixEngine
-from scanners.vuln_classifier import VulnCategory, classify_vulnerability
+from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.sast_scanner import SASTScanner
+from strix.scanners.strix_runner import StrixEngine
+from strix.scanners.vuln_classifier import VulnCategory, classify_vulnerability
 
 logger = logging.getLogger("cybersecuritybot.bot")
 router = Router()
@@ -67,7 +67,7 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
                     callback_data="show_promo"
                 ),
                 InlineKeyboardButton(
-                    text="⚡ Статус AI (Ollama)",
+                    text="⚡ Статус AI (Cloud)",
                     callback_data="check_ai_status"
                 ),
             ],
@@ -185,8 +185,8 @@ async def handle_help(event: Message | CallbackQuery) -> None:
         "2. **Поддерживаемые технологии:**\n"
         "   • Flutter & Dart, JavaScript & TypeScript, Python, HTML, .env, Firestore Rules.\n\n"
         "3. **AI Движок:**\n"
-        f"   По умолчанию используется локальный сервер Ollama (`{settings.ollama_base_url}`) "
-        f"с моделью `{settings.ollama_model}`."
+        f"   Текущий провайдер: `{settings.llm_provider.value}`.\n"
+        f"   Для настройки измените переменные в `.env`."
     )
 
     if isinstance(event, CallbackQuery):
@@ -216,8 +216,13 @@ async def handle_status(event: Message | CallbackQuery) -> None:
         ollama_ok = False
 
     is_gemini_active = settings.llm_provider == "gemini" and settings.gemini_api_key
+    is_openrouter_active = settings.llm_provider == "openrouter" and settings.openrouter_api_key
     
-    if is_gemini_active:
+    if is_openrouter_active:
+        ai_status = "🟢 Online (OpenRouter Cloud)"
+        active_engine = "☁️ OpenRouter API"
+        active_model = settings.openrouter_model
+    elif is_gemini_active:
         ai_status = "🟢 Online (Google Cloud)"
         active_engine = "☁️ Google Gemini"
         active_model = settings.gemini_model
@@ -646,9 +651,16 @@ async def run_sast_audit_pipeline(
                 f"Выберите действие ниже для анализа, генерации проверочного запроса или авто-исправления:"
             )
             btn_pr_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ и патч"
-            # Adaptive button: exploit for remote vulns, verify for static
+            # Adaptive button: exploit for remote vulns, verify for static, POC for XSS
             top_vuln_category = classify_vulnerability(top_f)
-            if top_vuln_category == VulnCategory.EXPLOITABLE_REMOTE:
+            
+            verify_btn = None
+            if "xss" in top_f.title.lower() or "cross-site scripting" in top_f.title.lower() or "innerhtml" in top_f.title.lower():
+                verify_btn = InlineKeyboardButton(
+                    text="📸 Сгенерировать скриншот взлома (PoC)",
+                    callback_data=f"exploit_poc_gen_{session_id}_0"
+                )
+            elif top_vuln_category == VulnCategory.EXPLOITABLE_REMOTE:
                 verify_btn = InlineKeyboardButton(
                     text="🧪 Сгенерировать проверочный запрос",
                     callback_data=f"exploit_gen_{session_id}_0"
@@ -678,6 +690,12 @@ async def run_sast_audit_pipeline(
                             text="📄 Скачать отчет (Markdown)",
                             callback_data=f"download_report_{session_id}"
                         )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📄 Сгенерировать финальный PDF-отчет",
+                            callback_data=f"download_pdf_report_{session_id}"
+                        )
                     ]
                 ]
             )
@@ -689,6 +707,12 @@ async def run_sast_audit_pipeline(
                         InlineKeyboardButton(
                             text="📄 Скачать отчет (Markdown)",
                             callback_data=f"download_report_{session_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📄 Сгенерировать финальный PDF-отчет",
+                            callback_data=f"download_pdf_report_{session_id}"
                         )
                     ]
                 ]
@@ -1021,6 +1045,12 @@ async def handle_view_finding_detail(callback: CallbackQuery, state: FSMContext)
             ],
             [
                 InlineKeyboardButton(
+                    text="🛠 Сгенерировать Auto-Fix",
+                    callback_data=f"autofix_{session_id}_{idx}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="📋 Назад к списку",
                     callback_data=f"show_findings_{session_id}"
                 )
@@ -1128,6 +1158,66 @@ async def handle_generate_exploit(callback: CallbackQuery, state: FSMContext) ->
             f"⚠️ Ошибка при генерации проверочного запроса: `{str(ex)[:200]}`\n\n"
             f"💡 Попробуйте использовать AI-исправление вместо проверочного запроса.",
             parse_mode="Markdown"
+        )
+
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exploit_poc_gen_"))
+async def handle_generate_poc_screenshot(callback: CallbackQuery, state: FSMContext) -> None:
+    """Generate DAST PoC screenshot for XSS vulnerabilities."""
+    parts = callback.data.split("_")
+    session_id = parts[3]
+    idx = int(parts[4])
+
+    session = SCAN_SESSIONS.get(session_id)
+    if not session:
+        await callback.answer("⚠️ Сессия аудита устарела.", show_alert=True)
+        return
+
+    scan_result: SASTScanResult = session["scan_result"]
+    if idx >= len(scan_result.findings):
+        await callback.answer("⚠️ Уязвимость не найдена.", show_alert=True)
+        return
+
+    target_finding = scan_result.findings[idx]
+    code_context = target_finding.code_snippet or ""
+
+    status_msg = await callback.message.answer(
+        f"📸 **Генерация Proof-of-Concept скриншота для:** `{target_finding.title}`...\n"
+        f"⏳ *Бот разворачивает headless-браузер и инжектит пэйлоад...*",
+        parse_mode="Markdown"
+    )
+
+    try:
+        from strix.scanners.dast_scanner import DASTScanner
+        scanner = DASTScanner()
+        
+        # We generate a simple payload for POC
+        payload = "<img src=x onerror=window.STRIX_XSS=true>"
+        
+        success, screenshot_path = await scanner.verify_xss_poc(code_context, payload)
+        
+        if success and screenshot_path and os.path.exists(screenshot_path):
+            photo = FSInputFile(screenshot_path)
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=f"🔥 **STRIX DAST:** Уязвимость `{target_finding.title}` успешно подтверждена!\n\n"
+                        f"Бот внедрил пэйлоад `{payload}` и он выполнился в браузере.\n"
+                        f"Спорь с этим, вибкодер 😈",
+                parse_mode="Markdown"
+            )
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text(
+                f"🛡️ **DAST сканирование завершено**\n\n"
+                f"Не удалось подтвердить уязвимость автоматически. Возможно, в коде есть экранирование (CSP или санитизация), "
+                f"либо сниппет слишком сложен для автоматической мок-среды."
+            )
+    except Exception as ex:
+        logger.exception(f"DAST PoC generation failed: {ex}")
+        await status_msg.edit_text(
+            f"⚠️ Ошибка при генерации DAST PoC: `{str(ex)[:200]}`"
         )
 
     await callback.answer()
@@ -1426,6 +1516,69 @@ async def handle_remediation_and_pr(callback: CallbackQuery, state: FSMContext) 
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("autofix_"))
+async def handle_autofix(callback: CallbackQuery, state: FSMContext) -> None:
+    """Generate Auto-Fix diff for a vulnerability using AIAutoFixer."""
+    parts = callback.data.split("_")
+    if len(parts) < 3:
+        await callback.answer("⚠️ Ошибка: неверный формат callback data.", show_alert=True)
+        return
+
+    session_id = parts[1]
+    idx_str = parts[2]
+    
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await callback.answer("⚠️ Ошибка: неверный индекс.", show_alert=True)
+        return
+
+    session = SCAN_SESSIONS.get(session_id)
+    if not session:
+        await callback.answer("⚠️ Сессия аудита устарела.", show_alert=True)
+        return
+
+    scan_result: SASTScanResult = session["scan_result"]
+    if idx >= len(scan_result.findings):
+        await callback.answer("⚠️ Уязвимость не найдена.", show_alert=True)
+        return
+
+    finding = scan_result.findings[idx]
+    
+    if not finding.code_snippet:
+        await callback.answer("⚠️ Для этой уязвимости нет фрагмента кода для исправления.", show_alert=True)
+        return
+
+    status_msg = await callback.message.answer("⏳ **LLM генерирует патч... Пожалуйста, подождите.**")
+    
+    from strix.scanners.auto_fixer import AIAutoFixer
+    fixer = AIAutoFixer()
+    
+    fixed_code = await fixer.generate_fix(finding)
+    
+    if not fixed_code:
+        await status_msg.edit_text("❌ Ошибка при генерации патча. Проверьте настройки API ключей.")
+        await callback.answer()
+        return
+        
+    diff_msg = (
+        f"🛠 **Auto-Fix для:** `{finding.title}`\n\n"
+        f"🔴 **Было (Уязвимо):**\n"
+        f"```\n{finding.code_snippet}\n```\n\n"
+        f"🟢 **Стало (Безопасно):**\n"
+        f"```\n{fixed_code}\n```\n\n"
+        f"_Внесите эти изменения в файл:_ `{finding.file_path}`"
+    )
+    
+    try:
+        await status_msg.edit_text(diff_msg, parse_mode="Markdown")
+    except Exception as e:
+        # Fallback if markdown parsing fails due to unmatched backticks or similar in code
+        await status_msg.edit_text(diff_msg.replace("`", "'"), parse_mode="HTML")
+        
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("download_report_"))
 async def handle_download_report(callback: CallbackQuery) -> None:
     """Generate and send Markdown vulnerability audit report."""
@@ -1475,4 +1628,75 @@ async def handle_download_report(callback: CallbackQuery) -> None:
         caption=f"📄 **Полный отчет по безопасности для `{repo_name}`**",
         parse_mode="Markdown"
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("download_pdf_report_"))
+async def handle_download_pdf_report(callback: CallbackQuery) -> None:
+    """Generate and send PDF vulnerability audit report including SCA."""
+    session_id = callback.data.replace("download_pdf_report_", "")
+    session = SCAN_SESSIONS.get(session_id)
+
+    if not session:
+        await callback.answer("⚠️ Сессия аудита не найдена.", show_alert=True)
+        return
+
+    scan_result: SASTScanResult = session["scan_result"]
+    repo_name = session["repo_name"]
+    temp_dir = session["temp_dir"]
+
+    status_msg = await callback.message.answer(
+        f"⏳ **Генерация Enterprise PDF-отчета для `{repo_name}`...**\n"
+        f"🔍 *Запуск SCA-сканирования (проверка зависимостей)...*",
+        parse_mode="Markdown"
+    )
+
+    try:
+        # Run SCA Scanner
+        from strix.scanners.sca_scanner import SCAScanner
+        sca_scanner = SCAScanner()
+        sca_findings = await sca_scanner.scan(temp_dir)
+        
+        if sca_findings:
+            # Merge SCA findings into scan_result
+            scan_result.findings.extend(sca_findings)
+            scan_result.total_findings += len(sca_findings)
+            
+            for finding in sca_findings:
+                if finding.severity not in scan_result.findings_by_severity:
+                    scan_result.findings_by_severity[finding.severity] = 0
+                scan_result.findings_by_severity[finding.severity] += 1
+
+        await status_msg.edit_text(
+            f"⏳ **Генерация Enterprise PDF-отчета для `{repo_name}`...**\n"
+            f"📑 *Верстка документа...*",
+            parse_mode="Markdown"
+        )
+
+        # Generate PDF
+        from strix.scanners.pdf_generator import PDFReportGenerator
+        
+        pdf_path = f"/tmp/strix_report_{session_id}.pdf"
+        generator = PDFReportGenerator(pdf_path)
+        
+        # We don't have DAST screenshots saved in the session natively, 
+        # but if we wanted, we could pass them here. For now, empty list.
+        success = generator.generate(scan_result, repo_name, dast_screenshots=[])
+        
+        if success and os.path.exists(pdf_path):
+            doc = FSInputFile(pdf_path, filename=f"Strix_Report_{repo_name.replace('/', '_')}.pdf")
+            await callback.message.answer_document(
+                document=doc,
+                caption=f"📄 **Финальный PDF-отчет по безопасности для `{repo_name}`**\n"
+                        f"(Включает результаты SAST и SCA)",
+                parse_mode="Markdown"
+            )
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text("❌ Ошибка при формировании PDF файла.")
+
+    except Exception as ex:
+        logger.exception(f"PDF generation failed: {ex}")
+        await status_msg.edit_text(f"❌ Ошибка генерации отчета: `{str(ex)[:200]}`", parse_mode="Markdown")
+
     await callback.answer()

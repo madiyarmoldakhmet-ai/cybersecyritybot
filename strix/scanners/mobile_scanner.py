@@ -12,8 +12,8 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from scanners.models import ScannerType, Severity, VulnerabilityFinding
-from scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
+from strix.scanners.models import ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
 
 
 class MobileSecurityScanner:

@@ -16,11 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY . .
 
-# Environment variables will be injected via docker-compose or run arguments
+# Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
-# Expose API port for Webhooks
-EXPOSE 8000
-
-# Start FastAPI server
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Strix CLI is the default entrypoint
+ENTRYPOINT ["python", "-m", "strix.cli"]
+CMD ["--help"]

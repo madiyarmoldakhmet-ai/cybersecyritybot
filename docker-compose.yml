@@ -15,10 +15,12 @@ services:
       # Telegram Bot (Change this in production or use .env)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       
-      # Cloud AI (Gemini as default SaaS Engine)
-      - LLM_PROVIDER=gemini
+      # Cloud AI Settings (from .env)
+      - LLM_PROVIDER=${LLM_PROVIDER}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL=gemini-2.5-flash
+      - GEMINI_MODEL=${GEMINI_MODEL}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
       
       # Webhooks (Optional)
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}

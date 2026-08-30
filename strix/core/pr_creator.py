@@ -10,9 +10,9 @@ import re
 from typing import Optional, Tuple
 from github import Auth, Github, GithubException
 
-from ai.remediation_engine import RemediationResult
-from core.verifier import OwnershipVerifier
-from scanners.models import VulnerabilityFinding
+from strix.ai.remediation_engine import RemediationResult
+from strix.core.verifier import OwnershipVerifier
+from strix.scanners.models import VulnerabilityFinding
 
 logger = logging.getLogger("cybersecuritybot.pr_creator")
 

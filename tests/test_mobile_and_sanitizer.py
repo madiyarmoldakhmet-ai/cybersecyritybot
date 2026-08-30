@@ -9,9 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scanners.mobile_scanner import MobileSecurityScanner
-from scanners.models import ScannerType, Severity, VulnerabilityFinding
-from scanners.sanitizer import (
+from strix.scanners.mobile_scanner import MobileSecurityScanner
+from strix.scanners.models import ScannerType, Severity, VulnerabilityFinding
+from strix.scanners.sanitizer import (
     FalsePositiveSanitizer,
     calculate_shannon_entropy,
 )

@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Set
 
-from scanners.models import Severity, VulnerabilityFinding
+from strix.scanners.models import Severity, VulnerabilityFinding
 
 # Known dummy/placeholder keywords
 PLACEHOLDER_REGEX = re.compile(
