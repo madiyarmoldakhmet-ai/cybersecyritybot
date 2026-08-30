@@ -28,7 +28,16 @@ class AIAutoFixer:
         self.model_name = ""
         self.enabled = False
 
-        if settings.llm_provider == "openrouter" and settings.openrouter_api_key:
+        if settings.use_local_llm or settings.llm_provider == "ollama":
+            self.model_name = settings.ollama_model or "qwen2.5-coder:14b"
+            self.client = AsyncOpenAI(
+                base_url=settings.ollama_base_url + "/v1",
+                api_key="ollama", # Ollama doesn't require an API key
+                timeout=float(timeout_seconds),
+                max_retries=1,
+            )
+            self.enabled = True
+        elif settings.llm_provider == "openrouter" and settings.openrouter_api_key:
             self.model_name = settings.openrouter_model or "anthropic/claude-sonnet-5"
             self.client = AsyncOpenAI(
                 base_url="https://openrouter.ai/api/v1",
