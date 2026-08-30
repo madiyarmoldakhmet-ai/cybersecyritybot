@@ -1516,6 +1516,69 @@ async def handle_remediation_and_pr(callback: CallbackQuery, state: FSMContext) 
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("autofix_"))
+async def handle_autofix(callback: CallbackQuery, state: FSMContext) -> None:
+    """Generate Auto-Fix diff for a vulnerability using AIAutoFixer."""
+    parts = callback.data.split("_")
+    if len(parts) < 3:
+        await callback.answer("⚠️ Ошибка: неверный формат callback data.", show_alert=True)
+        return
+
+    session_id = parts[1]
+    idx_str = parts[2]
+    
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await callback.answer("⚠️ Ошибка: неверный индекс.", show_alert=True)
+        return
+
+    session = SCAN_SESSIONS.get(session_id)
+    if not session:
+        await callback.answer("⚠️ Сессия аудита устарела.", show_alert=True)
+        return
+
+    scan_result: SASTScanResult = session["scan_result"]
+    if idx >= len(scan_result.findings):
+        await callback.answer("⚠️ Уязвимость не найдена.", show_alert=True)
+        return
+
+    finding = scan_result.findings[idx]
+    
+    if not finding.code_snippet:
+        await callback.answer("⚠️ Для этой уязвимости нет фрагмента кода для исправления.", show_alert=True)
+        return
+
+    status_msg = await callback.message.answer("⏳ **LLM генерирует патч... Пожалуйста, подождите.**")
+    
+    from scanners.auto_fixer import AIAutoFixer
+    fixer = AIAutoFixer()
+    
+    fixed_code = await fixer.generate_fix(finding)
+    
+    if not fixed_code:
+        await status_msg.edit_text("❌ Ошибка при генерации патча. Проверьте настройки API ключей.")
+        await callback.answer()
+        return
+        
+    diff_msg = (
+        f"🛠 **Auto-Fix для:** `{finding.title}`\n\n"
+        f"🔴 **Было (Уязвимо):**\n"
+        f"```\n{finding.code_snippet}\n```\n\n"
+        f"🟢 **Стало (Безопасно):**\n"
+        f"```\n{fixed_code}\n```\n\n"
+        f"_Внесите эти изменения в файл:_ `{finding.file_path}`"
+    )
+    
+    try:
+        await status_msg.edit_text(diff_msg, parse_mode="Markdown")
+    except Exception as e:
+        # Fallback if markdown parsing fails due to unmatched backticks or similar in code
+        await status_msg.edit_text(diff_msg.replace("`", "'"), parse_mode="HTML")
+        
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("download_report_"))
 async def handle_download_report(callback: CallbackQuery) -> None:
     """Generate and send Markdown vulnerability audit report."""
