@@ -10,15 +10,17 @@ Executes multi-language static application security testing:
 import ast
 import asyncio
 import json
+import esprima
 import logging
 import os
 import re
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Pattern, Tuple, Union
+from typing import Any, Dict, List, Optional, Pattern, Tuple, Union, Set
 
 from core.config import settings
+from scanners.ai_filter import AIFalsePositiveFilter
 from scanners.mobile_scanner import MobileSecurityScanner
 from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
 from scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
@@ -172,30 +174,7 @@ class MultiLanguagePatternScanner:
             "recommendation": "Restrict access rules to authenticated users (e.g. 'if request.auth != null').",
             "exts": {".json", ".yaml", ".yml", ".rules", ".txt", ".dart"},
         },
-        # 8. JavaScript DOM XSS via innerHTML / dangerouslySetInnerHTML
-        {
-            "id": "js-dom-xss-innerhtml",
-            "regex": re.compile(r"\b(?:innerHTML|outerHTML)\s*=\s*(?![\"'\`]\s*[\"'\`])|\bdangerouslySetInnerHTML\s*=\s*\{\s*__html\s*:"),
-            "title": "Potential DOM XSS via Unsafe HTML Injection",
-            "description": "Direct assignment to innerHTML or dangerouslySetInnerHTML can lead to Cross-Site Scripting (XSS).",
-            "severity": Severity.HIGH,
-            "cwe": ["CWE-79"],
-            "cve": [],
-            "recommendation": "Use textContent or sanitize HTML with DOMPurify before rendering.",
-            "exts": {".js", ".ts", ".jsx", ".tsx", ".html"},
-        },
-        # 9. JavaScript document.write
-        {
-            "id": "js-document-write-xss",
-            "regex": re.compile(r"\bdocument\.write\s*\("),
-            "title": "Insecure document.write() Invocation",
-            "description": "Use of document.write() is insecure and can introduce DOM XSS vulnerabilities.",
-            "severity": Severity.HIGH,
-            "cwe": ["CWE-79"],
-            "cve": [],
-            "recommendation": "Avoid document.write(). Use standard DOM manipulation APIs (createElement / appendChild).",
-            "exts": {".js", ".ts", ".jsx", ".tsx", ".html"},
-        },
+
     ]
 
     @classmethod
@@ -362,6 +341,194 @@ class PythonASTSecurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class JSASTSecurityVisitor:
+    """AST Visitor that inspects JavaScript/TypeScript AST for DOM XSS and vulnerabilities using esprima."""
+
+    def __init__(self, file_path: Path, file_content: str) -> None:
+        self.file_path = file_path
+        self.file_content = file_content
+        self.lines = file_content.splitlines()
+        self.findings: List[VulnerabilityFinding] = []
+        self.safe_vars: Set[str] = set()
+
+    def _get_snippet(self, start_line: int, end_line: Optional[int] = None, padding: int = 15) -> str:
+        """Extract a 30-line code window (15 lines before, 15 lines after) around the finding."""
+        end = end_line or start_line
+        first_line = max(1, start_line - padding)
+        last_line = min(len(self.lines), end + padding)
+        selected = self.lines[first_line - 1 : last_line]
+        return "\n".join(selected)
+
+    def _is_safe_data_flow(self, right_node: Any) -> bool:
+        """Check if the right side of the assignment is safe (static or sanitized)."""
+        if not right_node or not isinstance(right_node, dict):
+            return False
+            
+        node_type = right_node.get("type")
+        
+        # 1. Static strings / literals are safe
+        if node_type == "Literal":
+            return True
+            
+        # 1.5. Identifiers checking local data flow
+        if node_type == "Identifier":
+            return right_node.get("name") in self.safe_vars
+            
+        # 2. Sanitized function calls
+        if node_type == "CallExpression":
+            callee = right_node.get("callee", {})
+            func_name = ""
+            if callee.get("type") == "Identifier":
+                func_name = callee.get("name", "")
+            elif callee.get("type") == "MemberExpression":
+                prop = callee.get("property", {})
+                if prop.get("type") == "Identifier":
+                    func_name = prop.get("name", "")
+            
+            # If function name contains known sanitization keywords, consider it safe
+            safe_keywords = [
+                "escape", "sanitize", "purify", "encode", "xss", 
+                "tolocalestring", "tolocaletimestring", "toisostring", "tostring"
+            ]
+            func_lower = func_name.lower()
+            if any(kw in func_lower for kw in safe_keywords):
+                return True
+                
+        # 3. Template Literals (check internal expressions)
+        if node_type == "TemplateLiteral":
+            expressions = right_node.get("expressions", [])
+            if not expressions:
+                return True
+            # For template literals, if all expressions inside are safe, it's safe
+            for expr in expressions:
+                if not self._is_safe_data_flow(expr):
+                    return False
+            return True
+            
+        # 4. Conditional Expressions (ternary operators)
+        if node_type == "ConditionalExpression":
+            return self._is_safe_data_flow(right_node.get("consequent")) and self._is_safe_data_flow(right_node.get("alternate"))
+            
+        # 5. Logical Expressions (e.g., a || b)
+        if node_type == "LogicalExpression":
+            return self._is_safe_data_flow(right_node.get("left")) and self._is_safe_data_flow(right_node.get("right"))
+
+        return False
+
+    def visit(self, node: Any) -> None:
+        """Recursively traverse the AST dict to find vulnerable patterns."""
+        if not node:
+            return
+            
+        if isinstance(node, dict):
+            node_type = node.get("type")
+            loc = node.get("loc", {})
+            start_line = loc.get("start", {}).get("line", 1) if loc else 1
+            end_line = loc.get("end", {}).get("line", start_line) if loc else start_line
+
+            # A. Check for Assignment to innerHTML or outerHTML
+            if node_type == "AssignmentExpression":
+                left = node.get("left", {})
+                right = node.get("right", {})
+                if left.get("type") == "MemberExpression":
+                    prop = left.get("property", {})
+                    if prop.get("type") == "Identifier" and prop.get("name") in ["innerHTML", "outerHTML"]:
+                        if not self._is_safe_data_flow(right):
+                            self.findings.append(
+                                VulnerabilityFinding(
+                                    id="js-dom-xss-ast",
+                                    scanner=ScannerType.CUSTOM,
+                                    title=f"Potential DOM XSS via Unsafe {prop.get('name')}",
+                                    description=f"Direct assignment of unsanitized data to {prop.get('name')} can lead to DOM XSS.",
+                                    severity=Severity.HIGH,
+                                    file_path=str(self.file_path),
+                                    line_start=start_line,
+                                    line_end=end_line,
+                                    code_snippet=self._get_snippet(start_line, end_line),
+                                    cwe=["CWE-79"],
+                                    cve=[],
+                                    recommendation="Use textContent or sanitize HTML with DOMPurify/escapeHtml before rendering."
+                                )
+                            )
+
+            # B. Check for JSX dangerouslySetInnerHTML
+            elif node_type == "JSXAttribute":
+                name_node = node.get("name", {})
+                if name_node.get("type") == "JSXIdentifier" and name_node.get("name") == "dangerouslySetInnerHTML":
+                    # For dangerouslySetInnerHTML, the value is a JSXExpressionContainer
+                    val_node = node.get("value", {})
+                    if val_node.get("type") == "JSXExpressionContainer":
+                        inner_expr = val_node.get("expression", {})
+                        if inner_expr.get("type") == "ObjectExpression":
+                            for obj_prop in inner_expr.get("properties", []):
+                                key = obj_prop.get("key", {})
+                                if key.get("type") == "Identifier" and key.get("name") == "__html":
+                                    html_val = obj_prop.get("value")
+                                    if not self._is_safe_data_flow(html_val):
+                                        self.findings.append(
+                                            VulnerabilityFinding(
+                                                id="js-jsx-dangerously-set",
+                                                scanner=ScannerType.CUSTOM,
+                                                title="Potential DOM XSS via dangerouslySetInnerHTML",
+                                                description="Usage of dangerouslySetInnerHTML with unsanitized data.",
+                                                severity=Severity.HIGH,
+                                                file_path=str(self.file_path),
+                                                line_start=start_line,
+                                                line_end=end_line,
+                                                code_snippet=self._get_snippet(start_line, end_line),
+                                                cwe=["CWE-79"],
+                                                cve=[],
+                                                recommendation="Ensure data is heavily sanitized using DOMPurify before dangerously setting HTML."
+                                            )
+                                        )
+
+            # B.5 Check for local variable declarations (Data flow tracking)
+            elif node_type == "VariableDeclarator":
+                id_node = node.get("id", {})
+                init_node = node.get("init")
+                if id_node.get("type") == "Identifier" and init_node:
+                    if self._is_safe_data_flow(init_node):
+                        self.safe_vars.add(id_node.get("name"))
+
+            # C. Check for document.write()
+            elif node_type == "CallExpression":
+                callee = node.get("callee", {})
+                if callee.get("type") == "MemberExpression":
+                    obj = callee.get("object", {})
+                    prop = callee.get("property", {})
+                    if obj.get("type") == "Identifier" and obj.get("name") == "document":
+                        if prop.get("type") == "Identifier" and prop.get("name") == "write":
+                            args = node.get("arguments", [])
+                            # If it's just writing static string, it's low risk, but generally write() is bad
+                            is_safe = all(self._is_safe_data_flow(arg) for arg in args) if args else False
+                            if not is_safe:
+                                self.findings.append(
+                                    VulnerabilityFinding(
+                                        id="js-document-write-xss",
+                                        scanner=ScannerType.CUSTOM,
+                                        title="Insecure document.write() Invocation",
+                                        description="Use of document.write() with dynamic content can introduce DOM XSS vulnerabilities.",
+                                        severity=Severity.HIGH,
+                                        file_path=str(self.file_path),
+                                        line_start=start_line,
+                                        line_end=end_line,
+                                        code_snippet=self._get_snippet(start_line, end_line),
+                                        cwe=["CWE-79"],
+                                        cve=[],
+                                        recommendation="Avoid document.write(). Use standard DOM manipulation APIs (createElement / appendChild)."
+                                    )
+                                )
+
+            # Recursively check children
+            for key, val in node.items():
+                if isinstance(val, (dict, list)):
+                    self.visit(val)
+
+        elif isinstance(node, list):
+            for item in node:
+                self.visit(item)
+
+
 class SASTScanner:
     """Orchestrates multi-language static analysis tools, mobile DevSecOps rules, and dependency vulnerability scanners."""
 
@@ -460,6 +627,18 @@ class SASTScanner:
                                 findings.extend(ast_visitor.findings)
                             except Exception as ast_err:
                                 logger.debug(f"AST parsing skipped for {file_path}: {ast_err}")
+
+                        # 3. JavaScript/TypeScript AST security visitor (esprima)
+                        if ext in [".js", ".jsx", ".ts", ".tsx"]:
+                            try:
+                                # Esprima doesn't natively support TS, but we can try parsing.
+                                # If it fails (e.g. strict TS syntax), it falls back safely.
+                                js_tree = esprima.parseScript(content, {"loc": True, "jsx": True}).toDict()
+                                js_ast_visitor = JSASTSecurityVisitor(file_path, content)
+                                js_ast_visitor.visit(js_tree)
+                                findings.extend(js_ast_visitor.findings)
+                            except Exception as js_ast_err:
+                                logger.debug(f"JS/TS AST parsing skipped for {file_path}: {js_ast_err}")
 
                     except Exception as e:
                         logger.debug(f"Multi-language scanner skipped {file_path}: {e}")
@@ -667,6 +846,12 @@ class SASTScanner:
 
         # Apply Zero-Noise False-Positive Sanitizer (Shannon Entropy & Test Filter)
         clean_findings = self.sanitizer.sanitize_findings(raw_findings)
+
+        # Apply AI-Assisted Smart Filter to drop semantic false positives
+        ai_filter = AIFalsePositiveFilter()
+        if ai_filter.enabled:
+            logger.info("Running AI-Assisted Smart Filter on findings...")
+            clean_findings = await ai_filter.filter_findings(clean_findings)
 
         errors: List[str] = []
         if semgrep_err:

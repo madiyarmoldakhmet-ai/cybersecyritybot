@@ -111,7 +111,16 @@ class StrixEngine:
     ) -> None:
         self.timeout_seconds = timeout_seconds
 
-        if settings.llm_provider == "gemini" and settings.gemini_api_key:
+        if settings.llm_provider == "openrouter" and settings.openrouter_api_key:
+            # Use Claude 3.5 Sonnet or similar via OpenRouter
+            self.model_name = settings.openrouter_model or "anthropic/claude-sonnet-5"
+            self.client = AsyncOpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=settings.openrouter_api_key,
+                timeout=float(self.timeout_seconds),
+                max_retries=2,
+            )
+        elif settings.llm_provider == "gemini" and settings.gemini_api_key:
             # Use Gemini Cloud AI via OpenAI-compatible endpoint
             self.model_name = settings.gemini_model or "gemini-2.5-flash"
             self.client = AsyncOpenAI(
@@ -145,10 +154,10 @@ class StrixEngine:
     ) -> List[Dict[str, str]]:
         """Collect source code files from repository for deep agent analysis."""
         
-        # If using Ollama, keep strict limits to avoid OOM
+        # If using Ollama or Free OpenRouter, keep strict limits to avoid OOM or 402 Limit
         if settings.llm_provider != "gemini":
             max_files = 35
-            max_total_bytes = 150_000
+            max_total_bytes = 60_000
 
         collected: List[Dict[str, str]] = []
         total_bytes = 0

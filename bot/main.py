@@ -42,7 +42,12 @@ async def run_bot() -> None:
     dp.include_router(router)
 
     logger.info(f"Starting {settings.app_name} Telegram Bot...")
-    active_model = settings.gemini_model if settings.llm_provider == "gemini" and settings.gemini_api_key else settings.ollama_model
+    if settings.llm_provider == "openrouter" and settings.openrouter_api_key:
+        active_model = settings.openrouter_model
+    elif settings.llm_provider == "gemini" and settings.gemini_api_key:
+        active_model = settings.gemini_model
+    else:
+        active_model = settings.ollama_model
     logger.info(f"Active LLM Provider: {settings.llm_provider.value} | Model: {active_model}")
 
     try:

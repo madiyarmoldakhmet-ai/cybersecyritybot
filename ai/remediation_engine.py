@@ -122,8 +122,16 @@ SYSTEM_PROMPT_STATIC_CHECK = """\
 
 class RemediationEngine:
     def __init__(self, model_name: Optional[str] = None) -> None:
-        if settings.llm_provider == "gemini" and settings.gemini_api_key:
-            self.model_name = settings.gemini_model or "gemini-2.5-flash"
+        if settings.llm_provider == "openrouter" and settings.openrouter_api_key:
+            self.model_name = model_name or settings.openrouter_model or "anthropic/claude-3.5-sonnet"
+            self.llm_client = AsyncOpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=settings.openrouter_api_key,
+                timeout=60.0,
+                max_retries=1,
+            )
+        elif settings.llm_provider == "gemini" and settings.gemini_api_key:
+            self.model_name = model_name or settings.gemini_model or "gemini-2.5-flash"
             self.llm_client = AsyncOpenAI(
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 api_key=settings.gemini_api_key,
@@ -140,8 +148,9 @@ class RemediationEngine:
             )
 
     async def _query_ollama(self, system_prompt: str, user_prompt: str) -> str:
-        """Запрос к LLM с таймаутом 45 сек и контролем параллелизма (только для локальной)."""
-        is_gemini = settings.llm_provider == "gemini" and settings.gemini_api_key
+        """Запрос к LLM с таймаутом 45-60 сек и контролем параллелизма (только для локальной)."""
+        is_cloud = (settings.llm_provider == "gemini" and settings.gemini_api_key) or \
+                   (settings.llm_provider == "openrouter" and settings.openrouter_api_key)
 
         async def _make_call():
             response = await asyncio.wait_for(
@@ -153,14 +162,14 @@ class RemediationEngine:
                     ],
                     temperature=0.2,
                     max_tokens=2000,
-                    response_format={"type": "json_object"} if not is_gemini else None, # Gemini might require different formatting, but we'll try standard OpenAI compat first
+                    response_format={"type": "json_object"} if not is_cloud else None,
                 ),
-                timeout=45.0,
+                timeout=60.0,
             )
             return response.choices[0].message.content.strip()
 
         try:
-            if is_gemini:
+            if is_cloud:
                 # Облачные API хорошо масштабируются, семафор не нужен
                 return await _make_call()
             else:

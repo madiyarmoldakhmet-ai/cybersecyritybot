@@ -67,7 +67,7 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
                     callback_data="show_promo"
                 ),
                 InlineKeyboardButton(
-                    text="⚡ Статус AI (Ollama)",
+                    text="⚡ Статус AI (Cloud)",
                     callback_data="check_ai_status"
                 ),
             ],
@@ -185,8 +185,8 @@ async def handle_help(event: Message | CallbackQuery) -> None:
         "2. **Поддерживаемые технологии:**\n"
         "   • Flutter & Dart, JavaScript & TypeScript, Python, HTML, .env, Firestore Rules.\n\n"
         "3. **AI Движок:**\n"
-        f"   По умолчанию используется локальный сервер Ollama (`{settings.ollama_base_url}`) "
-        f"с моделью `{settings.ollama_model}`."
+        f"   Текущий провайдер: `{settings.llm_provider.value}`.\n"
+        f"   Для настройки измените переменные в `.env`."
     )
 
     if isinstance(event, CallbackQuery):
@@ -216,8 +216,13 @@ async def handle_status(event: Message | CallbackQuery) -> None:
         ollama_ok = False
 
     is_gemini_active = settings.llm_provider == "gemini" and settings.gemini_api_key
+    is_openrouter_active = settings.llm_provider == "openrouter" and settings.openrouter_api_key
     
-    if is_gemini_active:
+    if is_openrouter_active:
+        ai_status = "🟢 Online (OpenRouter Cloud)"
+        active_engine = "☁️ OpenRouter API"
+        active_model = settings.openrouter_model
+    elif is_gemini_active:
         ai_status = "🟢 Online (Google Cloud)"
         active_engine = "☁️ Google Gemini"
         active_model = settings.gemini_model
