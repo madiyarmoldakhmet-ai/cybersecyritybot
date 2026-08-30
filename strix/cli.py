@@ -20,6 +20,11 @@ from strix.scanners.strix_runner import StrixEngine
 app = typer.Typer(help="Strix Engine - Autonomous AI-DevSecOps Scanner")
 console = Console()
 
+@app.callback()
+def main_callback():
+    """Strix Engine - AI-DevSecOps Scanner"""
+    pass
+
 def print_banner():
     banner = r"""
    _____ _        _         ______             _            
