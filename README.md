@@ -1,150 +1,62 @@
 <div align="center">
 
-# 🛡️ CyberSecurityBot
-### Autonomous SaaS DevSecOps & AI Pentester Bot
+# 🦉 Strix Engine
+**Autonomous AI-DevSecOps Scanner & Auto-Remediation Tool**
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg?style=for-the-badge&logo=python)](https://www.python.org/)
-[![aiogram 3.x](https://img.shields.io/badge/Telegram-aiogram%203.x-2CA5E0.svg?style=for-the-badge&logo=telegram)](https://aiogram.dev/)
-[![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED.svg?style=for-the-badge&logo=docker)](https://www.docker.com/)
-[![Cloud AI](https://img.shields.io/badge/AI-Google%20Gemini-orange.svg?style=for-the-badge&logo=google)](https://ai.google.dev/)
-[![Strix Engine](https://img.shields.io/badge/Deep%20Pentest-Strix%20Engine-black.svg?style=for-the-badge)](https://github.com/usestrix/strix)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
-
-<p align="center">
-  <b>0-Config Telegram-бот для поиска уязвимостей, валидации эксплойтов и автоматического создания Pull Request прямо с мобильного телефона.</b>
-</p>
-
-<!-- МЕСТО ДЛЯ ГИФКИ РАБОТЫ БОТА -->
-<img src="assets/demo.gif" alt="CyberSecurityBot Telegram Demo" width="800px" style="border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.2);" />
-
-[Ключевые возможности](#-ключевые-возможности) • [Архитектура](#-архитектура) • [Запуск сервера](#-1-click-deploy-docker) • [Сценарий пользователя](#-сценарий-работы-в-telegram) • [Roadmap](#-roadmap)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/your-repo/strix-engine/strix-scan.yml?branch=main&style=flat-square)](https://github.com/your-repo/strix-engine/actions)
+[![Docker Pulls](https://img.shields.io/docker/pulls/your-dockerhub/strix-engine?style=flat-square)](https://hub.docker.com/r/your-dockerhub/strix-engine)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg?style=flat-square)](https://www.python.org/downloads/)
 
 </div>
 
----
+Strix Engine is an open-source, CLI-first, AI-driven DevSecOps scanner. It combines the speed of traditional SAST/DAST/SCA scanners with the intelligence of LLMs to not only find vulnerabilities but also **automatically fix them**.
 
-## 🌟 Зачем нужен CyberSecurityBot?
+## ✨ Features
+- **Zero-Data-Leak (Local AI):** Run entirely locally using Ollama. Your source code never leaves your machine.
+- **Auto-Remediation:** Strix doesn't just complain; it writes the secure code for you.
+- **Hybrid Scanning:** SAST (Semgrep, Bandit), DAST (Playwright), SCA (OSV API), and Secret Scanning via RegEx.
+- **AI False-Positive Filter:** Smart LLM filtering reduces noise and ignores mock tokens or test API keys.
+- **Enterprise PDF Reports:** Export gorgeous, detailed PDF security audits.
 
-В эпоху быстрой разработки ("вайбкодинга") проекты часто выходят в продакшн с критическими багами (утечки ключей, SQL-инъекции, IDOR). Разработчикам лень настраивать сложные CI/CD-тулзы и поднимать локальные среды для аудита.
+## 🚀 Quick Start (60 Seconds)
 
-**CyberSecurityBot** решает эту задачу с подходом **0-Config**:
-1. Отправь боту ссылку на репозиторий прямо с айфона.
-2. Подтверди владение через пустой коммит (без передачи токенов).
-3. Облачный ИИ (Strix Engine + Gemini) глубоко проанализирует логику проекта.
-4. В один клик ИИ исправит баги и откроет Pull Request на GitHub!
-
-> **SaaS-Ready:** Проект поставляется с готовым `docker-compose` для деплоя на дешевый VPS ($5/мес). Никаких тяжелых нейросетей на локальной машине.
-
----
-
-## ⚡ Ключевые возможности
-
-| Функция | Описание |
-| :--- | :--- |
-| 🚀 **Mass-Market UX** | Никаких сложных настроек, `.env` файлов и токенов для конечного пользователя. Всё через кнопки в Telegram. |
-| 🔐 **0-Config Verification** | Безопасная верификация авторства через **Commit Challenge** (пользователю нужно сделать 1 пустой коммит). |
-| 🤖 **Cloud AI (Gemini)** | Работает на молниеносном API Google Gemini. Окно в 2 млн токенов позволяет анализировать репозитории целиком. |
-| 🕵️‍♂️ **Strix Deep Pentest** | Агентный глубокий пентест бизнес-логики, IDOR и цепочек атак на базе движка **Strix** (Apache 2.0). |
-| 🌐 **Multi-Language SAST** | Статический анализ Flutter/Dart, Python AST, JS/TS, Firestore Rules и секретов. |
-| 🧪 **Exploit PoC Validation** | Автоматическая генерация проверочных cURL-команд (Active DAST) для проверки дыр на "живом" сервере. |
-| 🚀 **Auto-PR Generator** | Автоматическое создание изолированной ветки и открытие Pull Request с фиксом уязвимости. |
-
----
-
-## 🏛 Архитектура (SaaS)
-
-```text
- ┌────────────────────────────────────────────────────────────────────────┐
- │                      END-USER INTERFACE                                │
- │               Telegram Bot (0-Config, Mobile Friendly)                 │
- └───────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                    [ Commit Challenge Verification ]
-                                     │
-           ┌─────────────────────────┼────────────────────────┐
-           ▼                         ▼                        ▼
- ┌───────────────────┐    ┌────────────────────┐   ┌────────────────────┐
- │     FAST SAST     │    │    DAST ENGINE     │   │ STRIX DEEP PENTEST │
- │ • Multi-Lang AST  │    │ • CSP / HSTS       │   │ • Multi-Agent Recon│
- │ • Semgrep & Bandit│    │ • CORS Reflection  │   │ • Logic & IDOR Flaw│
- └─────────┬─────────┘    └──────────┬─────────┘   └─────────┬──────────┘
-           │                         │                       │
-           └─────────────────────────┼───────────────────────┘
-                                     ▼
-                       [ Normalized Findings JSON ]
-                                     │
-                                     ▼
- ┌────────────────────────────────────────────────────────────────────────┐
- │                     CLOUD AI REMEDIATION ENGINE                        │
- │  • Primary: Google Gemini 2.5 Flash (via API)                          │
- │  • Fallback: Private Local Ollama Cluster (qwen2.5-coder)              │
- └───────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                    [ Exploit PoC & Patch Generated ]
-                                     │
-                                     ▼
- ┌────────────────────────────────────────────────────────────────────────┐
- │                     AUTOMATED PULL REQUEST ENGINE                      │
- │    Creates Branch -> Applies Code -> Opens GitHub PR with Summary      │
- └────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🚀 1-Click Deploy (Docker)
-
-Чтобы поднять платформу и сделать её доступной для тысяч пользователей, нужен только сервер с Docker (хватит самого дешевого за $5/мес).
-
-### 1. Клонирование
+### Using Docker (Recommended)
 ```bash
-git clone https://github.com/madiyarmoldakhmet-ai/cybersecyritybot.git
-cd cybersecuritybot
+# Scan a local repository
+docker run -v $(pwd):/app strix-engine scan /app --deep --autofix
 ```
 
-### 2. Настройка (.env)
+### Using Python (CLI)
 ```bash
-cp .env.example .env
+git clone https://github.com/your-repo/strix-engine.git
+cd strix-engine
+pip install -r requirements.txt
+
+# Run the scanner
+python -m strix.cli scan ./my-vulnerable-app
 ```
-Вставьте в `.env` свои API ключи:
+
+## 🛠️ Commands
+
+- `python -m strix.cli scan <path>`: Run the fast DevSecOps pipeline.
+- `python -m strix.cli scan <path> --deep`: Run the deep AI pentest (Strix Agent).
+- `python -m strix.cli scan <path> --autofix`: Automatically generate fixes for findings.
+- `python -m strix.cli scan <path> --export-pdf`: Export results to an Enterprise PDF.
+
+## 🔐 Zero-Data-Leak Configuration
+To use Strix locally with Ollama (e.g., `qwen2.5-coder:7b`):
+1. Install [Ollama](https://ollama.ai/)
+2. Run `ollama run qwen2.5-coder:14b`
+3. Configure your `.env`:
 ```env
-TELEGRAM_BOT_TOKEN=123456789:ABCdef...
-GEMINI_API_KEY=your_gemini_api_key_from_aistudio
-LLM_PROVIDER=gemini
+USE_LOCAL_LLM=true
+OLLAMA_BASE_URL=http://localhost:11434
 ```
 
-### 3. Запуск в один клик
-```bash
-docker-compose up -d
-```
-Всё! Бот в онлайне 24/7 и готов принимать ссылки на репозитории от пользователей.
-
-*(Опционально: если вы параноик приватности, вы можете запустить бота локально на `Ollama`. Измените `LLM_PROVIDER=ollama` в файле `.env`)*.
+## 🤖 CI/CD Integration
+Add Strix to your GitHub Actions to scan every PR automatically:
+Check out our `.github/workflows/strix-scan.yml` example.
 
 ---
-
-## 📱 Сценарий работы в Telegram
-
-1. **Запуск**: Пользователь жмет `/start`. Никаких сложных инструкций.
-2. **Проверка**: Бот предлагает "🚀 Быстрый старт". Юзер кидает ссылку на гитхаб, бот дает строку для пустого коммита, юзер делает пуш. Проверка пройдена за 10 секунд!
-3. **Аудит**:
-   * Бот клонирует код во временную папку.
-   * **Strix Engine** читает код через облако Gemini (до 150 файлов / 2 МБ за раз).
-   * Бот выдает список найденных логических уязвимостей и IDOR.
-4. **Лечение (Auto-PR)**:
-   * Пользователь жмет "Сгенерировать AI-патч".
-   * Бот через ИИ пишет безопасный код и открывает Pull Request на GitHub.
-
----
-
-## 🌐 FastAPI эндпоинты & Webhooks
-
-Помимо Telegram-интерфейса, внутри крутится `FastAPI`, принимающий хуки от GitHub (Commit Guardian). При каждом коммите в подключенный репозиторий, бот может присылать отчет об аудите в рабочий чат.
-
-Документация Swagger: `http://ваш-сервер:8000/docs`.
-
----
-
-## 📄 Лицензия
-
-Проект распространяется под лицензией **MIT** (см. [LICENSE](LICENSE)).  
-*Deep Scanning powered by Strix Engine (Apache 2.0).*
+*Built with ❤️ for the Open Source Security Community.*
