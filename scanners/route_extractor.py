@@ -288,6 +288,52 @@ class RouteExtractor:
 
         return endpoints
 
+    # ---- OpenAPI / Swagger Extraction ---------------------------------------
+
+    def _scan_openapi_file(self, file_path: Path, rel_path: str) -> List[DiscoveredEndpoint]:
+        endpoints: List[DiscoveredEndpoint] = []
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+            # Parse YAML or JSON (fallback to basic JSON if PyYAML not present, but we try json first)
+            import json
+            import yaml
+            
+            data = None
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError:
+                data = yaml.safe_load(content)
+
+            if not isinstance(data, dict):
+                return endpoints
+
+            paths = data.get("paths", {})
+            for path, path_obj in paths.items():
+                if not isinstance(path_obj, dict):
+                    continue
+                for method, op_obj in path_obj.items():
+                    if method.lower() not in {"get", "post", "put", "delete", "patch"}:
+                        continue
+                        
+                    has_auth = "security" in op_obj or "security" in data
+                    
+                    endpoints.append(
+                        DiscoveredEndpoint(
+                            path=path,
+                            method=method.upper(),
+                            file_path=rel_path,
+                            line_number=1,
+                            framework="openapi",
+                            has_auth_guard=has_auth,
+                            sensitive_operations=["openapi_schema_extracted"]
+                        )
+                    )
+
+        except Exception as e:
+            logger.debug(f"Failed to parse OpenAPI file {rel_path}: {e}")
+
+        return endpoints
+
     # ---- Helpers ------------------------------------------------------------
 
     def _detect_sensitive_ops(self, code_block: str) -> List[str]:
