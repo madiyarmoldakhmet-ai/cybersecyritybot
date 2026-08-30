@@ -69,7 +69,7 @@ class Settings(BaseSettings):
 
     # AI / LLM Engine Settings
     llm_provider: LLMProvider = Field(
-        default=LLMProvider.OLLAMA,
+        default=LLMProvider.GEMINI,
         description="Active LLM provider: 'ollama' or 'gemini'"
     )
     ollama_base_url: str = Field(

@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  cybersecuritybot:
+    build: .
+    container_name: cybersecuritybot
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # General
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      
+      # Telegram Bot (Change this in production or use .env)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      
+      # Cloud AI (Gemini as default SaaS Engine)
+      - LLM_PROVIDER=gemini
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=gemini-2.5-flash
+      
+      # Webhooks (Optional)
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+    
+    volumes:
+      - ./temp_clones:/app/temp_clones # Ensure temp clones are wiped on container restart

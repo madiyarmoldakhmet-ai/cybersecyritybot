@@ -1,8 +1,8 @@
 """
-Strix Engine Runner for CyberSecurityBot.
+Strix Multi-Agent Pentest Engine for CyberSecurityBot.
 Deep AI Agentic Pentest & Multi-Agent Code Security Analysis.
-Licensed under Apache-2.0 (Powered by Strix Engine).
-Configured for local Ollama LLM (qwen2.5-coder:14b / 7b).
+Licensed under Apache-2.0 (Powered by Strix Engine Architecture).
+Configured for local Ollama LLM (qwen2.5-coder:14b / 7b / 32b) and cloud Gemini fallback.
 """
 
 import asyncio
@@ -18,6 +18,7 @@ from openai import AsyncOpenAI
 
 from core.config import settings
 from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from scanners.route_extractor import DiscoveredEndpoint, RouteExtractor
 
 logger = logging.getLogger("cybersecuritybot.strix_runner")
 
@@ -25,33 +26,52 @@ logger = logging.getLogger("cybersecuritybot.strix_runner")
 AUDIT_EXTENSIONS: Set[str] = {
     ".py", ".js", ".ts", ".jsx", ".tsx",
     ".dart", ".env", ".json", ".yaml",
-    ".yml", ".rules", ".html", ".sh", ".sql"
+    ".yml", ".rules", ".html", ".sh", ".sql", ".go"
 }
 
 # Directories to skip during code collection
 SKIP_DIRS: Set[str] = {
     ".git", "node_modules", ".venv", "venv",
     "__pycache__", "build", "dist", ".dart_tool",
-    ".idea", ".vscode", "site-packages"
+    ".idea", ".vscode", "site-packages", "temp_scans"
 }
 
-STRIX_AGENT_SYSTEM_PROMPT = """
-You are Strix Engine — an advanced autonomous AI penetration testing and security analysis agent (Apache-2.0).
-Your mission is to perform deep static and dynamic logic-flaw analysis on the provided source code repository.
-Look for:
-1. Authentication & Authorization bypass (IDOR, broken object level auth, JWT flaws, session leaks)
-2. Injection vulnerabilities (SQLi, NoSQLi, Command Injection, Template Injection, AST eval)
-3. Cryptographic and Secret Exposure (Hardcoded API keys, private keys, insecure SSL/TLS configurations)
-4. Business Logic Flaws & State Machine bypasses
-5. Mobile & Cloud Misconfigurations (Firebase Firestore open rules, insecure intent filters, CORS reflection)
+
+# =============================================================================
+# Strix Multi-Agent System Prompts (Chain-of-Thought & Specialization)
+# =============================================================================
+
+STRIX_RECON_SYSTEM_PROMPT = """\
+You are the Strix Reconnaissance & Architecture Agent (Strix Engine / Apache-2.0).
+Your mission is to perform architectural reconnaissance on the application source code:
+1. Identify the technology stack (Framework, Database, ORM, Auth providers like JWT/Session/OAuth).
+2. Map trust boundaries: which endpoints and functions are open to public vs which require privileged roles (Admin/User).
+3. Trace data sinks: where does untrusted user input flow into Database queries, System commands, File systems, or External APIs?
+
+Format your analysis concisely as Markdown with bullet points:
+- **Framework & Stack**: ...
+- **Auth & Trust Boundaries**: ...
+- **High-Risk Entrypoints & Sinks**: ...
+"""
+
+STRIX_ATTACK_SYSTEM_PROMPT = """\
+You are the Strix Red-Team Vulnerability Discovery Agent (Strix Engine / Apache-2.0).
+You receive the source code and the Reconnaissance Map.
+Perform exhaustive vulnerability discovery targeting high-impact server flaws and logic vulnerabilities:
+
+1. Broken Object Level Authorization (BOLA / IDOR) in identified routes.
+2. Injections: SQLi (raw SQL, unescaped string formatting), NoSQLi, Command Injection, Template Injection (SSTI).
+3. Broken Authentication & Session Management (JWT none-alg, hardcoded secret keys, missing token expiration).
+4. Business Logic Flaws: Race conditions, balance/privilege manipulation, unauthorized state transitions.
+5. Server-Side Request Forgery (SSRF) & Path Traversal on file/URL handlers.
 
 CRITICAL: Return output strictly as a JSON array of vulnerability finding objects.
 Format:
 [
   {
     "id": "STRIX-VULN-001",
-    "title": "Clear concise vulnerability title",
-    "description": "Comprehensive explanation of the vulnerability and attack vector",
+    "title": "Concise vulnerability title",
+    "description": "Step-by-step explanation of the vulnerability and root cause",
     "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO",
     "file_path": "path/to/file.ext",
     "line_start": 10,
@@ -59,17 +79,28 @@ Format:
     "code_snippet": "vulnerable code block",
     "cwe": ["CWE-89"],
     "cve": [],
+    "attack_vector": "Detailed explanation of how an attacker triggers this flaw",
     "recommendation": "Concrete remediation advice and how to fix it securely"
   }
 ]
 Return ONLY raw JSON, with no markdown fences, no conversational text.
 """
 
+STRIX_POC_BUILDER_SYSTEM_PROMPT = """\
+You are the Strix Exploit & PoC Verification Agent (Strix Engine / Apache-2.0).
+Your goal is to transform discovered vulnerabilities into precise, reproducible proof-of-concept verification requests.
+For each vulnerability:
+1. Construct the exact cURL command matching the actual route, HTTP method, headers, and exploit payload.
+2. Define a concrete success indicator (expected server error, leaked database data, or bypass token).
+
+Return output strictly as a JSON array of findings with enriched "curl_command" and "success_indicator".
+"""
+
 
 class StrixEngine:
     """
-    Asynchronous Strix Pentest & Agentic Security Engine.
-    Executes deep multi-agent vulnerability discovery on target repositories using local Ollama.
+    Asynchronous Multi-Agent Strix Pentest & Security Engine.
+    Coordinates Recon, Attack, and PoC Builder agents to uncover deep logic bugs, IDOR, and injection flaws.
     """
 
     def __init__(
@@ -78,31 +109,53 @@ class StrixEngine:
         model_name: Optional[str] = None,
         timeout_seconds: int = 180,
     ) -> None:
-        # LLM Endpoint configured for local Ollama
-        self.ollama_base_url = (
-            ollama_base_url
-            or getattr(settings, "strix_ollama_base_url", "http://localhost:11434/v1")
-        )
-        self.model_name = (
-            model_name
-            or getattr(settings, "strix_model", "qwen2.5-coder:14b")
-            or settings.ollama_model
-        )
         self.timeout_seconds = timeout_seconds
 
-        self.client = AsyncOpenAI(
-            base_url=self.ollama_base_url,
-            api_key="ollama",
-            timeout=float(self.timeout_seconds),
-            max_retries=2,
-        )
+        if settings.llm_provider == "gemini" and settings.gemini_api_key:
+            # Use Gemini Cloud AI via OpenAI-compatible endpoint
+            self.model_name = settings.gemini_model or "gemini-2.5-flash"
+            self.client = AsyncOpenAI(
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                api_key=settings.gemini_api_key,
+                timeout=float(self.timeout_seconds),
+                max_retries=2,
+            )
+        else:
+            # Fallback to local Ollama AI
+            self.ollama_base_url = (
+                ollama_base_url
+                or getattr(settings, "strix_ollama_base_url", "http://localhost:11434/v1")
+            )
+            self.model_name = (
+                model_name
+                or getattr(settings, "strix_model", "qwen2.5-coder:14b")
+                or settings.ollama_model
+            )
+            self.client = AsyncOpenAI(
+                base_url=self.ollama_base_url,
+                api_key="ollama",
+                timeout=float(self.timeout_seconds),
+                max_retries=2,
+            )
+
+        self.route_extractor = RouteExtractor()
 
     def _collect_repository_code(
-        self, repo_dir: Path, max_files: int = 30, max_total_bytes: int = 120_000
+        self, repo_dir: Path, max_files: int = 150, max_total_bytes: int = 2_000_000
     ) -> List[Dict[str, str]]:
         """Collect source code files from repository for deep agent analysis."""
+        
+        # If using Ollama, keep strict limits to avoid OOM
+        if settings.llm_provider != "gemini":
+            max_files = 35
+            max_total_bytes = 150_000
+
         collected: List[Dict[str, str]] = []
         total_bytes = 0
+
+        # Prioritize routing, auth, models, and controllers first
+        priority_files: List[Path] = []
+        regular_files: List[Path] = []
 
         for root, dirs, files in os.walk(repo_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
@@ -114,25 +167,30 @@ class StrixEngine:
                 file_path = Path(root) / file
                 ext = file_path.suffix.lower()
 
-                if ext in AUDIT_EXTENSIONS or file in {".env", "Dockerfile", "firebase.json"}:
-                    try:
-                        content = file_path.read_text(encoding="utf-8", errors="replace")
-                        rel_path = file_path.relative_to(repo_dir).as_posix()
+                if ext in AUDIT_EXTENSIONS or file in {".env", "Dockerfile", "firebase.json", "package.json", "requirements.txt"}:
+                    name_lower = file.lower()
+                    if any(k in name_lower for k in ["route", "auth", "api", "controller", "model", "server", "app", "view", "admin"]):
+                        priority_files.append(file_path)
+                    else:
+                        regular_files.append(file_path)
 
-                        # Skip minified/huge files
-                        if len(content) > 30_000:
-                            content = content[:30_000] + "\n# ... [Truncated by Strix Engine]"
+        ordered_files = priority_files + regular_files
 
-                        collected.append({"file_path": rel_path, "content": content})
-                        total_bytes += len(content)
+        for file_path in ordered_files:
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                rel_path = file_path.relative_to(repo_dir).as_posix()
 
-                        if len(collected) >= max_files or total_bytes >= max_total_bytes:
-                            break
-                    except Exception as e:
-                        logger.debug(f"Failed to read {file_path}: {e}")
+                if len(content) > 35_000:
+                    content = content[:35_000] + "\n# ... [Truncated by Strix Engine]"
 
-            if len(collected) >= max_files or total_bytes >= max_total_bytes:
-                break
+                collected.append({"file_path": rel_path, "content": content})
+                total_bytes += len(content)
+
+                if len(collected) >= max_files or total_bytes >= max_total_bytes:
+                    break
+            except Exception as e:
+                logger.debug(f"Failed to read {file_path}: {e}")
 
         return collected
 
@@ -173,16 +231,15 @@ class StrixEngine:
             if findings:
                 return findings
         except Exception as ex:
-            logger.warning(f"Strix CLI execution returned or failed: {ex}. Falling back to internal agentic runner.")
+            logger.warning(f"Strix CLI execution failed: {ex}. Falling back to internal multi-agent runner.")
 
         return None
 
     def _parse_strix_output(self, raw_output: str, repo_dir: Path) -> List[VulnerabilityFinding]:
-        """Parse JSON or text findings from Strix Agent output."""
+        """Parse JSON findings from Strix Agent output."""
         findings: List[VulnerabilityFinding] = []
         cleaned = raw_output.strip()
 
-        # Handle markdown fences
         if "```json" in cleaned:
             parts = cleaned.split("```json")
             if len(parts) > 1:
@@ -193,7 +250,6 @@ class StrixEngine:
                 cleaned = parts[1].split("```")[0].strip()
 
         try:
-            # Look for JSON array in text
             start_idx = cleaned.find("[")
             end_idx = cleaned.rfind("]")
             if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
@@ -216,7 +272,7 @@ class StrixEngine:
                                 id=str(item.get("id") or f"STRIX-{idx+1:03d}"),
                                 scanner=ScannerType.STRIX,
                                 title=str(item.get("title") or "Strix Agent Identified Vulnerability"),
-                                description=str(item.get("description") or "Discovered by deep agentic analysis."),
+                                description=str(item.get("description") or "Discovered by Strix multi-agent analysis."),
                                 severity=sev,
                                 file_path=str(item.get("file_path") or "repository"),
                                 line_start=item.get("line_start") or 1,
@@ -233,12 +289,25 @@ class StrixEngine:
 
         return findings
 
+    # =========================================================================
+    # Multi-Agent Strix Pipeline Execution
+    # =========================================================================
+
     async def _run_agentic_scan(self, repo_dir: Path) -> List[VulnerabilityFinding]:
-        """Execute deep multi-agent analysis directly through local Ollama."""
+        """
+        Execute multi-agent Strix Pentest pipeline:
+        Stage 1: Route Extraction & Reconnaissance Agent
+        Stage 2: Red-Team Vulnerability Discovery Agent
+        Stage 3: PoC Builder & Verification
+        """
         code_files = self._collect_repository_code(repo_dir)
         if not code_files:
             logger.info("No supported code files found in repository for Strix deep scan.")
             return []
+
+        # 1. Discover endpoints across repository
+        endpoints: List[DiscoveredEndpoint] = self.route_extractor.scan_repository(repo_dir)
+        attack_surface_summary = self.route_extractor.format_attack_surface_summary(endpoints)
 
         # Prepare codebase bundle prompt
         code_summary = []
@@ -247,31 +316,61 @@ class StrixEngine:
                 f"### File: `{file_info['file_path']}`\n"
                 f"```\n{file_info['content']}\n```\n"
             )
+        codebase_text = "\n".join(code_summary)
 
-        user_prompt = (
+        # ---------------------------------------------------------------------
+        # Agent 1: Strix Reconnaissance & Architecture Agent
+        # ---------------------------------------------------------------------
+        logger.info(f"🕵️ [Strix Recon Agent] Analyzing architecture and attack surface for {repo_dir.name}...")
+        recon_prompt = (
             f"Target Repository Directory: {repo_dir.name}\n"
             f"Total Files Analyzed: {len(code_files)}\n\n"
-            "Below is the source code of the application. Perform an exhaustive penetration testing and code security review.\n"
-            "Identify real exploitable flaws, logic bugs, insecure configurations, or dangerous sink calls.\n\n"
-            + "\n".join(code_summary)
-            + "\n\nReturn the identified findings strictly in the requested JSON format."
+            f"{attack_surface_summary}\n\n"
+            "Below is the application source code. Analyze architecture, trust boundaries, and high-risk sinks:\n\n"
+            f"{codebase_text[:40_000]}"
+        )
+
+        recon_analysis = ""
+        try:
+            recon_resp = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": STRIX_RECON_SYSTEM_PROMPT},
+                    {"role": "user", "content": recon_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=1000,
+            )
+            recon_analysis = recon_resp.choices[0].message.content or ""
+        except Exception as ex:
+            logger.warning(f"Strix Recon Agent failed, proceeding with direct analysis: {ex}")
+
+        # ---------------------------------------------------------------------
+        # Agent 2: Strix Red-Team Vulnerability Discovery Agent
+        # ---------------------------------------------------------------------
+        logger.info(f"⚔️ [Strix Attack Agent] Hunting for deep logic flaws, IDOR, and injection chains...")
+        attack_user_prompt = (
+            f"Target Repository: {repo_dir.name}\n\n"
+            f"### RECONNAISSANCE MAP:\n{recon_analysis or attack_surface_summary}\n\n"
+            f"### SOURCE CODE REPOSITORY:\n{codebase_text}\n\n"
+            "Perform deep penetration testing. Find real, exploitable flaws (SQLi, IDOR, RCE, Auth Bypass, SSRF).\n"
+            "Return output strictly as a JSON array of findings in the requested format."
         )
 
         try:
-            logger.info(f"Calling Ollama model {self.model_name} at {self.ollama_base_url} for Strix Deep Pentest...")
-            response = await self.client.chat.completions.create(
+            attack_resp = await self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": STRIX_AGENT_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "system", "content": STRIX_ATTACK_SYSTEM_PROMPT},
+                    {"role": "user", "content": attack_user_prompt},
                 ],
                 temperature=0.2,
-                max_tokens=2500,
+                max_tokens=3000,
             )
-            raw_text = response.choices[0].message.content or ""
+            raw_text = attack_resp.choices[0].message.content or ""
             return self._parse_strix_output(raw_text, repo_dir)
         except Exception as e:
-            logger.error(f"Strix Agentic LLM execution failed: {e}")
+            logger.error(f"Strix Attack Agent LLM execution failed: {e}")
             return []
 
     async def scan(self, repo_dir: Path) -> SASTScanResult:
@@ -295,7 +394,7 @@ class StrixEngine:
                 errors=[f"Target path does not exist: {target_path}"],
             )
 
-        # 1. Try CLI first if present
+        # 1. Try official CLI first if present
         try:
             cli_findings = await self._run_cli_if_available(target_path)
             if cli_findings is not None:
@@ -303,7 +402,7 @@ class StrixEngine:
         except Exception as ex:
             logger.debug(f"CLI check error: {ex}")
 
-        # 2. Fall back to internal Agentic LLM pipeline
+        # 2. Fall back to multi-agent Strix pipeline
         if not findings:
             try:
                 agent_findings = await self._run_agentic_scan(target_path)

@@ -26,7 +26,7 @@ from aiogram.types import (
 )
 import httpx
 
-from ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult
+from ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult, StaticVerification
 from core.config import LLMProvider, settings
 from core.pr_creator import PullRequestCreator
 from core.verifier import OwnershipVerifier
@@ -34,6 +34,7 @@ from exploit.executor import execute_payload
 from scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
 from scanners.sast_scanner import SASTScanner
 from scanners.strix_runner import StrixEngine
+from scanners.vuln_classifier import VulnCategory, classify_vulnerability
 
 logger = logging.getLogger("cybersecuritybot.bot")
 router = Router()
@@ -92,7 +93,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
         f"🔹 **Что я умею:**\n"
         f"1. 🔐 **Proof of Ownership** — строгая проверка авторства репозитория перед аудитом.\n"
         f"2. 🔍 **SAST & Deep Pentest (Strix)** — поиск уязвимостей в Flutter/Dart, JS/TS, Python, Firestore и секретах.\n"
-        f"3. 🧠 **AI Remediation** — анализ ошибок локальной моделью `{settings.ollama_model}`.\n"
+        f"3. 🧠 **AI Remediation** — AI анализ ошибок и патчинг кода.\n"
         f"4. 🚀 **Auto-PR** — автоматическое открытие Pull Request с готовым исправленным кодом.\n\n"
         f"Нажми кнопку ниже, чтобы начать аудит!"
     )
@@ -141,7 +142,7 @@ async def handle_about_promo(event: Message | CallbackQuery) -> None:
         "• 🔐 **Proof of Ownership:** Защита от несанкционированного аудита.\n"
         "• ⚡ **SAST & Multi-Language:** Анализ Dart, JS/TS, Python, Firestore rules.\n"
         "• 🤖 **Strix Deep Pentest:** Мульти-агентный аудит бизнес-логики и IDOR (Apache 2.0).\n"
-        "• 🧠 **100% Local AI:** Полная конфиденциальность кода через Ollama.\n"
+        "• 🧠 **Hybrid AI:** Полная приватность через Ollama или скорость Cloud Gemini.\n"
         "• 🚀 **Auto-PR:** Автоматическое устранение уязвимостей в 1 клик.\n\n"
         "🔗 **GitHub:** [madiyarmoldakhmet-ai/cybersecyritybot](https://github.com/madiyarmoldakhmet-ai/cybersecyritybot)"
     )
@@ -214,17 +215,28 @@ async def handle_status(event: Message | CallbackQuery) -> None:
     except Exception:
         ollama_ok = False
 
-    ollama_icon = "🟢 Доступен" if ollama_ok else "🔴 Недоступен (проверьте `ollama serve`)"
-    gemini_icon = "🟢 Настроен" if settings.gemini_api_key else "⚪ Не задан"
+    is_gemini_active = settings.llm_provider == "gemini" and settings.gemini_api_key
+    
+    if is_gemini_active:
+        ai_status = "🟢 Online (Google Cloud)"
+        active_engine = "☁️ Google Gemini"
+        active_model = settings.gemini_model
+    elif ollama_ok:
+        ai_status = "🟢 Online (Private Cluster)"
+        active_engine = "🖥 Private Local AI"
+        active_model = settings.ollama_model
+    else:
+        ai_status = "⚠️ Высокая нагрузка (Попробуйте позже)"
+        active_engine = "☁️ AI Cluster"
+        active_model = "N/A"
 
     status_text = (
-        f"⚡ **Статус AI и Сервисов:**\n\n"
-        f"🖥 **Ollama Engine:** {ollama_icon}\n"
-        f"📍 **URL:** `{settings.ollama_base_url}`\n"
-        f"🎯 **Целевая модель:** `{settings.ollama_model}`\n"
-        f"📦 **Загруженные модели:** `{', '.join(models_list) if models_list else 'Нет'}`\n\n"
-        f"☁️ **Gemini Fallback:** {gemini_icon} (`{settings.gemini_model}`)\n"
-        f"⚙️ **Текущий активный провайдер:** `{settings.llm_provider.value}`"
+        f"📊 **Статус Платформы CyberSecurityBot**\n\n"
+        f"🚀 **Основной движок:** {active_engine}\n"
+        f"🧠 **Нейросеть:** `{active_model}`\n"
+        f"🔌 **Состояние API:** {ai_status}\n\n"
+        f"🛡️ **Strix Security Engine:** 🟢 Активен (v1.0.0)\n"
+        f"🌐 **GitHub Webhooks:** 🟢 Подключены"
     )
 
     await status_msg.edit_text(status_text, parse_mode="Markdown")
@@ -241,23 +253,23 @@ async def start_audit_flow(callback: CallbackQuery, state: FSMContext) -> None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔑 GitHub Access Token (Полный доступ + Auto-PR)",
-                    callback_data="auth_method_token"
+                    text="🚀 Быстрый старт (Проверка через коммит, 0 настроек)",
+                    callback_data="auth_method_commit"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="📝 Commit Challenge (Без токена через коммит)",
-                    callback_data="auth_method_commit"
+                    text="🔑 Продвинутый (GitHub Token + Auto-PR)",
+                    callback_data="auth_method_token"
                 )
             ]
         ]
     )
 
     await callback.message.answer(
-        "🔐 **Подтверждение авторства (Proof of Ownership)**\n\n"
-        "Для защиты чужих проектов перед запуском аудита бот должен убедиться, что вы являетесь владельцем или автором репозитория.\n\n"
-        "Выберите удобный способ подтверждения:",
+        "🔐 **Авторизация проекта**\n\n"
+        "Мы не сканируем чужие проекты без разрешения. Чтобы начать аудит, подтвердите, что репозиторий ваш.\n\n"
+        "Для новичков рекомендуем **Быстрый старт** — вам просто нужно будет добавить один пустой коммит в ваш код.",
         reply_markup=kb,
         parse_mode="Markdown"
     )
@@ -634,14 +646,21 @@ async def run_sast_audit_pipeline(
                 f"Выберите действие ниже для анализа, генерации проверочного запроса или авто-исправления:"
             )
             btn_pr_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ и патч"
+            # Adaptive button: exploit for remote vulns, verify for static
+            top_vuln_category = classify_vulnerability(top_f)
+            if top_vuln_category == VulnCategory.EXPLOITABLE_REMOTE:
+                verify_btn = InlineKeyboardButton(
+                    text="🧪 Сгенерировать проверочный запрос",
+                    callback_data=f"exploit_gen_{session_id}_0"
+                )
+            else:
+                verify_btn = InlineKeyboardButton(
+                    text="🔍 Верифицировать в коде",
+                    callback_data=f"static_verify_{session_id}_0"
+                )
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🧪 Сгенерировать проверочный запрос",
-                            callback_data=f"exploit_gen_{session_id}_0"
-                        )
-                    ],
+                    [verify_btn],
                     [
                         InlineKeyboardButton(
                             text=btn_pr_text,
@@ -717,12 +736,12 @@ async def run_deep_strix_audit_pipeline(
             shutil.rmtree(temp_dir, ignore_errors=True)
             return
 
-        # Start animation background loop
+        # Start multi-agent animation background loop
         anim_messages = [
-            "🤖 **[Strix Agents]** Агенты ищут уязвимости... 🔍\n⏳ *Инициализация мульти-агентного пентеста*",
-            "🧠 **[Strix Engine]** Агент анализа бизнес-логики и фаззинга в работе... ⚡\n⏳ *Поиск IDOR, инъекций и обходов авторизации*",
-            "🛡️ **[Strix Multi-Agent]** Валидация цепочек эксплуатации и прав доступа... 🔐\n⏳ *Анализ контекста кода и конфигураций*",
-            "📝 **[Strix Reporter]** Формирование верифицированных отчетов... 📊\n⏳ *Подготовка рекомендаций и авто-патчей*",
+            "🕵️ **[Strix Recon Agent]** Картирование эндпоинтов, доверенных зон и архитектуры... 🔍\n⏳ *Анализ поверхности атаки и моделей данных*",
+            "⚔️ **[Strix Attack Agent]** Поиск цепочек IDOR, инъекций и логических дыр... ⚡\n⏳ *Анализ прав доступа, BOLA и потоков данных*",
+            "🧪 **[Strix PoC Builder]** Конструирование верификационных эксплойтов... 🎯\n⏳ *Генерация точных cURL-векторов и доказательств*",
+            "📝 **[Strix Engine]** Синтез отчета и подготовка авто-патчей... 🛡️\n⏳ *Финальная верификация находок*",
         ]
 
         async def status_animator():
@@ -816,14 +835,21 @@ async def run_deep_strix_audit_pipeline(
                 f"Выберите действие ниже для анализа, генерации проверочного запроса или авто-исправления:"
             )
             btn_pr_text = "🤖 Сгенерировать AI-исправление и PR" if can_create_pr else "💡 AI-анализ и патч"
+            # Adaptive button: exploit for remote vulns, verify for static
+            top_vuln_category = classify_vulnerability(top_f)
+            if top_vuln_category == VulnCategory.EXPLOITABLE_REMOTE:
+                verify_btn = InlineKeyboardButton(
+                    text="🧪 Сгенерировать проверочный запрос",
+                    callback_data=f"exploit_gen_{session_id}_0"
+                )
+            else:
+                verify_btn = InlineKeyboardButton(
+                    text="🔍 Верифицировать в коде",
+                    callback_data=f"static_verify_{session_id}_0"
+                )
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🧪 Сгенерировать проверочный запрос",
-                            callback_data=f"exploit_gen_{session_id}_0"
-                        )
-                    ],
+                    [verify_btn],
                     [
                         InlineKeyboardButton(
                             text=btn_pr_text,
@@ -972,14 +998,21 @@ async def handle_view_finding_detail(callback: CallbackQuery, state: FSMContext)
     if f.code_snippet:
         detail_text += f"\n**Контекст кода:**\n```python\n{f.code_snippet[:400]}\n```"
 
+    # Adaptive button: exploit for remote vulns, verify for static
+    finding_category = classify_vulnerability(f)
+    if finding_category == VulnCategory.EXPLOITABLE_REMOTE:
+        verify_btn = InlineKeyboardButton(
+            text="🧪 Сгенерировать проверочный запрос",
+            callback_data=f"exploit_gen_{session_id}_{idx}"
+        )
+    else:
+        verify_btn = InlineKeyboardButton(
+            text="🔍 Верифицировать в коде",
+            callback_data=f"static_verify_{session_id}_{idx}"
+        )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🧪 Сгенерировать проверочный запрос",
-                    callback_data=f"exploit_gen_{session_id}_{idx}"
-                )
-            ],
+            [verify_btn],
             [
                 InlineKeyboardButton(
                     text="🤖 Сгенерировать AI-исправление и PR",
@@ -1001,7 +1034,7 @@ async def handle_view_finding_detail(callback: CallbackQuery, state: FSMContext)
 
 @router.callback_query(F.data.startswith("exploit_gen_") | (F.data == "exploit_generate"))
 async def handle_generate_exploit(callback: CallbackQuery, state: FSMContext) -> None:
-    """Generate verification exploit payload using RemediationEngine."""
+    """Generate verification exploit payload using RemediationEngine with smart classification."""
     data = await state.get_data()
     target_finding: Optional[VulnerabilityFinding] = None
     code_context: str = ""
@@ -1034,50 +1067,148 @@ async def handle_generate_exploit(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer("⚠️ Нет активной уязвимости для генерации запроса.", show_alert=True)
         return
 
+    active_model = settings.gemini_model if settings.llm_provider == "gemini" and settings.gemini_api_key else settings.ollama_model
     status_msg = await callback.message.answer(
         f"🧪 **Генерация проверочного запроса для:** `{target_finding.title}`...\n"
-        f"⏳ *ИИ ({settings.ollama_model}) формирует параметры запроса и curl-команду...*",
+        f"⏳ *ИИ ({active_model}) анализирует вектор атаки и формирует запрос...*",
         parse_mode="Markdown"
     )
 
     try:
         engine = RemediationEngine()
-        payload = await engine.generate_exploit_payload(
+        result = await engine.generate_verification(
             finding=target_finding,
             code_context=code_context,
             endpoint=data.get("endpoint")
         )
 
-        # Save ExploitPayload into FSM state
-        await state.update_data(exploit_payload=payload.model_dump())
+        # Smart dispatch: ExploitPayload vs StaticVerification
+        if isinstance(result, StaticVerification):
+            await _display_static_verification(status_msg, target_finding, result)
+        else:
+            # ExploitPayload path
+            payload = result
+            await state.update_data(exploit_payload=payload.model_dump())
 
-        msg_text = (
-            f"🧪 **Проверочный запрос для подтверждения уязвимости:**\n\n"
-            f"📌 **Уязвимость:** `{target_finding.title}`\n"
-            f"🎯 **Индикатор успеха:** `{payload.success_indicator}`\n"
-            f"📊 **Уверенность (Confidence):** `{payload.confidence:.2f}`\n\n"
-            f"📋 **cURL команда:**\n"
-            f"```bash\n{payload.curl_command}\n```"
-        )
-
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🚀 Запустить проверку",
-                        callback_data="exploit_run"
-                    )
-                ]
-            ]
-        )
-
-        await status_msg.edit_text(msg_text, reply_markup=kb, parse_mode="Markdown")
+            # Don't offer "Run" button if confidence is 0 (broken exploit)
+            if payload.confidence > 0.0:
+                msg_text = (
+                    f"🧪 **Проверочный запрос для подтверждения уязвимости:**\n\n"
+                    f"📌 **Уязвимость:** `{target_finding.title}`\n"
+                    f"🎯 **Индикатор успеха:** `{payload.success_indicator}`\n"
+                    f"📊 **Уверенность (Confidence):** `{payload.confidence:.2f}`\n\n"
+                    f"📋 **cURL команда:**\n"
+                    f"```bash\n{payload.curl_command}\n```"
+                )
+                kb = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="🚀 Запустить проверку",
+                                callback_data="exploit_run"
+                            )
+                        ]
+                    ]
+                )
+                await status_msg.edit_text(msg_text, reply_markup=kb, parse_mode="Markdown")
+            else:
+                # Exploit generation returned 0 confidence — inform user clearly
+                msg_text = (
+                    f"⚠️ **Автоматическая генерация HTTP-эксплойта не удалась**\n\n"
+                    f"📌 **Уязвимость:** `{target_finding.title}`\n"
+                    f"📁 **Файл:** `{target_finding.file_path}`\n\n"
+                    f"💡 Эта уязвимость может требовать ручного анализа или специфического окружения "
+                    f"для эксплуатации. Рекомендуем использовать AI-исправление для устранения проблемы."
+                )
+                await status_msg.edit_text(msg_text, parse_mode="Markdown")
 
     except Exception as ex:
         logger.exception(f"Exploit generation failed: {ex}")
-        await status_msg.edit_text(f"⚠️ Ошибка при генерации проверочного запроса: `{str(ex)}`")
+        await status_msg.edit_text(
+            f"⚠️ Ошибка при генерации проверочного запроса: `{str(ex)[:200]}`\n\n"
+            f"💡 Попробуйте использовать AI-исправление вместо проверочного запроса.",
+            parse_mode="Markdown"
+        )
 
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("static_verify_"))
+async def handle_static_verification(callback: CallbackQuery, state: FSMContext) -> None:
+    """Generate local static verification for code quality vulnerabilities."""
+    parts = callback.data.split("_")
+    session_id = parts[2]
+    idx = int(parts[3])
+
+    session = SCAN_SESSIONS.get(session_id)
+    if not session:
+        await callback.answer("⚠️ Сессия аудита устарела.", show_alert=True)
+        return
+
+    scan_result: SASTScanResult = session["scan_result"]
+    if idx >= len(scan_result.findings):
+        await callback.answer("⚠️ Уязвимость не найдена.", show_alert=True)
+        return
+
+    target_finding = scan_result.findings[idx]
+    code_context = target_finding.code_snippet or ""
+
+    active_model = settings.gemini_model if settings.llm_provider == "gemini" and settings.gemini_api_key else settings.ollama_model
+    status_msg = await callback.message.answer(
+        f"🔍 **Верификация уязвимости в коде:** `{target_finding.title}`...\n"
+        f"⏳ *ИИ ({active_model}) анализирует исходный код...*",
+        parse_mode="Markdown"
+    )
+
+    try:
+        engine = RemediationEngine()
+        verification = await engine.generate_static_verification(
+            finding=target_finding,
+            code_context=code_context
+        )
+        await _display_static_verification(status_msg, target_finding, verification)
+    except Exception as ex:
+        logger.exception(f"Static verification failed: {ex}")
+        await status_msg.edit_text(
+            f"⚠️ Ошибка при верификации: `{str(ex)[:200]}`",
+            parse_mode="Markdown"
+        )
+
+    await callback.answer()
+
+
+async def _display_static_verification(
+    status_msg: Message,
+    finding: VulnerabilityFinding,
+    verification: StaticVerification
+) -> None:
+    """Render StaticVerification result in Telegram."""
+    cmds_text = ""
+    if verification.verification_commands:
+        cmds_list = "\n".join(verification.verification_commands[:5])
+        cmds_text = f"\n🔧 **Команды для локальной верификации:**\n```bash\n{cmds_list}\n```"
+
+    fix_text = ""
+    if verification.fix_snippet:
+        fix_text = f"\n✅ **Исправленный код:**\n```\n{verification.fix_snippet[:600]}\n```"
+
+    msg_text = (
+        f"🔍 **Верификация уязвимости в коде**\n\n"
+        f"📌 **Уязвимость:** `{finding.title}`\n"
+        f"📁 **Файл:** `{finding.file_path}` (стр. {finding.line_start or 1})\n"
+        f"🏷 **Тип:** Статическая / конфигурационная\n"
+        f"📊 **Уверенность:** `{verification.confidence:.2f}`\n\n"
+        f"📝 **Описание проблемы:**\n{verification.explanation}\n\n"
+        f"⚠️ **Риски:**\n{verification.risk_description}"
+        f"{cmds_text}"
+        f"{fix_text}"
+    )
+
+    # Truncate if too long for Telegram (4096 char limit)
+    if len(msg_text) > 4000:
+        msg_text = msg_text[:3990] + "\n..."  
+
+    await status_msg.edit_text(msg_text, parse_mode="Markdown")
 
 
 @router.callback_query(F.data == "exploit_run")
@@ -1130,13 +1261,24 @@ async def execute_and_display_payload(
     target_url: str
 ) -> None:
     """Execute payload via executor and render results in Telegram."""
+    payload = ExploitPayload(**payload_dict) if isinstance(payload_dict, dict) else payload_dict
+
+    # Don't send broken requests (confidence 0 = no valid exploit)
+    if payload.confidence == 0.0 or (not payload.payload and not payload.body):
+        await message.answer(
+            f"⚠️ **Невозможно выполнить проверку**\n\n"
+            f"Проверочный запрос не был успешно сгенерирован (confidence: 0.00).\n"
+            f"Эта уязвимость может не поддаваться автоматической HTTP-верификации.\n\n"
+            f"💡 Рекомендуем использовать AI-исправление для устранения проблемы.",
+            parse_mode="Markdown"
+        )
+        return
+
     status_msg = await message.answer(
         f"🚀 **Отправка проверочного запроса на `{target_url}`...**\n"
         f"⏳ *Ожидание ответа сервера...*",
         parse_mode="Markdown"
     )
-
-    payload = ExploitPayload(**payload_dict) if isinstance(payload_dict, dict) else payload_dict
 
     try:
         success, output = await execute_payload(
@@ -1148,22 +1290,35 @@ async def execute_and_display_payload(
             success_indicator=payload.success_indicator,
         )
 
-        status_icon = "✅" if success else "❌"
-        status_title = "Уязвимость подтверждена!" if success else "Уязвимость не подтверждена"
+        if success:
+            status_icon = "✅"
+            status_title = "Уязвимость подтверждена!"
+            status_detail = "Индикатор эксплуатации обнаружен в ответе сервера."
+        else:
+            status_icon = "🛡"
+            status_title = "Уязвимость не подтверждена"
+            status_detail = "Индикатор эксплуатации не найден. Сервер может быть защищён, либо требуется другой вектор атаки."
 
         result_text = (
             f"{status_icon} **Результат проверки: {status_title}**\n\n"
-            f"🎯 **Индикатор успеха:** `{payload.success_indicator or 'N/A'}`\n"
+            f"ℹ️ {status_detail}\n\n"
             f"🌐 **Целевой URL:** `{target_url}`\n\n"
-            f"📄 **Ответ сервера (первые 500 символов):**\n"
-            f"```\n{output[:500] if output else '(Пустой ответ)'}\n```"
+            f"{output[:1500] if output else '(Пустой ответ)'}"
         )
+
+        # Truncate for Telegram limit
+        if len(result_text) > 4000:
+            result_text = result_text[:3990] + "\n..."
 
         await status_msg.edit_text(result_text, parse_mode="Markdown")
 
     except Exception as ex:
         logger.exception(f"Execute payload error: {ex}")
-        await status_msg.edit_text(f"❌ Ошибка при выполнении запроса: `{str(ex)}`")
+        await status_msg.edit_text(
+            f"❌ Ошибка при выполнении запроса: `{str(ex)[:200]}`\n\n"
+            f"💡 Проверьте доступность целевого URL и попробуйте снова.",
+            parse_mode="Markdown"
+        )
 
 
 @router.callback_query(F.data.startswith("remediate_"))
@@ -1189,8 +1344,9 @@ async def handle_remediation_and_pr(callback: CallbackQuery, state: FSMContext) 
         await callback.answer("⚠️ Сессия аудита устарела.", show_alert=True)
         return
 
+    active_model = settings.gemini_model if settings.llm_provider == "gemini" and settings.gemini_api_key else settings.ollama_model
     await callback.message.answer(
-        f"🤖 **ИИ ({settings.ollama_model}) анализирует уязвимость:**\n"
+        f"🤖 **ИИ ({active_model}) анализирует уязвимость:**\n"
         f"`{target_finding.title}` в `{target_finding.file_path}`...\n"
         f"⏳ *Генерация безопасного патча...*",
         parse_mode="Markdown"

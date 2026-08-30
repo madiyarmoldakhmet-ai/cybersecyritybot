@@ -135,8 +135,42 @@ async def process_guardian_audit(
         )
         await asyncio.wait_for(proc.communicate(), timeout=45.0)
 
-        scanner = SASTScanner()
-        scan_result = await scanner.scan(temp_dir)
+        # 1. Run Strix Deep Agentic Scanner
+        from scanners.strix_runner import StrixEngine
+        strix_engine = StrixEngine()
+        strix_res_task = asyncio.create_task(strix_engine.scan(temp_dir))
+
+        # 2. Run AST rule scanner
+        from scanners.sast_scanner import SASTScanner
+        sast_scanner = SASTScanner()
+        sast_res_task = asyncio.create_task(sast_scanner.scan(temp_dir))
+
+        strix_res, sast_res = await asyncio.gather(strix_res_task, sast_res_task)
+
+        # Merge findings (Strix first, then AST findings deduplicated)
+        all_findings = list(strix_res.findings)
+        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in strix_res.findings}
+
+        for sf in sast_res.findings:
+            key = f"{sf.file_path}:{sf.line_start}:{sf.title}"
+            if key not in seen_keys:
+                all_findings.append(sf)
+                seen_keys.add(key)
+
+        total_duration = round(strix_res.duration_seconds + sast_res.duration_seconds, 2)
+        severity_counts = {}
+        for f in all_findings:
+            severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
+
+        scan_result = SASTScanResult(
+            target_path=str(temp_dir),
+            total_findings=len(all_findings),
+            findings_by_severity=severity_counts,
+            findings=all_findings,
+            duration_seconds=total_duration,
+            scanners_run=[ScannerType.STRIX, ScannerType.SEMGREP, ScannerType.BANDIT],
+            errors=strix_res.errors + sast_res.errors,
+        )
 
         crit_count = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)
         high_count = scan_result.findings_by_severity.get(Severity.HIGH, 0)

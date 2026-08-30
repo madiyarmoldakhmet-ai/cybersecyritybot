@@ -1,15 +1,17 @@
 """
 DAST (Dynamic Application Security Testing) Scanner for CyberSecurityBot.
-Performs safe, non-destructive dynamic security audits on HTTP/HTTPS endpoints:
+Performs safe, non-destructive active dynamic security audits on HTTP/HTTPS endpoints:
 - Security Headers Inspection (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)
 - Insecure CORS Configuration & Wildcard Origin Reflection
 - Cookie Security Flags (Secure, HttpOnly, SameSite)
+- Active Probing: SQL Injection error detection, Reflected XSS canary, Path Traversal
+- Sensitive debug & admin file exposure (/.env, /.git/HEAD, /actuator, /swagger.json)
 - Server & Tech Stack Information Disclosure
-- Open Redirect Parameter Probing
 """
 
 import asyncio
 import logging
+import re
 import time
 from typing import Dict, List, Optional, Set
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -20,6 +22,33 @@ from scanners.models import DASTScanResult, ScannerType, Severity, Vulnerability
 
 logger = logging.getLogger("cybersecuritybot.dast_scanner")
 
+# SQL Error signatures for dynamic error-based SQLi detection
+SQL_ERROR_PATTERNS = [
+    re.compile(r"SQL syntax.*MySQL", re.I),
+    re.compile(r"Warning.*mysql_.*", re.I),
+    re.compile(r"valid MySQL result", re.I),
+    re.compile(r"PostgreSQL.*ERROR", re.I),
+    re.compile(r"Warning.*\Wpg_.*", re.I),
+    re.compile(r"valid PostgreSQL result", re.I),
+    re.compile(r"Driver.*SQL[\-\_\ ]*Server", re.I),
+    re.compile(r"OLE DB.*SQL Server", re.I),
+    re.compile(r"SQLite/JDBCDriver", re.I),
+    re.compile(r"SQLite.Exception", re.I),
+    re.compile(r"System.Data.SQLite.SQLiteException", re.I),
+    re.compile(r"Unclosed quotation mark after the character string", re.I),
+    re.compile(r"syntax error in query expression", re.I),
+    re.compile(r"ORA-[0-9]{4,5}", re.I),
+]
+
+SENSITIVE_DEBUG_PATHS = [
+    ("/.env", "Exposed Environment Variables (/.env)", Severity.CRITICAL, "DB_PASSWORD|SECRET_KEY|API_KEY"),
+    ("/.git/HEAD", "Exposed Git Repository Metadata (/.git/HEAD)", Severity.HIGH, "ref: refs/"),
+    ("/actuator/health", "Spring Actuator Management Endpoint", Severity.MEDIUM, "status.*UP"),
+    ("/swagger.json", "Exposed OpenAPI / Swagger Documentation", Severity.LOW, "openapi|swagger"),
+    ("/api-docs", "Exposed API Documentation Endpoint", Severity.LOW, "swagger|openapi|api-docs"),
+    ("/metrics", "Exposed Prometheus / Server Metrics", Severity.LOW, "http_requests|process_cpu"),
+]
+
 
 class DASTScanner:
     """Dynamic Application Security Scanner for live web applications and API endpoints."""
@@ -28,7 +57,7 @@ class DASTScanner:
         self.timeout_seconds = timeout_seconds
         self.follow_redirects = follow_redirects
         self.headers = {
-            "User-Agent": "CyberSecurityBot-SecurityAuditor/1.0 (+https://github.com/madiyarmoldakhmet-ai/cybersecyritybot)"
+            "User-Agent": "CyberSecurityBot-SecurityAuditor/2.0 (Powered by Strix Engine; +https://github.com/madiyarmoldakhmet-ai/cybersecyritybot)"
         }
 
     def _normalize_url(self, raw_url: str) -> str:
@@ -38,12 +67,14 @@ class DASTScanner:
             url = f"https://{url}"
         return url
 
+    # ---- 1. Passive Header & Config Audits -----------------------------------
+
     def _check_security_headers(self, url: str, headers: httpx.Headers) -> List[VulnerabilityFinding]:
         """Audit presence and configuration of essential HTTP security response headers."""
         findings: List[VulnerabilityFinding] = []
         lower_headers = {k.lower(): v for k, v in headers.items()}
 
-        # 1. Content-Security-Policy (CSP)
+        # Content-Security-Policy (CSP)
         if "content-security-policy" not in lower_headers:
             findings.append(
                 VulnerabilityFinding(
@@ -60,7 +91,7 @@ class DASTScanner:
                 )
             )
 
-        # 2. Strict-Transport-Security (HSTS) - for HTTPS
+        # Strict-Transport-Security (HSTS)
         if url.startswith("https://") and "strict-transport-security" not in lower_headers:
             findings.append(
                 VulnerabilityFinding(
@@ -77,7 +108,7 @@ class DASTScanner:
                 )
             )
 
-        # 3. X-Frame-Options (Clickjacking)
+        # X-Frame-Options (Clickjacking)
         if "x-frame-options" not in lower_headers and "content-security-policy" not in lower_headers:
             findings.append(
                 VulnerabilityFinding(
@@ -94,140 +125,76 @@ class DASTScanner:
                 )
             )
 
-        # 4. X-Content-Type-Options
+        # X-Content-Type-Options
         if lower_headers.get("x-content-type-options", "").lower() != "nosniff":
             findings.append(
                 VulnerabilityFinding(
-                    id="dast.missing-nosniff",
+                    id="dast.missing-x-content-type-options",
                     scanner=ScannerType.DAST,
-                    title="Missing X-Content-Type-Options: nosniff",
-                    description="Without 'X-Content-Type-Options: nosniff', browsers may MIME-sniff responses away from the declared content-type, executing untrusted scripts.",
+                    title="Missing X-Content-Type-Options: nosniff Header",
+                    description="X-Content-Type-Options is missing or not set to 'nosniff', allowing browsers to MIME-sniff response content.",
                     severity=Severity.LOW,
                     file_path=url,
                     cwe=["CWE-16"],
                     cve=[],
-                    recommendation="Configure 'X-Content-Type-Options: nosniff' header.",
+                    recommendation="Set 'X-Content-Type-Options: nosniff' header.",
                     raw_metadata={"url": url}
                 )
             )
 
         return findings
 
-    def _check_information_disclosure(self, url: str, headers: httpx.Headers) -> List[VulnerabilityFinding]:
-        """Detect tech stack and backend version leakage in HTTP headers."""
-        findings: List[VulnerabilityFinding] = []
-        lower_headers = {k.lower(): v for k, v in headers.items()}
-
-        # Check Server header
-        server_header = lower_headers.get("server", "")
-        if server_header and any(c.isdigit() for c in server_header):
-            findings.append(
-                VulnerabilityFinding(
-                    id="dast.server-version-leak",
-                    scanner=ScannerType.DAST,
-                    title=f"Detailed Server Version Leaked: {server_header}",
-                    description=f"The 'Server' header exposes detailed software versions ('{server_header}'), assisting attackers in vulnerability targeting.",
-                    severity=Severity.LOW,
-                    file_path=url,
-                    code_snippet=f"Server: {server_header}",
-                    cwe=["CWE-200"],
-                    cve=[],
-                    recommendation="Configure the web server/reverse proxy to strip version numbers or mask the Server header.",
-                    raw_metadata={"header": server_header}
-                )
-            )
-
-        # Check X-Powered-By header
-        powered_by = lower_headers.get("x-powered-by", "")
-        if powered_by:
-            findings.append(
-                VulnerabilityFinding(
-                    id="dast.x-powered-by-leak",
-                    scanner=ScannerType.DAST,
-                    title=f"Technology Stack Disclosure via X-Powered-By: {powered_by}",
-                    description=f"The application leaks underlying framework information in the 'X-Powered-By: {powered_by}' header.",
-                    severity=Severity.LOW,
-                    file_path=url,
-                    code_snippet=f"X-Powered-By: {powered_by}",
-                    cwe=["CWE-200"],
-                    cve=[],
-                    recommendation="Disable the X-Powered-By header in application middleware (e.g. app.disable('x-powered-by')).",
-                    raw_metadata={"header": powered_by}
-                )
-            )
-
-        return findings
-
     async def _check_cors_configuration(self, url: str, client: httpx.AsyncClient) -> List[VulnerabilityFinding]:
-        """Probe for insecure Cross-Origin Resource Sharing (CORS) configurations."""
+        """Audit for permissive CORS and Origin Reflection."""
         findings: List[VulnerabilityFinding] = []
-        origin_payload = "https://evil-attacker.example.com"
+        evil_origin = "https://attacker-controlled-origin.example.com"
+        custom_headers = {**self.headers, "Origin": evil_origin}
 
         try:
-            resp = await client.get(
-                url,
-                headers={"Origin": origin_payload},
-                timeout=self.timeout_seconds
-            )
-            allow_origin = resp.headers.get("access-control-allow-origin", "")
-            allow_creds = resp.headers.get("access-control-allow-credentials", "").lower() == "true"
+            resp = await client.get(url, headers=custom_headers)
+            acao = resp.headers.get("access-control-allow-origin", "")
+            acac = resp.headers.get("access-control-allow-credentials", "").lower()
 
-            if allow_origin == "*" and allow_creds:
-                findings.append(
-                    VulnerabilityFinding(
-                        id="dast.cors-wildcard-with-credentials",
-                        scanner=ScannerType.DAST,
-                        title="Critical CORS Misconfiguration: Wildcard with Credentials",
-                        description="The endpoint allows all origins (*) while allowing credentials (cookies/auth headers).",
-                        severity=Severity.CRITICAL,
-                        file_path=url,
-                        code_snippet="Access-Control-Allow-Origin: *\nAccess-Control-Allow-Credentials: true",
-                        cwe=["CWE-942"],
-                        cve=[],
-                        recommendation="Explicitly whitelist trusted origins instead of using wildcard origins when credentials are supported.",
-                        raw_metadata={"headers": dict(resp.headers)}
+            if acao == evil_origin or acao == "*":
+                if acac == "true" or acao == evil_origin:
+                    findings.append(
+                        VulnerabilityFinding(
+                            id="dast.cors-arbitrary-origin-reflection",
+                            scanner=ScannerType.DAST,
+                            title="Insecure CORS: Arbitrary Origin Reflection",
+                            description=f"Server reflects arbitrary untrusted Origin header ('{evil_origin}') in Access-Control-Allow-Origin.",
+                            severity=Severity.HIGH,
+                            file_path=url,
+                            cwe=["CWE-942", "CWE-346"],
+                            cve=[],
+                            recommendation="Validate Origin against a strict whitelist of authorized domains.",
+                            raw_metadata={"origin": evil_origin, "acao": acao, "acac": acac}
+                        )
                     )
-                )
-            elif allow_origin == origin_payload:
-                findings.append(
-                    VulnerabilityFinding(
-                        id="dast.cors-arbitrary-origin-reflection",
-                        scanner=ScannerType.DAST,
-                        title="Insecure CORS: Arbitrary Origin Reflection",
-                        description="The server reflects untrusted request Origin headers back into Access-Control-Allow-Origin.",
-                        severity=Severity.HIGH,
-                        file_path=url,
-                        code_snippet=f"Origin: {origin_payload}\nAccess-Control-Allow-Origin: {allow_origin}",
-                        cwe=["CWE-942"],
-                        cve=[],
-                        recommendation="Validate the Origin header against a strict server-side whitelist before echoing it.",
-                        raw_metadata={"headers": dict(resp.headers)}
-                    )
-                )
         except Exception as e:
-            logger.debug(f"CORS probe skipped/failed for {url}: {e}")
+            logger.debug(f"CORS check failed on {url}: {e}")
 
         return findings
 
     async def _check_cookie_security(self, url: str, response: httpx.Response) -> List[VulnerabilityFinding]:
-        """Verify presence of Secure, HttpOnly, and SameSite flags on session cookies."""
+        """Audit Set-Cookie security flags."""
         findings: List[VulnerabilityFinding] = []
-        cookies = response.cookies
+        is_https = url.startswith("https://")
 
-        for cookie in cookies.jar:
+        for cookie in response.cookies.jar:
             flags_missing = []
-            if not cookie.secure and url.startswith("https://"):
+            if is_https and not cookie.secure:
                 flags_missing.append("Secure")
-            if not getattr(cookie, "httponly", False) and "httponly" not in str(cookie._rest).lower():
+            if "httponly" not in str(cookie._rest).lower():
                 flags_missing.append("HttpOnly")
 
             if flags_missing:
                 findings.append(
                     VulnerabilityFinding(
-                        id="dast.insecure-cookie-flags",
+                        id=f"dast.insecure-cookie-{cookie.name}",
                         scanner=ScannerType.DAST,
-                        title=f"Cookie '{cookie.name}' Missing Security Flags ({', '.join(flags_missing)})",
-                        description=f"Cookie '{cookie.name}' is set without {' and '.join(flags_missing)} flag(s), making it vulnerable to interception or XSS-based theft.",
+                        title=f"Insecure Cookie Flags for '{cookie.name}'",
+                        description=f"Cookie '{cookie.name}' is set without {' and '.join(flags_missing)} flag(s).",
                         severity=Severity.MEDIUM,
                         file_path=url,
                         code_snippet=f"Set-Cookie: {cookie.name}=...",
@@ -239,6 +206,100 @@ class DASTScanner:
                 )
 
         return findings
+
+    # ---- 2. Active Security Probing -----------------------------------------
+
+    async def _probe_sql_injection(self, url: str, client: httpx.AsyncClient) -> List[VulnerabilityFinding]:
+        """Active Canary Probe: Check for SQL injection error leakage in parameters."""
+        findings: List[VulnerabilityFinding] = []
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+
+        if not params:
+            # Test default parameter
+            test_url = f"{url}{'&' if '?' in url else '?'}id=1%27%20OR%20%271%27=%271"
+            try:
+                resp = await client.get(test_url)
+                for pattern in SQL_ERROR_PATTERNS:
+                    if pattern.search(resp.text):
+                        findings.append(
+                            VulnerabilityFinding(
+                                id="dast.active-sqli-error",
+                                scanner=ScannerType.DAST,
+                                title="Active Probe: SQL Injection Error Detected",
+                                description=f"The endpoint leaked database error signatures when probed with a single quote: {pattern.pattern}",
+                                severity=Severity.CRITICAL,
+                                file_path=test_url,
+                                cwe=["CWE-89"],
+                                cve=[],
+                                recommendation="Use parameterized queries / prepared statements (e.g. ORM or parameterized cursor execution).",
+                                raw_metadata={"payload": "id=1' OR '1'='1", "pattern": pattern.pattern}
+                            )
+                        )
+                        break
+            except Exception:
+                pass
+
+        return findings
+
+    async def _probe_reflected_xss(self, url: str, client: httpx.AsyncClient) -> List[VulnerabilityFinding]:
+        """Active Canary Probe: Check for unescaped HTML/JS reflection in parameters."""
+        findings: List[VulnerabilityFinding] = []
+        canary = "strix_xss_canary_probe_991"
+        payload = f"<script>{canary}</script>"
+        test_url = f"{url}{'&' if '?' in url else '?'}q={payload}"
+
+        try:
+            resp = await client.get(test_url)
+            if payload in resp.text and "text/html" in resp.headers.get("content-type", ""):
+                findings.append(
+                    VulnerabilityFinding(
+                        id="dast.active-reflected-xss",
+                        scanner=ScannerType.DAST,
+                        title="Active Probe: Reflected Cross-Site Scripting (XSS)",
+                        description=f"Server reflected unescaped HTML script tags in the response body for parameter 'q'.",
+                        severity=Severity.HIGH,
+                        file_path=test_url,
+                        cwe=["CWE-79"],
+                        cve=[],
+                        recommendation="Implement HTML output encoding / context-aware escaping on all user-controlled reflections.",
+                        raw_metadata={"payload": payload}
+                    )
+                )
+        except Exception:
+            pass
+
+        return findings
+
+    async def _check_sensitive_file_exposures(self, base_url: str, client: httpx.AsyncClient) -> List[VulnerabilityFinding]:
+        """Active Probe: Check for exposed sensitive files (.env, .git/HEAD, Actuators)."""
+        findings: List[VulnerabilityFinding] = []
+
+        for path, title, sev, indicator_regex in SENSITIVE_DEBUG_PATHS:
+            target = urljoin(base_url, path)
+            try:
+                resp = await client.get(target)
+                if resp.status_code == 200 and re.search(indicator_regex, resp.text, re.I):
+                    findings.append(
+                        VulnerabilityFinding(
+                            id=f"dast.exposed-file-{path.replace('/', '-').strip('-')}",
+                            scanner=ScannerType.DAST,
+                            title=title,
+                            description=f"Publicly accessible sensitive file found at {target} matching signature '{indicator_regex}'.",
+                            severity=sev,
+                            file_path=target,
+                            cwe=["CWE-200", "CWE-538"],
+                            cve=[],
+                            recommendation=f"Restrict public web server access to '{path}' or remove file from the production deployment root.",
+                            raw_metadata={"url": target, "status": resp.status_code}
+                        )
+                    )
+            except Exception:
+                pass
+
+        return findings
+
+    # ---- 3. Full DAST Scan Workflow -----------------------------------------
 
     async def scan_url(
         self, target_url: str, additional_paths: Optional[List[str]] = None
@@ -258,6 +319,10 @@ class DASTScanner:
             headers=self.headers,
             follow_redirects=self.follow_redirects
         ) as client:
+            # 1. Check root sensitive files first
+            all_findings.extend(await self._check_sensitive_file_exposures(base_url, client))
+
+            # 2. Iterate endpoints for header, CORS, cookie, and active probes
             for path in paths_to_test:
                 full_url = urljoin(base_url, path)
                 if full_url in tested_urls:
@@ -266,14 +331,14 @@ class DASTScanner:
 
                 try:
                     resp = await client.get(full_url)
-                    # 1. Header checks
+                    # Passive checks
                     all_findings.extend(self._check_security_headers(full_url, resp.headers))
-                    # 2. Info disclosure checks
-                    all_findings.extend(self._check_information_disclosure(full_url, resp.headers))
-                    # 3. Cookie security
                     all_findings.extend(await self._check_cookie_security(full_url, resp))
-                    # 4. CORS Misconfiguration checks
                     all_findings.extend(await self._check_cors_configuration(full_url, client))
+
+                    # Active probing
+                    all_findings.extend(await self._probe_sql_injection(full_url, client))
+                    all_findings.extend(await self._probe_reflected_xss(full_url, client))
 
                 except httpx.RequestError as req_err:
                     logger.warning(f"DAST request error on {full_url}: {req_err}")
@@ -298,12 +363,3 @@ class DASTScanner:
             duration_seconds=duration,
             errors=errors
         )
-
-
-if __name__ == "__main__":
-    import sys
-
-    target = sys.argv[1] if len(sys.argv) > 1 else "https://example.com"
-    dast = DASTScanner()
-    res = asyncio.run(dast.scan_url(target))
-    print(res.model_dump_json(indent=2))

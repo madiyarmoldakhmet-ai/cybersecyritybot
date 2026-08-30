@@ -188,7 +188,41 @@ async def trigger_sast_scan(req: SASTScanRequest):
                 detail=f"Git clone failed: {stderr.decode('utf-8', errors='replace')[:200]}"
             )
 
-        result = await scanner.scan(temp_dir)
+        # 1. Run Strix Deep Agentic Scanner
+        from scanners.strix_runner import StrixEngine
+        strix_engine = StrixEngine()
+        strix_res_task = asyncio.create_task(strix_engine.scan(temp_dir))
+
+        # 2. Run AST rule scanner
+        sast_res_task = asyncio.create_task(scanner.scan(temp_dir))
+
+        strix_res, sast_res = await asyncio.gather(strix_res_task, sast_res_task)
+
+        # Merge findings
+        all_findings = list(strix_res.findings)
+        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in strix_res.findings}
+
+        for sf in sast_res.findings:
+            key = f"{sf.file_path}:{sf.line_start}:{sf.title}"
+            if key not in seen_keys:
+                all_findings.append(sf)
+                seen_keys.add(key)
+
+        total_duration = round(strix_res.duration_seconds + sast_res.duration_seconds, 2)
+        severity_counts = {}
+        for f in all_findings:
+            severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
+
+        result = SASTScanResult(
+            target_path=str(temp_dir),
+            total_findings=len(all_findings),
+            findings_by_severity=severity_counts,
+            findings=all_findings,
+            duration_seconds=total_duration,
+            scanners_run=[ScannerType.STRIX, ScannerType.SEMGREP, ScannerType.BANDIT],
+            errors=strix_res.errors + sast_res.errors,
+        )
+
         SCAN_STORE[scan_id] = {"result": result, "repo_name": repo_name}
         return result
 
