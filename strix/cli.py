@@ -21,7 +21,7 @@ app = typer.Typer(help="Strix Engine - Autonomous AI-DevSecOps Scanner")
 console = Console()
 
 def print_banner():
-    banner = """
+    banner = r"""
    _____ _        _         ______             _            
   / ____| |      (_)       |  ____|           (_)           
  | (___ | |_ _ __ ___  __  | |__   _ __   __ _ _ _ __   ___ 
