@@ -16,6 +16,7 @@ from strix.scanners.models import SASTScanResult, Severity
 from strix.scanners.pdf_generator import PDFReportGenerator
 from strix.scanners.auto_fixer import AIAutoFixer
 from strix.scanners.strix_runner import StrixEngine
+from strix.core.config import settings
 
 app = typer.Typer(help="Strix Engine - Autonomous AI-DevSecOps Scanner")
 console = Console()
