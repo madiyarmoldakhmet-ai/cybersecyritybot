@@ -34,7 +34,7 @@ class AIAutoFixer:
                 base_url=settings.ollama_base_url + "/v1",
                 api_key="ollama", # Ollama doesn't require an API key
                 timeout=float(timeout_seconds),
-                max_retries=1,
+                max_retries=3,
             )
             self.enabled = True
         elif settings.llm_provider == "openrouter" and settings.openrouter_api_key:
@@ -43,7 +43,7 @@ class AIAutoFixer:
                 base_url="https://openrouter.ai/api/v1",
                 api_key=settings.openrouter_api_key,
                 timeout=float(timeout_seconds),
-                max_retries=1,
+                max_retries=3,
             )
             self.enabled = True
         elif settings.llm_provider == "gemini" and settings.gemini_api_key:
@@ -52,7 +52,7 @@ class AIAutoFixer:
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 api_key=settings.gemini_api_key,
                 timeout=float(timeout_seconds),
-                max_retries=1,
+                max_retries=3,
             )
             self.enabled = True
 
