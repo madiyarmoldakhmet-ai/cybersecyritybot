@@ -115,12 +115,23 @@ class AIFalsePositiveFilter:
         return True
 
     async def filter_findings(self, findings: List[VulnerabilityFinding]) -> List[VulnerabilityFinding]:
-        """Runs all findings through the AI filter concurrently."""
+        """Runs all findings through the AI filter concurrently, respecting API rate limits."""
         if not self.enabled or not findings:
             return findings
 
-        # Run concurrently
-        tasks = [self._check_finding(f) for f in findings]
+        is_openrouter = settings.llm_provider == "openrouter"
+        concurrency = 2 if is_openrouter else 10
+        sem = asyncio.Semaphore(concurrency)
+
+        async def bounded_check(f):
+            async with sem:
+                res = await self._check_finding(f)
+                if is_openrouter:
+                    await asyncio.sleep(1.5) # Rate limit: prevent bursting 429
+                return res
+
+        # Run concurrently with bounds
+        tasks = [bounded_check(f) for f in findings]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         filtered_findings = []
