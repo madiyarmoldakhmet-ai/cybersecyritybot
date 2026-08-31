@@ -111,6 +111,7 @@ def scan(
 
         # Autofix loop
         if autofix:
+            import time
             console.print("\n🛠️ [bold cyan]Starting AI Auto-Remediation...[/]")
             fixer = AIAutoFixer()
             if not fixer.enabled:
@@ -126,6 +127,10 @@ def scan(
                         # In a real CLI, we might ask to write to file here
                     else:
                         console.print("[red]Failed to generate fix.[/]")
+                    
+                    # Rate limiting: wait 3 seconds to avoid 429 Too Many Requests on free API tiers
+                    if settings.llm_provider == "openrouter":
+                        time.sleep(3)
     else:
         console.print("🎉 [bold green]No vulnerabilities found! Repository is secure.[/]")
 
