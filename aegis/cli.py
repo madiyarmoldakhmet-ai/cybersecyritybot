@@ -64,7 +64,7 @@ def export_sarif(findings: List[VulnerabilityFinding], target_path: str, output_
             level = "note"
 
         result = {
-            "ruleId": finding.cwe or "AEGIS-001",
+            "ruleId": finding.cwe[0] if finding.cwe else "AEGIS-001",
             "level": level,
             "message": {
                 "text": finding.title
