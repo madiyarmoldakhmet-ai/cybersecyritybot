@@ -516,10 +516,18 @@ class FlutterSecurityScanner:
     applies all registered Flutter security rules.
     """
 
-    def __init__(self, rules: Optional[List[FlutterSecurityRule]] = None):
+    def __init__(self, rules: Optional[List[FlutterSecurityRule]] = None, event_bus: Optional[Any] = None):
         self.rules = rules or ALL_FLUTTER_RULES
+        self.event_bus = event_bus
 
-    def scan(self, target_dir: Path) -> List[VulnerabilityFinding]:
+    async def _emit(self, event) -> None:
+        if self.event_bus:
+            try:
+                await self.event_bus.emit(event)
+            except Exception as e:
+                logger.debug(f"Failed to emit event {event.event_type}: {e}")
+
+    async def scan(self, target_dir: Path) -> List[VulnerabilityFinding]:
         findings: List[VulnerabilityFinding] = []
         target = Path(target_dir)
 
@@ -534,6 +542,8 @@ class FlutterSecurityScanner:
 
         # Walk the project tree
         skip_dirs = {".git", ".dart_tool", "build", ".flutter-plugins", "node_modules", ".venv"}
+        
+        from aegis.core.event_bus import FileScanning, CodeAnalyzing, VulnerabilityFound
         
         for ext in all_extensions:
             pattern = f"*{ext}"
@@ -550,14 +560,22 @@ class FlutterSecurityScanner:
                     continue
 
                 rel_path = str(file_path.relative_to(target))
-                print(f"Scanning {rel_path} with ext {ext}")
+                await self._emit(FileScanning(file_path=rel_path))
 
                 for rule in self.rules:
                     if ext in rule.file_extensions:
                         try:
+                            await self._emit(CodeAnalyzing(file_path=rel_path, snippet=f"Applying Flutter rule: {rule.title}"))
                             rule_findings = rule.scan(rel_path, content)
                             if rule_findings:
-                                print(f"Rule {rule.id} found {len(rule_findings)} in {rel_path}")
+                                for f in rule_findings:
+                                    await self._emit(VulnerabilityFound(
+                                        severity=f.severity.value,
+                                        title=f.title,
+                                        file_path=f.file_path,
+                                        line=f.line_start,
+                                        explanation=f.description
+                                    ))
                             findings.extend(rule_findings)
                         except Exception as e:
                             logger.debug(f"Rule {rule.id} failed on {rel_path}: {e}")
