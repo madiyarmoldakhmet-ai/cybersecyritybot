@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, FormEvent } from 'react';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { TerminalWindow, ScanEvent } from '@/components/TerminalWindow';
 import { MetricsDashboard } from '@/components/MetricsDashboard';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -140,6 +141,7 @@ export default function Home() {
           <span className="font-serif text-xl tracking-tight">Aegis</span>
         </div>
         <div className="flex items-center gap-6 text-sm font-medium">
+          <ThemeToggle />
           <a href="#" className="hover:text-[var(--color-primary)] transition-colors">Product</a>
           <a href="#" className="hover:text-[var(--color-primary)] transition-colors">Research</a>
           <a href="#" className="hover:text-[var(--color-primary)] transition-colors">Pricing</a>
