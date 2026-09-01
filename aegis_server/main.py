@@ -5,14 +5,16 @@ import os
 import shutil
 import uuid
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from openai import AsyncOpenAI
 
 from aegis.core.event_bus import ScanEventBus
 from aegis.scanners.sast_scanner import SASTScanner
+from aegis.core.config import settings
 
 logger = logging.getLogger("aegis_server")
 logging.basicConfig(level=logging.INFO)
@@ -60,7 +62,6 @@ async def websocket_scan(websocket: WebSocket):
     repo_dir = SCANS_DIR / scan_uuid
     
     try:
-        # 1. Wait for initial JSON payload with github_url
         data = await websocket.receive_json()
         repo_url = data.get("github_url")
         if not repo_url:
@@ -68,7 +69,6 @@ async def websocket_scan(websocket: WebSocket):
             await websocket.close()
             return
             
-        # 2. Clone repository
         await websocket.send_json({"event_type": "SystemLog", "message": f"Cloning repository {repo_url}..."})
         success = await clone_repo(repo_url, repo_dir)
         
@@ -77,22 +77,15 @@ async def websocket_scan(websocket: WebSocket):
             await websocket.close()
             return
             
-        # 3. Initialize EventBus and SASTScanner
         event_bus = ScanEventBus(scan_id=scan_uuid)
         scanner = SASTScanner(event_bus=event_bus)
         
-        # 4. Start the scan as a background task
         scan_task = asyncio.create_task(scanner.scan(repo_dir))
         
-        # 5. Stream events to WebSocket
         async for event in event_bus.subscribe():
-            # Send Pydantic model as JSON dict
             await websocket.send_json(event.model_dump())
             
-        # Wait for scan task to fully complete
         result = await scan_task
-        
-        # Optionally send a final result summary if needed, but ScanCompleted is already emitted
         await websocket.send_json({"event_type": "SystemLog", "message": "Scan completely finished."})
         
     except WebSocketDisconnect:
@@ -104,10 +97,61 @@ async def websocket_scan(websocket: WebSocket):
         except:
             pass
     finally:
-        # Cleanup cloned repository
         if repo_dir.exists():
             shutil.rmtree(repo_dir, ignore_errors=True)
-            logger.info(f"Cleaned up {repo_dir}")
+        try:
+            await websocket.close()
+        except:
+            pass
+
+
+@app.websocket("/ws/chat")
+async def websocket_chat(websocket: WebSocket):
+    await websocket.accept()
+    
+    # Initialize OpenAI client with OpenRouter or Ollama
+    client = AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1" if settings.openrouter_api_key else settings.ollama_base_url + "/v1",
+        api_key=settings.openrouter_api_key or "ollama"
+    )
+    model = settings.openrouter_model if settings.openrouter_api_key else settings.ollama_model
+    
+    chat_history = [
+        {"role": "system", "content": "You are Aegis, a highly advanced agentic AI security scanner. You help users analyze GitHub repositories for vulnerabilities, verify authorship, and explain security concepts. If a user asks you to scan a repository, you must output a special JSON payload containing {\"action\": \"SCAN\", \"github_url\": \"URL\"}. Otherwise, just respond conversationally."}
+    ]
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            chat_history.append({"role": "user", "content": data})
+            
+            # Simple heuristic for scanning intent instead of robust tool calling for speed
+            if "github.com/" in data and ("scan" in data.lower() or "проверь" in data.lower() or "check" in data.lower()):
+                url = [word for word in data.split() if "github.com" in word][0]
+                await websocket.send_json({"type": "action", "action": "SCAN", "github_url": url})
+                chat_history.append({"role": "assistant", "content": f"I've initiated the scan for {url} on the secure terminal."})
+                continue
+                
+            stream = await client.chat.completions.create(
+                model=model,
+                messages=chat_history,
+                stream=True
+            )
+            
+            full_response = ""
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_response += content
+                    await websocket.send_json({"type": "chunk", "content": content})
+                    
+            await websocket.send_json({"type": "done"})
+            chat_history.append({"role": "assistant", "content": full_response})
+            
+    except WebSocketDisconnect:
+        logger.info("Chat WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"Chat Error: {e}")
         try:
             await websocket.close()
         except:
