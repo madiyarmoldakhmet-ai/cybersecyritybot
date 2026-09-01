@@ -27,7 +27,7 @@ router = Router()
 @router.message(CommandStart())
 async def send_welcome(message: types.Message):
     """Handler for the /start command. Sends a welcome message with a Web App button."""
-    web_app_url = "https://your-ngrok-url-here.ngrok.io" # Replace with your actual domain or ngrok URL
+    web_app_url = settings.web_app_url
     
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
