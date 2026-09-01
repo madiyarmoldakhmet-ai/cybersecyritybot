@@ -1,5 +1,5 @@
 """
-FastAPI Backend and REST API for CyberSecurityBot.
+FastAPI Backend and REST API for Aegis.
 Provides endpoints for automated SAST & DAST scans, LLM remediation, and PR generation.
 """
 
@@ -15,17 +15,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import httpx
 
-from strix.ai.remediation_engine import RemediationEngine, RemediationResult
-from strix.core.config import settings
-from strix.core.pr_creator import PullRequestCreator
-from strix.core.queue_manager import ollama_limiter, task_queue
-from strix.core.verifier import OwnershipVerifier
-from strix.scanners.dast_scanner import DASTScanner
-from strix.scanners.models import DASTScanResult, SASTScanResult, VulnerabilityFinding
-from strix.scanners.sast_scanner import SASTScanner
+from aegis.ai.remediation_engine import RemediationEngine, RemediationResult
+from aegis.core.config import settings
+from aegis.core.pr_creator import PullRequestCreator
+from aegis.core.queue_manager import ollama_limiter, task_queue
+from aegis.core.verifier import OwnershipVerifier
+from aegis.scanners.dast_scanner import DASTScanner
+from aegis.scanners.models import DASTScanResult, SASTScanResult, VulnerabilityFinding
+from aegis.scanners.sast_scanner import SASTScanner
 from web.webhook import router as webhook_router
 
-logger = logging.getLogger("cybersecuritybot.api")
+logger = logging.getLogger("aegis.api")
 
 app = FastAPI(
     title=settings.app_name,
@@ -188,19 +188,19 @@ async def trigger_sast_scan(req: SASTScanRequest):
                 detail=f"Git clone failed: {stderr.decode('utf-8', errors='replace')[:200]}"
             )
 
-        # 1. Run Strix Deep Agentic Scanner
-        from strix.scanners.strix_runner import StrixEngine
-        strix_engine = StrixEngine()
-        strix_res_task = asyncio.create_task(strix_engine.scan(temp_dir))
+        # 1. Run Aegis Deep Agentic Scanner
+        from aegis.scanners.aegis_runner import AegisEngine
+        aegis_engine = AegisEngine()
+        aegis_res_task = asyncio.create_task(aegis_engine.scan(temp_dir))
 
         # 2. Run AST rule scanner
         sast_res_task = asyncio.create_task(scanner.scan(temp_dir))
 
-        strix_res, sast_res = await asyncio.gather(strix_res_task, sast_res_task)
+        aegis_res, sast_res = await asyncio.gather(aegis_res_task, sast_res_task)
 
         # Merge findings
-        all_findings = list(strix_res.findings)
-        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in strix_res.findings}
+        all_findings = list(aegis_res.findings)
+        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in aegis_res.findings}
 
         for sf in sast_res.findings:
             key = f"{sf.file_path}:{sf.line_start}:{sf.title}"
@@ -208,7 +208,7 @@ async def trigger_sast_scan(req: SASTScanRequest):
                 all_findings.append(sf)
                 seen_keys.add(key)
 
-        total_duration = round(strix_res.duration_seconds + sast_res.duration_seconds, 2)
+        total_duration = round(aegis_res.duration_seconds + sast_res.duration_seconds, 2)
         severity_counts = {}
         for f in all_findings:
             severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
@@ -220,7 +220,7 @@ async def trigger_sast_scan(req: SASTScanRequest):
             findings=all_findings,
             duration_seconds=total_duration,
             scanners_run=[ScannerType.STRIX, ScannerType.SEMGREP, ScannerType.BANDIT],
-            errors=strix_res.errors + sast_res.errors,
+            errors=aegis_res.errors + sast_res.errors,
         )
 
         SCAN_STORE[scan_id] = {"result": result, "repo_name": repo_name}

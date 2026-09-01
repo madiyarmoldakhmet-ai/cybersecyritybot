@@ -20,6 +20,6 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Strix CLI is the default entrypoint
-ENTRYPOINT ["python", "-m", "strix.cli"]
+# Aegis CLI is the default entrypoint
+ENTRYPOINT ["python", "-m", "aegis.cli"]
 CMD ["--help"]

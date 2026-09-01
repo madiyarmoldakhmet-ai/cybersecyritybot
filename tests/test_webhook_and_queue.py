@@ -14,8 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from strix.core.config import settings
-from strix.core.queue_manager import BackgroundTaskQueue, OllamaConcurrencyLimiter, ollama_limiter, task_queue
+from aegis.core.config import settings
+from aegis.core.queue_manager import BackgroundTaskQueue, OllamaConcurrencyLimiter, ollama_limiter, task_queue
 from web.api import app
 from web.webhook import verify_github_signature
 
@@ -108,8 +108,8 @@ async def test_github_webhook_endpoints():
             push_payload = {
                 "ref": "refs/heads/main",
                 "repository": {
-                    "full_name": "madiyarmoldakhmet-ai/cybersecyritybot",
-                    "clone_url": "https://github.com/madiyarmoldakhmet-ai/cybersecyritybot.git"
+                    "full_name": "madiyarmoldakhmet-ai/aegis",
+                    "clone_url": "https://github.com/madiyarmoldakhmet-ai/aegis.git"
                 },
                 "head_commit": {
                     "id": "c7dcd6547f0a4ea010a9fd0cb5573ad810bbc701",
@@ -126,15 +126,15 @@ async def test_github_webhook_endpoints():
             data = resp.json()
             assert data["status"] == "processing"
             assert data["event"] == "push"
-            assert data["repo"] == "madiyarmoldakhmet-ai/cybersecyritybot"
+            assert data["repo"] == "madiyarmoldakhmet-ai/aegis"
 
             # 3. Pull Request Event
             pr_payload = {
                 "action": "opened",
                 "number": 42,
                 "repository": {
-                    "full_name": "madiyarmoldakhmet-ai/cybersecyritybot",
-                    "clone_url": "https://github.com/madiyarmoldakhmet-ai/cybersecyritybot.git"
+                    "full_name": "madiyarmoldakhmet-ai/aegis",
+                    "clone_url": "https://github.com/madiyarmoldakhmet-ai/aegis.git"
                 },
                 "pull_request": {
                     "head": {

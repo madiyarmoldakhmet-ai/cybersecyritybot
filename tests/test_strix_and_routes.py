@@ -1,15 +1,15 @@
 """
-Unit and integration tests for RouteExtractor, Strix Multi-Agent Engine, and DAST Scanner.
+Unit and integration tests for RouteExtractor, Aegis Multi-Agent Engine, and DAST Scanner.
 """
 
 import asyncio
 from pathlib import Path
 import pytest
 
-from strix.scanners.models import ScannerType, Severity, VulnerabilityFinding
-from strix.scanners.route_extractor import RouteExtractor
-from strix.scanners.vuln_classifier import VulnCategory, classify_vulnerability
-from strix.scanners.dast_scanner import DASTScanner
+from aegis.scanners.models import ScannerType, Severity, VulnerabilityFinding
+from aegis.scanners.route_extractor import RouteExtractor
+from aegis.scanners.vuln_classifier import VulnCategory, classify_vulnerability
+from aegis.scanners.dast_scanner import DASTScanner
 
 
 def test_route_extractor_discovery(tmp_path: Path):

@@ -1,5 +1,5 @@
 """
-Comprehensive End-to-End Test for CyberSecurityBot Pipeline.
+Comprehensive End-to-End Test for Aegis Pipeline.
 Tests:
 1. SAST & Dependency Scanner (Vulnerable AST patterns: SQLi, hardcoded credentials, eval, shell=True).
 2. DAST Dynamic Scanner (Missing CSP/HSTS headers, X-Powered-By, Insecure Cookies, CORS reflection).
@@ -21,14 +21,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI, Response
 import httpx
 
-from strix.ai.remediation_engine import RemediationEngine
-from strix.scanners.dast_scanner import DASTScanner
-from strix.scanners.models import DASTScanResult, SASTScanResult
-from strix.scanners.sast_scanner import SASTScanner
+from aegis.ai.remediation_engine import RemediationEngine
+from aegis.scanners.dast_scanner import DASTScanner
+from aegis.scanners.models import DASTScanResult, SASTScanResult
+from aegis.scanners.sast_scanner import SASTScanner
 from web.api import app as fastapi_app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("cybersecuritybot.test_pipeline")
+logger = logging.getLogger("aegis.test_pipeline")
 
 
 VULNERABLE_APP_CODE = '''"""
