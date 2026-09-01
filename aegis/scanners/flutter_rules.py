@@ -550,11 +550,14 @@ class FlutterSecurityScanner:
                     continue
 
                 rel_path = str(file_path.relative_to(target))
+                print(f"Scanning {rel_path} with ext {ext}")
 
                 for rule in self.rules:
                     if ext in rule.file_extensions:
                         try:
                             rule_findings = rule.scan(rel_path, content)
+                            if rule_findings:
+                                print(f"Rule {rule.id} found {len(rule_findings)} in {rel_path}")
                             findings.extend(rule_findings)
                         except Exception as e:
                             logger.debug(f"Rule {rule.id} failed on {rel_path}: {e}")
