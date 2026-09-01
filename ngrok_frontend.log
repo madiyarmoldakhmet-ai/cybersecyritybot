@@ -8,3 +8,8 @@ t=2026-09-01T17:42:31+0500 lvl=info msg="client session established" obj=tunnels
 t=2026-09-01T17:42:31+0500 lvl=info msg="tunnel session started" obj=tunnels.session
 t=2026-09-01T17:42:32+0500 lvl=info msg="started tunnel" obj=tunnels name=command_line addr=http://localhost:3000 url=https://unwarlike-pebble-correct.ngrok-free.dev
 t=2026-09-01T18:58:08+0500 lvl=info msg="join connections" obj=join id=028c871ec0f7 l=[::1]:3000 r=[2a03:2880:11ff:41::]:62644
+t=2026-09-01T18:58:10+0500 lvl=info msg="join connections" obj=join id=b67964c4e776 l=[::1]:3000 r=[2a03:2880:11ff:4::]:40132
+t=2026-09-01T18:58:11+0500 lvl=info msg="join connections" obj=join id=fa5562aefc34 l=[::1]:3000 r=[2a03:2880:25ff:7::]:62762
+t=2026-09-01T18:58:12+0500 lvl=info msg="join connections" obj=join id=d390db2cbcdb l=[::1]:3000 r=[2a03:2880:11ff:5a::]:62764
+t=2026-09-01T18:58:13+0500 lvl=info msg="join connections" obj=join id=49733a2015e1 l=[::1]:3000 r=[2a03:2880:11ff:48::]:33016
+t=2026-09-01T18:58:14+0500 lvl=info msg="join connections" obj=join id=9f0b19d2f7cb l=[::1]:3000 r=[2a03:2880:11ff:5a::]:46848
