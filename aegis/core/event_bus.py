@@ -2,12 +2,12 @@ import asyncio
 import uuid
 from typing import AsyncGenerator, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 
 class BaseScanEvent(BaseModel):
     event_type: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    scan_id: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    scan_id: str = ""
 
 class ScanStarted(BaseScanEvent):
     event_type: str = "ScanStarted"
