@@ -1,0 +1,26 @@
+name: Aegis Security Scan
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Aegis Security Scanner
+        uses: madiyarmoldakhmet-ai/aegis-action@v1
+        with:
+          target_path: '.'
+          fail_on_critical: 'true'
+          ai_filter: 'false'
