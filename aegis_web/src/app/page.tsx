@@ -69,7 +69,11 @@ export default function Home() {
         // Calculate score
         const severityStr = data.severity?.toLowerCase() || 'medium';
         let deduct = 5;
-        if (severityStr === 'critical') deduct = 20;
+        if (severityStr === 'critical') {
+          deduct = 20;
+          setIsGlitching(true);
+          setTimeout(() => setIsGlitching(false), 500); // 0.5s glitch
+        }
         else if (severityStr === 'high') deduct = 10;
         else if (severityStr === 'low') deduct = 2;
         
@@ -96,17 +100,26 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-8 font-sans">
-      <div className="max-w-7xl mx-auto space-y-8">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-8 font-sans relative overflow-hidden">
+      
+      {/* CSS Grid Background */}
+      <div className="absolute inset-0 z-0 bg-[linear-gradient(to_right,#4f4f4f12_1px,transparent_1px),linear-gradient(to_bottom,#4f4f4f12_1px,transparent_1px)] bg-[size:24px_24px]"></div>
+      
+      {/* Glitch Overlay */}
+      {isGlitching && (
+        <div className="absolute inset-0 z-50 bg-red-500/20 animate-pulse pointer-events-none mix-blend-overlay"></div>
+      )}
+
+      <div className="max-w-7xl mx-auto space-y-8 relative z-10">
         
         {/* Header */}
         <header className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+          <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center shadow-[0_0_15px_rgba(37,99,235,0.5)]">
             <Shield className="w-7 h-7 text-white" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-white">Aegis AI Security Engine</h1>
-            <p className="text-slate-400">Real-time vulnerability analysis for Flutter & AI DevSecOps</p>
+            <h1 className="text-3xl font-bold tracking-tight text-white drop-shadow-md">Aegis AI Security Engine</h1>
+            <p className="text-slate-400 font-mono text-sm mt-1">Real-time vulnerability analysis for Flutter & AI DevSecOps</p>
           </div>
         </header>
 
@@ -118,12 +131,12 @@ export default function Home() {
             value={repoUrl}
             onChange={(e) => setRepoUrl(e.target.value)}
             disabled={isScanning}
-            className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50"
+            className="flex-1 bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50 font-mono"
           />
           <button
             type="submit"
             disabled={isScanning || !repoUrl}
-            className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-6 py-3 rounded-xl flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-6 py-3 rounded-xl flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_10px_rgba(37,99,235,0.3)] hover:shadow-[0_0_15px_rgba(37,99,235,0.6)]"
           >
             {isScanning ? (
               <span className="flex items-center gap-2">
