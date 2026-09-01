@@ -6,12 +6,13 @@ Initializes aiogram Dispatcher, middlewares, and starts polling.
 import asyncio
 import logging
 import sys
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, Router, types
+from aiogram.filters import CommandStart
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from bot.handlers import router
 from aegis.core.config import settings
 
 logging.basicConfig(
@@ -20,6 +21,28 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("aegis.main")
+
+router = Router()
+
+@router.message(CommandStart())
+async def send_welcome(message: types.Message):
+    """Handler for the /start command. Sends a welcome message with a Web App button."""
+    web_app_url = "https://your-ngrok-url-here.ngrok.io" # Replace with your actual domain or ngrok URL
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="Launch Aegis Dashboard",
+            web_app=WebAppInfo(url=web_app_url)
+        )]
+    ])
+    
+    welcome_text = (
+        "🛡 *Welcome to Aegis AI Security Engine!*\n\n"
+        "I am an advanced Autonomous AI-DevSecOps Scanner designed to find 0-day vulnerabilities in Flutter apps.\n\n"
+        "Click the button below to launch the interactive Visual Dashboard and start scanning your repositories in real-time."
+    )
+    
+    await message.answer(welcome_text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
 
 
 async def run_bot() -> None:
@@ -42,13 +65,6 @@ async def run_bot() -> None:
     dp.include_router(router)
 
     logger.info(f"Starting {settings.app_name} Telegram Bot...")
-    if settings.llm_provider == "openrouter" and settings.openrouter_api_key:
-        active_model = settings.openrouter_model
-    elif settings.llm_provider == "gemini" and settings.gemini_api_key:
-        active_model = settings.gemini_model
-    else:
-        active_model = settings.ollama_model
-    logger.info(f"Active LLM Provider: {settings.llm_provider.value} | Model: {active_model}")
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)
