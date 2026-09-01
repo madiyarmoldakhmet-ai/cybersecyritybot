@@ -27,8 +27,15 @@ class SecretScanner:
         ".jpg", ".png", ".gif", ".pdf", ".zip", ".tar", ".gz", ".mp3", ".mp4", ".pyc", ".o", ".so", ".dll", ".exe"
     }
 
-    def __init__(self):
-        pass
+    def __init__(self, event_bus=None):
+        self.event_bus = event_bus
+
+    async def _emit(self, event) -> None:
+        if self.event_bus:
+            try:
+                await self.event_bus.emit(event)
+            except Exception as e:
+                logger.debug(f"Failed to emit event {event.event_type}: {e}")
 
     async def scan(self, target_dir: Path) -> List[VulnerabilityFinding]:
         findings = []
@@ -36,6 +43,8 @@ class SecretScanner:
 
         if not target_path.exists():
             return findings
+            
+        from aegis.core.event_bus import FileScanning, CodeAnalyzing, VulnerabilityFound
 
         for filepath in target_path.rglob("*"):
             if not filepath.is_file():
@@ -47,8 +56,12 @@ class SecretScanner:
             if filepath.suffix.lower() in self.IGNORE_EXTENSIONS:
                 continue
 
+            rel_path = filepath.relative_to(target_path).as_posix()
+            await self._emit(FileScanning(file_path=rel_path))
+
             try:
                 content = filepath.read_text(encoding="utf-8")
+                await self._emit(CodeAnalyzing(file_path=rel_path, snippet="Scanning for hardcoded secrets..."))
                 
                 for line_idx, line in enumerate(content.splitlines(), start=1):
                     for secret_type, pattern in self.PATTERNS.items():
@@ -66,7 +79,7 @@ class SecretScanner:
                                     description=f"A hardcoded {secret_type} was found in the source code. "
                                                 f"Hardcoded secrets can lead to unauthorized access and data breaches.",
                                     severity=Severity.CRITICAL,
-                                    file_path=filepath.relative_to(target_path).as_posix(),
+                                    file_path=rel_path,
                                     line_start=line_idx,
                                     line_end=line_idx,
                                     code_snippet=snippet,
@@ -75,6 +88,13 @@ class SecretScanner:
                                     recommendation="Remove the hardcoded secret. Use environment variables or a secure secrets management system (e.g., AWS Secrets Manager, HashiCorp Vault)."
                                 )
                             )
+                            await self._emit(VulnerabilityFound(
+                                severity=Severity.CRITICAL.value,
+                                title=f"Hardcoded {secret_type}",
+                                file_path=rel_path,
+                                line=line_idx,
+                                explanation=f"Found hardcoded {secret_type}."
+                            ))
             except UnicodeDecodeError:
                 pass
             except Exception as e:
