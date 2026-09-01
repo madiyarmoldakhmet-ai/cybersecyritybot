@@ -621,32 +621,59 @@ class SASTScanner:
                 is_env = file.startswith(".env")
 
                 if ext in TARGET_EXTENSIONS or is_env:
+                    await self._emit(FileScanning(file_path=str(file_path.relative_to(target_path) if file_path.is_relative_to(target_path) else file_path)))
                     try:
                         content = file_path.read_text(encoding="utf-8", errors="replace")
 
                         # 1. Universal multi-language pattern checks (Dart, JS, TS, Python, Secrets, Rules)
                         pattern_findings = MultiLanguagePatternScanner.scan_file(file_path, content)
                         findings.extend(pattern_findings)
+                        for f in pattern_findings:
+                            await self._emit(VulnerabilityFound(
+                                severity=f.severity.value,
+                                title=f.title,
+                                file_path=f.file_path,
+                                line=f.line_start,
+                                explanation=f.description
+                            ))
 
                         # 2. Python-specific AST security visitor
                         if ext == ".py":
                             try:
+                                await self._emit(CodeAnalyzing(file_path=str(file_path), snippet="ast.parse() - Analyzing Python syntax tree..."))
                                 tree = ast.parse(content, filename=str(file_path))
                                 ast_visitor = PythonASTSecurityVisitor(file_path, content)
                                 ast_visitor.visit(tree)
                                 findings.extend(ast_visitor.findings)
+                                for f in ast_visitor.findings:
+                                    await self._emit(VulnerabilityFound(
+                                        severity=f.severity.value,
+                                        title=f.title,
+                                        file_path=f.file_path,
+                                        line=f.line_start,
+                                        explanation=f.description
+                                    ))
                             except Exception as ast_err:
                                 logger.debug(f"AST parsing skipped for {file_path}: {ast_err}")
 
                         # 3. JavaScript/TypeScript AST security visitor (esprima)
                         if ext in [".js", ".jsx", ".ts", ".tsx"]:
                             try:
+                                await self._emit(CodeAnalyzing(file_path=str(file_path), snippet="esprima.parseScript() - Analyzing JS/TS AST..."))
                                 # Esprima doesn't natively support TS, but we can try parsing.
                                 # If it fails (e.g. strict TS syntax), it falls back safely.
                                 js_tree = esprima.parseScript(content, {"loc": True, "jsx": True}).toDict()
                                 js_ast_visitor = JSASTSecurityVisitor(file_path, content)
                                 js_ast_visitor.visit(js_tree)
                                 findings.extend(js_ast_visitor.findings)
+                                for f in js_ast_visitor.findings:
+                                    await self._emit(VulnerabilityFound(
+                                        severity=f.severity.value,
+                                        title=f.title,
+                                        file_path=f.file_path,
+                                        line=f.line_start,
+                                        explanation=f.description
+                                    ))
                             except Exception as js_ast_err:
                                 logger.debug(f"JS/TS AST parsing skipped for {file_path}: {js_ast_err}")
 
