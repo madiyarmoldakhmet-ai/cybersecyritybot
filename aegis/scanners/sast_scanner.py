@@ -894,8 +894,8 @@ class SASTScanner:
             ml_task, mobile_task, semgrep_task, bandit_task, pip_audit_task, secret_task, return_exceptions=False
         )
         
-        # Flutter scan runs synchronously for now (very fast)
-        flutter_findings = flutter_scanner.scan(path)
+        # Flutter scan runs asynchronously now
+        flutter_findings = await flutter_scanner.scan(path)
 
         raw_findings: List[VulnerabilityFinding] = (
             mobile_findings + bandit_findings + semgrep_findings + ml_findings + (pip_findings or []) + secret_findings + flutter_findings
