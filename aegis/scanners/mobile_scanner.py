@@ -1,5 +1,5 @@
 """
-Mobile DevSecOps Scanner for CyberSecurityBot.
+Mobile DevSecOps Scanner for Aegis.
 Deep specialized static analysis for:
 - Flutter & Dart (SharedPreferences plaintext secrets, SSL badCertificateCallback bypass, cleartext HTTP, hardcoded crypto keys)
 - Firebase Firestore Security Rules (Public read/write access, missing auth checks)
@@ -12,8 +12,8 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from strix.scanners.models import ScannerType, Severity, VulnerabilityFinding
-from strix.scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
+from aegis.scanners.models import ScannerType, Severity, VulnerabilityFinding
+from aegis.scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
 
 
 class MobileSecurityScanner:

@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 from github import Github, GithubException, Auth
 
-logger = logging.getLogger("cybersecuritybot.verifier")
+logger = logging.getLogger("aegis.verifier")
 
 
 class OwnershipVerifier:
@@ -23,7 +23,7 @@ class OwnershipVerifier:
         """
         Extract 'owner/repo' string from full GitHub URL or shorthand.
         Examples:
-            - 'https://github.com/madiyarmoldakhmet-ai/cybersecyritybot' -> 'madiyarmoldakhmet-ai/cybersecyritybot'
+            - 'https://github.com/madiyarmoldakhmet-ai/aegis' -> 'madiyarmoldakhmet-ai/aegis'
             - 'git@github.com:owner/repo.git' -> 'owner/repo'
             - 'owner/repo' -> 'owner/repo'
         """
@@ -68,7 +68,7 @@ class OwnershipVerifier:
             return False, f"Неверный формат репозитория: '{repo_identifier}'."
 
         headers = {
-            "User-Agent": "CyberSecurityBot-Verifier/1.0",
+            "User-Agent": "Aegis-Verifier/1.0",
             "Accept": "application/vnd.github.v3+json",
         }
 
@@ -263,7 +263,7 @@ class OwnershipVerifier:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     f"https://api.github.com/repos/{repo_full_name}",
-                    headers={"User-Agent": "CyberSecurityBot-Verifier/1.0"}
+                    headers={"User-Agent": "Aegis-Verifier/1.0"}
                 )
                 if resp.status_code == 200:
                     data = resp.json()

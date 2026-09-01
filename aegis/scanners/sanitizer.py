@@ -1,5 +1,5 @@
 """
-Zero-Noise & False-Positive Sanitizer for CyberSecurityBot.
+Zero-Noise & False-Positive Sanitizer for Aegis.
 Implements Shannon Entropy analysis and context-aware filtering to eliminate
 dummy keys, test fixtures, mocks, and low-entropy hallucinations.
 """
@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Set
 
-from strix.scanners.models import Severity, VulnerabilityFinding
+from aegis.scanners.models import Severity, VulnerabilityFinding
 
 # Known dummy/placeholder keywords
 PLACEHOLDER_REGEX = re.compile(

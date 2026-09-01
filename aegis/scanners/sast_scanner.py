@@ -1,5 +1,5 @@
 """
-SAST Scanner Engine for CyberSecurityBot.
+SAST Scanner Engine for Aegis.
 Executes multi-language static application security testing:
 - Flutter / Dart / JS / TS / Python / JSON / YAML / HTML / Env security rules
 - Python AST security visitor (SQLi, eval, pickle, subprocess shell=True)
@@ -19,13 +19,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Pattern, Tuple, Union, Set
 
-from strix.core.config import settings
-from strix.scanners.ai_filter import AIFalsePositiveFilter
-from strix.scanners.mobile_scanner import MobileSecurityScanner
-from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
-from strix.scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
+from aegis.core.config import settings
+from aegis.scanners.ai_filter import AIFalsePositiveFilter
+from aegis.scanners.mobile_scanner import MobileSecurityScanner
+from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from aegis.scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
 
-logger = logging.getLogger("cybersecuritybot.sast_scanner")
+logger = logging.getLogger("aegis.sast_scanner")
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
 # List of directories to ignore during all code traversals and static analysis
@@ -829,7 +829,7 @@ class SASTScanner:
 
         logger.info(f"Starting multi-language SAST & Mobile security audit for: {path}")
 
-        from strix.scanners.secret_scanner import SecretScanner
+        from aegis.scanners.secret_scanner import SecretScanner
         secret_scanner = SecretScanner()
 
         # Run built-in multi-language analyzer, mobile scanner, and CLI tools concurrently

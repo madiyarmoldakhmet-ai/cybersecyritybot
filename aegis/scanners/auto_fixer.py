@@ -3,10 +3,10 @@ import os
 from typing import Optional
 from openai import AsyncOpenAI
 
-from strix.core.config import settings
-from strix.scanners.models import VulnerabilityFinding
+from aegis.core.config import settings
+from aegis.scanners.models import VulnerabilityFinding
 
-logger = logging.getLogger("cybersecuritybot.auto_fixer")
+logger = logging.getLogger("aegis.auto_fixer")
 
 AUTO_FIXER_PROMPT = """\
 Ты AI Security Engineer. Вот уязвимый код. 

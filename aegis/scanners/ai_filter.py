@@ -5,10 +5,10 @@ from typing import List, Optional
 
 from openai import AsyncOpenAI
 
-from strix.core.config import settings
-from strix.scanners.models import VulnerabilityFinding, Severity
+from aegis.core.config import settings
+from aegis.scanners.models import VulnerabilityFinding, Severity
 
-logger = logging.getLogger("cybersecuritybot.ai_filter")
+logger = logging.getLogger("aegis.ai_filter")
 
 AI_FILTER_SYSTEM_PROMPT = """\
 You are an expert Application Security Engineer. Your job is to review a potential vulnerability finding produced by a static analysis tool (SAST) and determine if it is a REAL threat or a FALSE POSITIVE.

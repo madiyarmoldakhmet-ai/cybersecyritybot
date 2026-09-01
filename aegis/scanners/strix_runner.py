@@ -1,7 +1,7 @@
 """
-Strix Multi-Agent Pentest Engine for CyberSecurityBot.
+Aegis Multi-Agent Pentest Engine for Aegis.
 Deep AI Agentic Pentest & Multi-Agent Code Security Analysis.
-Licensed under Apache-2.0 (Powered by Strix Engine Architecture).
+Licensed under Apache-2.0 (Powered by Aegis Engine Architecture).
 Configured for local Ollama LLM (qwen2.5-coder:14b / 7b / 32b) and cloud Gemini fallback.
 """
 
@@ -16,11 +16,11 @@ from typing import Any, Dict, List, Optional, Set
 
 from openai import AsyncOpenAI
 
-from strix.core.config import settings
-from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
-from strix.scanners.route_extractor import DiscoveredEndpoint, RouteExtractor
+from aegis.core.config import settings
+from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from aegis.scanners.route_extractor import DiscoveredEndpoint, RouteExtractor
 
-logger = logging.getLogger("cybersecuritybot.strix_runner")
+logger = logging.getLogger("aegis.aegis_runner")
 
 # Target extensions for deep agentic reasoning
 AUDIT_EXTENSIONS: Set[str] = {
@@ -38,11 +38,11 @@ SKIP_DIRS: Set[str] = {
 
 
 # =============================================================================
-# Strix Multi-Agent System Prompts (Chain-of-Thought & Specialization)
+# Aegis Multi-Agent System Prompts (Chain-of-Thought & Specialization)
 # =============================================================================
 
 STRIX_RECON_SYSTEM_PROMPT = """\
-You are the Strix Reconnaissance & Architecture Agent (Strix Engine / Apache-2.0).
+You are the Aegis Reconnaissance & Architecture Agent (Aegis Engine / Apache-2.0).
 Your mission is to perform architectural reconnaissance on the application source code:
 1. Identify the technology stack (Framework, Database, ORM, Auth providers like JWT/Session/OAuth).
 2. Map trust boundaries: which endpoints and functions are open to public vs which require privileged roles (Admin/User).
@@ -55,7 +55,7 @@ Format your analysis concisely as Markdown with bullet points:
 """
 
 STRIX_ATTACK_SYSTEM_PROMPT = """\
-You are the Strix Red-Team Vulnerability Discovery Agent (Strix Engine / Apache-2.0).
+You are the Aegis Red-Team Vulnerability Discovery Agent (Aegis Engine / Apache-2.0).
 You receive the source code and the Reconnaissance Map.
 Perform exhaustive vulnerability discovery targeting high-impact server flaws and logic vulnerabilities:
 
@@ -87,7 +87,7 @@ Return ONLY raw JSON, with no markdown fences, no conversational text.
 """
 
 STRIX_POC_BUILDER_SYSTEM_PROMPT = """\
-You are the Strix Exploit & PoC Verification Agent (Strix Engine / Apache-2.0).
+You are the Aegis Exploit & PoC Verification Agent (Aegis Engine / Apache-2.0).
 Your goal is to transform discovered vulnerabilities into precise, reproducible proof-of-concept verification requests.
 For each vulnerability:
 1. Construct the exact cURL command matching the actual route, HTTP method, headers, and exploit payload.
@@ -97,9 +97,9 @@ Return output strictly as a JSON array of findings with enriched "curl_command" 
 """
 
 
-class StrixEngine:
+class AegisEngine:
     """
-    Asynchronous Multi-Agent Strix Pentest & Security Engine.
+    Asynchronous Multi-Agent Aegis Pentest & Security Engine.
     Coordinates Recon, Attack, and PoC Builder agents to uncover deep logic bugs, IDOR, and injection flaws.
     """
 
@@ -133,11 +133,11 @@ class StrixEngine:
             # Fallback to local Ollama AI
             self.ollama_base_url = (
                 ollama_base_url
-                or getattr(settings, "strix_ollama_base_url", "http://localhost:11434/v1")
+                or getattr(settings, "aegis_ollama_base_url", "http://localhost:11434/v1")
             )
             self.model_name = (
                 model_name
-                or getattr(settings, "strix_model", "qwen2.5-coder:14b")
+                or getattr(settings, "aegis_model", "qwen2.5-coder:14b")
                 or settings.ollama_model
             )
             self.client = AsyncOpenAI(
@@ -191,7 +191,7 @@ class StrixEngine:
                 rel_path = file_path.relative_to(repo_dir).as_posix()
 
                 if len(content) > 35_000:
-                    content = content[:35_000] + "\n# ... [Truncated by Strix Engine]"
+                    content = content[:35_000] + "\n# ... [Truncated by Aegis Engine]"
 
                 collected.append({"file_path": rel_path, "content": content})
                 total_bytes += len(content)
@@ -204,12 +204,12 @@ class StrixEngine:
         return collected
 
     async def _run_cli_if_available(self, repo_dir: Path) -> Optional[List[VulnerabilityFinding]]:
-        """Attempt to run official strix CLI binary if installed in environment."""
-        strix_bin = shutil.which("strix")
-        if not strix_bin:
+        """Attempt to run official aegis CLI binary if installed in environment."""
+        aegis_bin = shutil.which("aegis")
+        if not aegis_bin:
             return None
 
-        logger.info(f"Found strix CLI at {strix_bin}. Executing deep scan on {repo_dir}...")
+        logger.info(f"Found aegis CLI at {aegis_bin}. Executing deep scan on {repo_dir}...")
         env = os.environ.copy()
         env["OPENAI_API_BASE"] = self.ollama_base_url
         env["OPENAI_BASE_URL"] = self.ollama_base_url
@@ -219,7 +219,7 @@ class StrixEngine:
 
         try:
             cmd = [
-                strix_bin,
+                aegis_bin,
                 "-t", str(repo_dir),
                 "-n",
                 "--scan-mode", "deep",
@@ -236,16 +236,16 @@ class StrixEngine:
             )
 
             out_text = stdout.decode("utf-8", errors="replace")
-            findings = self._parse_strix_output(out_text, repo_dir)
+            findings = self._parse_aegis_output(out_text, repo_dir)
             if findings:
                 return findings
         except Exception as ex:
-            logger.warning(f"Strix CLI execution failed: {ex}. Falling back to internal multi-agent runner.")
+            logger.warning(f"Aegis CLI execution failed: {ex}. Falling back to internal multi-agent runner.")
 
         return None
 
-    def _parse_strix_output(self, raw_output: str, repo_dir: Path) -> List[VulnerabilityFinding]:
-        """Parse JSON findings from Strix Agent output."""
+    def _parse_aegis_output(self, raw_output: str, repo_dir: Path) -> List[VulnerabilityFinding]:
+        """Parse JSON findings from Aegis Agent output."""
         findings: List[VulnerabilityFinding] = []
         cleaned = raw_output.strip()
 
@@ -280,8 +280,8 @@ class StrixEngine:
                             VulnerabilityFinding(
                                 id=str(item.get("id") or f"STRIX-{idx+1:03d}"),
                                 scanner=ScannerType.STRIX,
-                                title=str(item.get("title") or "Strix Agent Identified Vulnerability"),
-                                description=str(item.get("description") or "Discovered by Strix multi-agent analysis."),
+                                title=str(item.get("title") or "Aegis Agent Identified Vulnerability"),
+                                description=str(item.get("description") or "Discovered by Aegis multi-agent analysis."),
                                 severity=sev,
                                 file_path=str(item.get("file_path") or "repository"),
                                 line_start=item.get("line_start") or 1,
@@ -290,28 +290,28 @@ class StrixEngine:
                                 cwe=item.get("cwe") if isinstance(item.get("cwe"), list) else ([str(item.get("cwe"))] if item.get("cwe") else ["CWE-699"]),
                                 cve=item.get("cve") if isinstance(item.get("cve"), list) else [],
                                 recommendation=str(item.get("recommendation") or "Implement defensive input validation and least privilege principles."),
-                                raw_metadata={"engine": "strix", "license": "Apache-2.0", "item": item},
+                                raw_metadata={"engine": "aegis", "license": "Apache-2.0", "item": item},
                             )
                         )
         except Exception as parse_err:
-            logger.debug(f"Failed to parse JSON findings from Strix: {parse_err}")
+            logger.debug(f"Failed to parse JSON findings from Aegis: {parse_err}")
 
         return findings
 
     # =========================================================================
-    # Multi-Agent Strix Pipeline Execution
+    # Multi-Agent Aegis Pipeline Execution
     # =========================================================================
 
     async def _run_agentic_scan(self, repo_dir: Path) -> List[VulnerabilityFinding]:
         """
-        Execute multi-agent Strix Pentest pipeline:
+        Execute multi-agent Aegis Pentest pipeline:
         Stage 1: Route Extraction & Reconnaissance Agent
         Stage 2: Red-Team Vulnerability Discovery Agent
         Stage 3: PoC Builder & Verification
         """
         code_files = self._collect_repository_code(repo_dir)
         if not code_files:
-            logger.info("No supported code files found in repository for Strix deep scan.")
+            logger.info("No supported code files found in repository for Aegis deep scan.")
             return []
 
         # 1. Discover endpoints across repository
@@ -328,9 +328,9 @@ class StrixEngine:
         codebase_text = "\n".join(code_summary)
 
         # ---------------------------------------------------------------------
-        # Agent 1: Strix Reconnaissance & Architecture Agent
+        # Agent 1: Aegis Reconnaissance & Architecture Agent
         # ---------------------------------------------------------------------
-        logger.info(f"🕵️ [Strix Recon Agent] Analyzing architecture and attack surface for {repo_dir.name}...")
+        logger.info(f"🕵️ [Aegis Recon Agent] Analyzing architecture and attack surface for {repo_dir.name}...")
         recon_prompt = (
             f"Target Repository Directory: {repo_dir.name}\n"
             f"Total Files Analyzed: {len(code_files)}\n\n"
@@ -352,12 +352,12 @@ class StrixEngine:
             )
             recon_analysis = recon_resp.choices[0].message.content or ""
         except Exception as ex:
-            logger.warning(f"Strix Recon Agent failed, proceeding with direct analysis: {ex}")
+            logger.warning(f"Aegis Recon Agent failed, proceeding with direct analysis: {ex}")
 
         # ---------------------------------------------------------------------
-        # Agent 2: Strix Red-Team Vulnerability Discovery Agent
+        # Agent 2: Aegis Red-Team Vulnerability Discovery Agent
         # ---------------------------------------------------------------------
-        logger.info(f"⚔️ [Strix Attack Agent] Hunting for deep logic flaws, IDOR, and injection chains...")
+        logger.info(f"⚔️ [Aegis Attack Agent] Hunting for deep logic flaws, IDOR, and injection chains...")
         attack_user_prompt = (
             f"Target Repository: {repo_dir.name}\n\n"
             f"### RECONNAISSANCE MAP:\n{recon_analysis or attack_surface_summary}\n\n"
@@ -377,14 +377,14 @@ class StrixEngine:
                 max_tokens=3000,
             )
             raw_text = attack_resp.choices[0].message.content or ""
-            return self._parse_strix_output(raw_text, repo_dir)
+            return self._parse_aegis_output(raw_text, repo_dir)
         except Exception as e:
-            logger.error(f"Strix Attack Agent LLM execution failed: {e}")
+            logger.error(f"Aegis Attack Agent LLM execution failed: {e}")
             return []
 
     async def scan(self, repo_dir: Path) -> SASTScanResult:
         """
-        Execute full Strix Deep Pentest on target directory.
+        Execute full Aegis Deep Pentest on target directory.
         Returns standardized SASTScanResult with ScannerType.STRIX.
         """
         start_time = time.time()
@@ -411,13 +411,13 @@ class StrixEngine:
         except Exception as ex:
             logger.debug(f"CLI check error: {ex}")
 
-        # 2. Fall back to multi-agent Strix pipeline
+        # 2. Fall back to multi-agent Aegis pipeline
         if not findings:
             try:
                 agent_findings = await self._run_agentic_scan(target_path)
                 findings.extend(agent_findings)
             except Exception as e:
-                err_msg = f"Strix deep scan error: {str(e)}"
+                err_msg = f"Aegis deep scan error: {str(e)}"
                 logger.exception(err_msg)
                 errors.append(err_msg)
 

@@ -1,5 +1,5 @@
 """
-Vulnerability Classifier for CyberSecurityBot.
+Vulnerability Classifier for Aegis.
 Determines whether a vulnerability can be verified via HTTP request (remote exploit)
 or requires static/local code verification only.
 """
@@ -7,7 +7,7 @@ or requires static/local code verification only.
 from enum import Enum
 from typing import Set
 
-from strix.scanners.models import ScannerType, VulnerabilityFinding
+from aegis.scanners.models import ScannerType, VulnerabilityFinding
 
 
 class VulnCategory(str, Enum):

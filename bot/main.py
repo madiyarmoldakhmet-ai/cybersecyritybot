@@ -1,5 +1,5 @@
 """
-Main entry point for CyberSecurityBot Telegram Daemon.
+Main entry point for Aegis Telegram Daemon.
 Initializes aiogram Dispatcher, middlewares, and starts polling.
 """
 
@@ -12,14 +12,14 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.handlers import router
-from strix.core.config import settings
+from aegis.core.config import settings
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-logger = logging.getLogger("cybersecuritybot.main")
+logger = logging.getLogger("aegis.main")
 
 
 async def run_bot() -> None:

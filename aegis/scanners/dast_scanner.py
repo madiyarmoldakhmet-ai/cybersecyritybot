@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 from playwright.async_api import async_playwright
 import uuid
 
-logger = logging.getLogger("cybersecuritybot.dast_scanner")
+logger = logging.getLogger("aegis.dast_scanner")
 
 class DASTScanner:
     """
@@ -23,16 +23,16 @@ class DASTScanner:
         Returns: (True/False, Path to screenshot if triggered)
         """
         temp_id = str(uuid.uuid4())[:8]
-        html_file = Path(f"/tmp/strix_poc_{temp_id}.html")
-        screenshot_file = Path(f"/tmp/strix_screenshot_{temp_id}.png")
+        html_file = Path(f"/tmp/aegis_poc_{temp_id}.html")
+        screenshot_file = Path(f"/tmp/aegis_screenshot_{temp_id}.png")
 
         # Create a test harness HTML
         test_html = f"""
         <!DOCTYPE html>
         <html>
-        <head><title>Strix PoC</title></head>
+        <head><title>Aegis PoC</title></head>
         <body>
-            <div id="strix-container"></div>
+            <div id="aegis-container"></div>
             <script>
                 // Intercept alerts or custom flags
                 window.STRIX_XSS = false;
@@ -41,11 +41,11 @@ class DASTScanner:
                 // Inject the vulnerable snippet
                 try {{
                     const payload = `{payload}`;
-                    const container = document.getElementById("strix-container");
+                    const container = document.getElementById("aegis-container");
                     
                     {code_snippet}
                 }} catch (e) {{
-                    console.error("Strix PoC Error:", e);
+                    console.error("Aegis PoC Error:", e);
                 }}
             </script>
         </body>

@@ -1,5 +1,5 @@
 """
-GitHub Webhook Server & "Commit Guardian" for CyberSecurityBot.
+GitHub Webhook Server & "Commit Guardian" for Aegis.
 Listens for git `push` and `pull_request` events, executes instant asynchronous
 SAST & Mobile DevSecOps scans in the background, and dispatches urgent Telegram alerts.
 """
@@ -17,12 +17,12 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
-from strix.core.config import settings
-from strix.core.queue_manager import task_queue
-from strix.scanners.models import SASTScanResult, Severity, VulnerabilityFinding
-from strix.scanners.sast_scanner import SASTScanner
+from aegis.core.config import settings
+from aegis.core.queue_manager import task_queue
+from aegis.scanners.models import SASTScanResult, Severity, VulnerabilityFinding
+from aegis.scanners.sast_scanner import SASTScanner
 
-logger = logging.getLogger("cybersecuritybot.webhook")
+logger = logging.getLogger("aegis.webhook")
 router = APIRouter(prefix="/api/v1", tags=["Commit Guardian Webhooks"])
 
 
@@ -135,21 +135,21 @@ async def process_guardian_audit(
         )
         await asyncio.wait_for(proc.communicate(), timeout=45.0)
 
-        # 1. Run Strix Deep Agentic Scanner
-        from strix.scanners.strix_runner import StrixEngine
-        strix_engine = StrixEngine()
-        strix_res_task = asyncio.create_task(strix_engine.scan(temp_dir))
+        # 1. Run Aegis Deep Agentic Scanner
+        from aegis.scanners.aegis_runner import AegisEngine
+        aegis_engine = AegisEngine()
+        aegis_res_task = asyncio.create_task(aegis_engine.scan(temp_dir))
 
         # 2. Run AST rule scanner
-        from strix.scanners.sast_scanner import SASTScanner
+        from aegis.scanners.sast_scanner import SASTScanner
         sast_scanner = SASTScanner()
         sast_res_task = asyncio.create_task(sast_scanner.scan(temp_dir))
 
-        strix_res, sast_res = await asyncio.gather(strix_res_task, sast_res_task)
+        aegis_res, sast_res = await asyncio.gather(aegis_res_task, sast_res_task)
 
-        # Merge findings (Strix first, then AST findings deduplicated)
-        all_findings = list(strix_res.findings)
-        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in strix_res.findings}
+        # Merge findings (Aegis first, then AST findings deduplicated)
+        all_findings = list(aegis_res.findings)
+        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in aegis_res.findings}
 
         for sf in sast_res.findings:
             key = f"{sf.file_path}:{sf.line_start}:{sf.title}"
@@ -157,7 +157,7 @@ async def process_guardian_audit(
                 all_findings.append(sf)
                 seen_keys.add(key)
 
-        total_duration = round(strix_res.duration_seconds + sast_res.duration_seconds, 2)
+        total_duration = round(aegis_res.duration_seconds + sast_res.duration_seconds, 2)
         severity_counts = {}
         for f in all_findings:
             severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
@@ -169,7 +169,7 @@ async def process_guardian_audit(
             findings=all_findings,
             duration_seconds=total_duration,
             scanners_run=[ScannerType.STRIX, ScannerType.SEMGREP, ScannerType.BANDIT],
-            errors=strix_res.errors + sast_res.errors,
+            errors=aegis_res.errors + sast_res.errors,
         )
 
         crit_count = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)

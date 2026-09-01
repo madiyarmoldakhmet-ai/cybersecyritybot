@@ -1,5 +1,5 @@
 """
-Telegram Bot Handlers for CyberSecurityBot (aiogram 3.x).
+Telegram Bot Handlers for Aegis (aiogram 3.x).
 Provides interactive security audit, strict ownership verification (Token & Commit Challenge),
 AI remediation, and auto-PR workflow.
 """
@@ -26,17 +26,17 @@ from aiogram.types import (
 )
 import httpx
 
-from strix.ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult, StaticVerification
-from strix.core.config import LLMProvider, settings
-from strix.core.pr_creator import PullRequestCreator
-from strix.core.verifier import OwnershipVerifier
+from aegis.ai.remediation_engine import ExploitPayload, RemediationEngine, RemediationResult, StaticVerification
+from aegis.core.config import LLMProvider, settings
+from aegis.core.pr_creator import PullRequestCreator
+from aegis.core.verifier import OwnershipVerifier
 from exploit.executor import execute_payload
-from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
-from strix.scanners.sast_scanner import SASTScanner
-from strix.scanners.strix_runner import StrixEngine
-from strix.scanners.vuln_classifier import VulnCategory, classify_vulnerability
+from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from aegis.scanners.sast_scanner import SASTScanner
+from aegis.scanners.aegis_runner import AegisEngine
+from aegis.scanners.vuln_classifier import VulnCategory, classify_vulnerability
 
-logger = logging.getLogger("cybersecuritybot.bot")
+logger = logging.getLogger("aegis.bot")
 router = Router()
 
 # In-memory storage for active scan sessions: session_id -> dict
@@ -89,10 +89,10 @@ async def handle_start(message: Message, state: FSMContext) -> None:
 
     welcome_text = (
         f"👋 **Привет, {user_name}!**\n\n"
-        f"Я — **CyberSecurityBot**, твой автономный DevSecOps & AI Pentester ассистент.\n\n"
+        f"Я — **Aegis**, твой автономный DevSecOps & AI Pentester ассистент.\n\n"
         f"🔹 **Что я умею:**\n"
         f"1. 🔐 **Proof of Ownership** — строгая проверка авторства репозитория перед аудитом.\n"
-        f"2. 🔍 **SAST & Deep Pentest (Strix)** — поиск уязвимостей в Flutter/Dart, JS/TS, Python, Firestore и секретах.\n"
+        f"2. 🔍 **SAST & Deep Pentest (Aegis)** — поиск уязвимостей в Flutter/Dart, JS/TS, Python, Firestore и секретах.\n"
         f"3. 🧠 **AI Remediation** — AI анализ ошибок и патчинг кода.\n"
         f"4. 🚀 **Auto-PR** — автоматическое открытие Pull Request с готовым исправленным кодом.\n\n"
         f"Нажми кнопку ниже, чтобы начать аудит!"
@@ -136,15 +136,15 @@ async def handle_about_promo(event: Message | CallbackQuery) -> None:
     msg = event.message if isinstance(event, CallbackQuery) else event
 
     about_text = (
-        "🎬 **О проекте CyberSecurityBot**\n\n"
-        "CyberSecurityBot — автономный DevSecOps & AI Pentester ассистент нового поколения.\n\n"
+        "🎬 **О проекте Aegis**\n\n"
+        "Aegis — автономный DevSecOps & AI Pentester ассистент нового поколения.\n\n"
         "🌟 **Ключевые преимущества:**\n"
         "• 🔐 **Proof of Ownership:** Защита от несанкционированного аудита.\n"
         "• ⚡ **SAST & Multi-Language:** Анализ Dart, JS/TS, Python, Firestore rules.\n"
-        "• 🤖 **Strix Deep Pentest:** Мульти-агентный аудит бизнес-логики и IDOR (Apache 2.0).\n"
+        "• 🤖 **Aegis Deep Pentest:** Мульти-агентный аудит бизнес-логики и IDOR (Apache 2.0).\n"
         "• 🧠 **Hybrid AI:** Полная приватность через Ollama или скорость Cloud Gemini.\n"
         "• 🚀 **Auto-PR:** Автоматическое устранение уязвимостей в 1 клик.\n\n"
-        "🔗 **GitHub:** [madiyarmoldakhmet-ai/cybersecyritybot](https://github.com/madiyarmoldakhmet-ai/cybersecyritybot)"
+        "🔗 **GitHub:** [madiyarmoldakhmet-ai/aegis](https://github.com/madiyarmoldakhmet-ai/aegis)"
     )
 
     promo_path = Path("assets/promo.mp4")
@@ -178,7 +178,7 @@ async def handle_about_promo(event: Message | CallbackQuery) -> None:
 async def handle_help(event: Message | CallbackQuery) -> None:
     """Display help information."""
     help_text = (
-        "📖 **Справка по работе с CyberSecurityBot**\n\n"
+        "📖 **Справка по работе с Aegis**\n\n"
         "1. **Proof of Ownership (Проверка авторства):**\n"
         "   • **GitHub Token:** мгновенная авторизация по токену, проверка прав владельца/контрибьютора и авто-создание PR.\n"
         "   • **Commit Challenge:** подтверждение владения без передачи токена через разовый коммит с кодом.\n\n"
@@ -236,11 +236,11 @@ async def handle_status(event: Message | CallbackQuery) -> None:
         active_model = "N/A"
 
     status_text = (
-        f"📊 **Статус Платформы CyberSecurityBot**\n\n"
+        f"📊 **Статус Платформы Aegis**\n\n"
         f"🚀 **Основной движок:** {active_engine}\n"
         f"🧠 **Нейросеть:** `{active_model}`\n"
         f"🔌 **Состояние API:** {ai_status}\n\n"
-        f"🛡️ **Strix Security Engine:** 🟢 Активен (v1.0.0)\n"
+        f"🛡️ **Aegis Security Engine:** 🟢 Активен (v1.0.0)\n"
         f"🌐 **GitHub Webhooks:** 🟢 Подключены"
     )
 
@@ -307,7 +307,7 @@ async def handle_auth_commit_choice(callback: CallbackQuery, state: FSMContext) 
     await callback.message.answer(
         "📝 **Режим Commit Challenge (без токена)**\n\n"
         "Введите ссылку на ваш репозиторий:\n"
-        "*(Пример: `https://github.com/owner/repo` или `madiyarmoldakhmet-ai/cybersecyritybot`)*",
+        "*(Пример: `https://github.com/owner/repo` или `madiyarmoldakhmet-ai/aegis`)*",
         parse_mode="Markdown"
     )
     await callback.answer()
@@ -333,7 +333,7 @@ async def process_token_input(message: Message, state: FSMContext) -> None:
     await message.answer(
         "✅ **Токен принят!**\n\n"
         "🌐 **Шаг 2: Введите ссылку на репозиторий для аудита:**\n"
-        "*(Пример: `https://github.com/owner/repo` или `madiyarmoldakhmet-ai/cybersecyritybot`)*",
+        "*(Пример: `https://github.com/owner/repo` или `madiyarmoldakhmet-ai/aegis`)*",
         parse_mode="Markdown"
     )
 
@@ -424,7 +424,7 @@ async def process_repo_input(message: Message, state: FSMContext) -> None:
             ],
             [
                 InlineKeyboardButton(
-                    text="🤖 Deep AI Pentest (Агенты Strix, 1-3 мин)",
+                    text="🤖 Deep AI Pentest (Агенты Aegis, 1-3 мин)",
                     callback_data="scan_mode_deep"
                 )
             ]
@@ -435,8 +435,8 @@ async def process_repo_input(message: Message, state: FSMContext) -> None:
         f"✅ {auth_res['message']}\n\n"
         f"🎯 **Выберите режим аудита безопасности:**\n\n"
         f"• ⚡ **Быстрый SAST-скан:** экспресс-поиск по AST и правилам (Semgrep, Bandit, Pip-Audit, Secrets).\n"
-        f"• 🤖 **Deep AI Pentest (Strix):** мульти-агентный глубокий анализ логики, IDOR и цепочек атак.\n\n"
-        f"_Deep Scanning powered by Strix Engine (Apache 2.0)_",
+        f"• 🤖 **Deep AI Pentest (Aegis):** мульти-агентный глубокий анализ логики, IDOR и цепочек атак.\n\n"
+        f"_Deep Scanning powered by Aegis Engine (Apache 2.0)_",
         reply_markup=kb,
         parse_mode="Markdown"
     )
@@ -495,7 +495,7 @@ async def handle_verify_commit_callback(callback: CallbackQuery, state: FSMConte
             ],
             [
                 InlineKeyboardButton(
-                    text="🤖 Deep AI Pentest (Агенты Strix, 1-3 мин)",
+                    text="🤖 Deep AI Pentest (Агенты Aegis, 1-3 мин)",
                     callback_data="scan_mode_deep"
                 )
             ]
@@ -506,8 +506,8 @@ async def handle_verify_commit_callback(callback: CallbackQuery, state: FSMConte
         f"✅ {msg}\n\n"
         f"🎯 **Выберите режим аудита безопасности:**\n\n"
         f"• ⚡ **Быстрый SAST-скан:** экспресс-поиск по AST и правилам (Semgrep, Bandit, Pip-Audit, Secrets).\n"
-        f"• 🤖 **Deep AI Pentest (Strix):** мульти-агентный глубокий анализ логики, IDOR и цепочек атак.\n\n"
-        f"_Deep Scanning powered by Strix Engine (Apache 2.0)_",
+        f"• 🤖 **Deep AI Pentest (Aegis):** мульти-агентный глубокий анализ логики, IDOR и цепочек атак.\n\n"
+        f"_Deep Scanning powered by Aegis Engine (Apache 2.0)_",
         reply_markup=kb,
         parse_mode="Markdown"
     )
@@ -542,7 +542,7 @@ async def handle_scan_mode_fast(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.callback_query(F.data == "scan_mode_deep")
 async def handle_scan_mode_deep(callback: CallbackQuery, state: FSMContext) -> None:
-    """Handle choice of deep Strix AI Pentest scan."""
+    """Handle choice of deep Aegis AI Pentest scan."""
     user_data = await state.get_data()
     repo_name = user_data.get("repo_name")
     github_token = user_data.get("github_token", "")
@@ -558,7 +558,7 @@ async def handle_scan_mode_deep(callback: CallbackQuery, state: FSMContext) -> N
     )
     await callback.answer()
 
-    await run_deep_strix_audit_pipeline(
+    await run_deep_aegis_audit_pipeline(
         status_msg=status_msg,
         repo_name=repo_name,
         github_token=github_token,
@@ -726,13 +726,13 @@ async def run_sast_audit_pipeline(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-async def run_deep_strix_audit_pipeline(
+async def run_deep_aegis_audit_pipeline(
     status_msg: Message,
     repo_name: str,
     github_token: str,
     can_create_pr: bool
 ) -> None:
-    """Clone verified repo, run deep Strix agentic pentest with animated progress, and render results."""
+    """Clone verified repo, run deep Aegis agentic pentest with animated progress, and render results."""
     session_id = str(uuid.uuid4())[:8]
     temp_dir = settings.temp_clone_dir / f"scan_{session_id}"
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -762,10 +762,10 @@ async def run_deep_strix_audit_pipeline(
 
         # Start multi-agent animation background loop
         anim_messages = [
-            "🕵️ **[Strix Recon Agent]** Картирование эндпоинтов, доверенных зон и архитектуры... 🔍\n⏳ *Анализ поверхности атаки и моделей данных*",
-            "⚔️ **[Strix Attack Agent]** Поиск цепочек IDOR, инъекций и логических дыр... ⚡\n⏳ *Анализ прав доступа, BOLA и потоков данных*",
-            "🧪 **[Strix PoC Builder]** Конструирование верификационных эксплойтов... 🎯\n⏳ *Генерация точных cURL-векторов и доказательств*",
-            "📝 **[Strix Engine]** Синтез отчета и подготовка авто-патчей... 🛡️\n⏳ *Финальная верификация находок*",
+            "🕵️ **[Aegis Recon Agent]** Картирование эндпоинтов, доверенных зон и архитектуры... 🔍\n⏳ *Анализ поверхности атаки и моделей данных*",
+            "⚔️ **[Aegis Attack Agent]** Поиск цепочек IDOR, инъекций и логических дыр... ⚡\n⏳ *Анализ прав доступа, BOLA и потоков данных*",
+            "🧪 **[Aegis PoC Builder]** Конструирование верификационных эксплойтов... 🎯\n⏳ *Генерация точных cURL-векторов и доказательств*",
+            "📝 **[Aegis Engine]** Синтез отчета и подготовка авто-патчей... 🛡️\n⏳ *Финальная верификация находок*",
         ]
 
         async def status_animator():
@@ -781,9 +781,9 @@ async def run_deep_strix_audit_pipeline(
 
         anim_task = asyncio.create_task(status_animator())
 
-        # 1. Run Strix Deep Agentic Scanner (Ollama local qwen2.5-coder)
-        strix_engine = StrixEngine()
-        strix_res: SASTScanResult = await strix_engine.scan(temp_dir)
+        # 1. Run Aegis Deep Agentic Scanner (Ollama local qwen2.5-coder)
+        aegis_engine = AegisEngine()
+        aegis_res: SASTScanResult = await aegis_engine.scan(temp_dir)
 
         # 2. Also run AST rule scanner for multi-language rule baseline
         sast_scanner = SASTScanner()
@@ -796,9 +796,9 @@ async def run_deep_strix_audit_pipeline(
         except asyncio.CancelledError:
             pass
 
-        # Merge findings (Strix first, then AST findings deduplicated)
-        all_findings: List[VulnerabilityFinding] = list(strix_res.findings)
-        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in strix_res.findings}
+        # Merge findings (Aegis first, then AST findings deduplicated)
+        all_findings: List[VulnerabilityFinding] = list(aegis_res.findings)
+        seen_keys = {f"{f.file_path}:{f.line_start}:{f.title}" for f in aegis_res.findings}
 
         for sf in sast_res.findings:
             key = f"{sf.file_path}:{sf.line_start}:{sf.title}"
@@ -806,7 +806,7 @@ async def run_deep_strix_audit_pipeline(
                 all_findings.append(sf)
                 seen_keys.add(key)
 
-        total_duration = round(strix_res.duration_seconds + sast_res.duration_seconds, 2)
+        total_duration = round(aegis_res.duration_seconds + sast_res.duration_seconds, 2)
         severity_counts: Dict[Severity, int] = {}
         for f in all_findings:
             severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
@@ -818,7 +818,7 @@ async def run_deep_strix_audit_pipeline(
             findings=all_findings,
             duration_seconds=total_duration,
             scanners_run=[ScannerType.STRIX, ScannerType.SEMGREP, ScannerType.BANDIT],
-            errors=strix_res.errors + sast_res.errors,
+            errors=aegis_res.errors + sast_res.errors,
         )
 
         SCAN_SESSIONS[session_id] = {
@@ -827,7 +827,7 @@ async def run_deep_strix_audit_pipeline(
             "can_create_pr": can_create_pr,
             "temp_dir": temp_dir,
             "scan_result": combined_result,
-            "scan_mode": "deep_strix",
+            "scan_mode": "deep_aegis",
             "remediations": {}
         }
 
@@ -841,7 +841,7 @@ async def run_deep_strix_audit_pipeline(
 
         summary_text = (
             f"{status_emoji} **Deep AI Pentest `{repo_name}` завершен!**\n"
-            f"_Deep Scanning powered by Strix Engine (Apache 2.0)_\n\n"
+            f"_Deep Scanning powered by Aegis Engine (Apache 2.0)_\n\n"
             f"⏱ **Время работы агентов:** `{total_duration} сек`\n"
             f"🔎 **Всего выявлено проблем:** `{len(all_findings)}`\n\n"
             f"📊 **Распределение по критичности:**\n"
@@ -910,7 +910,7 @@ async def run_deep_strix_audit_pipeline(
         await status_msg.edit_text(summary_text, reply_markup=kb, parse_mode="Markdown")
 
     except Exception as ex:
-        logger.exception(f"Deep Strix audit error: {ex}")
+        logger.exception(f"Deep Aegis audit error: {ex}")
         await status_msg.edit_text(f"❌ Ошибка во время глубокого аудита: `{str(ex)}`")
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -999,7 +999,7 @@ async def handle_view_finding_detail(callback: CallbackQuery, state: FSMContext)
     sev_icon = "🔴" if f.severity in [Severity.CRITICAL, Severity.HIGH] else ("🟡" if f.severity == Severity.MEDIUM else "🔵")
     scanner_names = {
         ScannerType.MOBILE: "📱 Mobile DevSecOps (Flutter/Firebase)",
-        ScannerType.STRIX: "🤖 Strix Deep Pentest Engine (Apache-2.0)",
+        ScannerType.STRIX: "🤖 Aegis Deep Pentest Engine (Apache-2.0)",
         ScannerType.SEMGREP: "🛡️ Semgrep SAST",
         ScannerType.BANDIT: "🐍 Bandit AST Linter",
         ScannerType.PIP_AUDIT: "📦 Pip-Audit (CVEs)",
@@ -1190,7 +1190,7 @@ async def handle_generate_poc_screenshot(callback: CallbackQuery, state: FSMCont
     )
 
     try:
-        from strix.scanners.dast_scanner import DASTScanner
+        from aegis.scanners.dast_scanner import DASTScanner
         scanner = DASTScanner()
         
         # We generate a simple payload for POC
@@ -1551,7 +1551,7 @@ async def handle_autofix(callback: CallbackQuery, state: FSMContext) -> None:
 
     status_msg = await callback.message.answer("⏳ **LLM генерирует патч... Пожалуйста, подождите.**")
     
-    from strix.scanners.auto_fixer import AIAutoFixer
+    from aegis.scanners.auto_fixer import AIAutoFixer
     fixer = AIAutoFixer()
     
     fixed_code = await fixer.generate_fix(finding)
@@ -1594,7 +1594,7 @@ async def handle_download_report(callback: CallbackQuery) -> None:
 
     report_lines = [
         f"# 🛡️ Отчет по безопасности: {repo_name}",
-        "> **Deep Scanning powered by Strix Engine (Apache 2.0)**\n",
+        "> **Deep Scanning powered by Aegis Engine (Apache 2.0)**\n",
         f"**Всего уязвимостей:** {scan_result.total_findings}",
         f"**Длительность сканирования:** {scan_result.duration_seconds} сек\n",
         "## 📊 Сводка по критичности:",
@@ -1653,7 +1653,7 @@ async def handle_download_pdf_report(callback: CallbackQuery) -> None:
 
     try:
         # Run SCA Scanner
-        from strix.scanners.sca_scanner import SCAScanner
+        from aegis.scanners.sca_scanner import SCAScanner
         sca_scanner = SCAScanner()
         sca_findings = await sca_scanner.scan(temp_dir)
         
@@ -1674,9 +1674,9 @@ async def handle_download_pdf_report(callback: CallbackQuery) -> None:
         )
 
         # Generate PDF
-        from strix.scanners.pdf_generator import PDFReportGenerator
+        from aegis.scanners.pdf_generator import PDFReportGenerator
         
-        pdf_path = f"/tmp/strix_report_{session_id}.pdf"
+        pdf_path = f"/tmp/aegis_report_{session_id}.pdf"
         generator = PDFReportGenerator(pdf_path)
         
         # We don't have DAST screenshots saved in the session natively, 
@@ -1684,7 +1684,7 @@ async def handle_download_pdf_report(callback: CallbackQuery) -> None:
         success = generator.generate(scan_result, repo_name, dast_screenshots=[])
         
         if success and os.path.exists(pdf_path):
-            doc = FSInputFile(pdf_path, filename=f"Strix_Report_{repo_name.replace('/', '_')}.pdf")
+            doc = FSInputFile(pdf_path, filename=f"Aegis_Report_{repo_name.replace('/', '_')}.pdf")
             await callback.message.answer_document(
                 document=doc,
                 caption=f"📄 **Финальный PDF-отчет по безопасности для `{repo_name}`**\n"

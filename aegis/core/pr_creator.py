@@ -1,5 +1,5 @@
 """
-Automated Pull Request Generator for CyberSecurityBot.
+Automated Pull Request Generator for Aegis.
 Applies AI-generated security remediations and opens GitHub Pull Requests.
 """
 
@@ -10,11 +10,11 @@ import re
 from typing import Optional, Tuple
 from github import Auth, Github, GithubException
 
-from strix.ai.remediation_engine import RemediationResult
-from strix.core.verifier import OwnershipVerifier
-from strix.scanners.models import VulnerabilityFinding
+from aegis.ai.remediation_engine import RemediationResult
+from aegis.core.verifier import OwnershipVerifier
+from aegis.scanners.models import VulnerabilityFinding
 
-logger = logging.getLogger("cybersecuritybot.pr_creator")
+logger = logging.getLogger("aegis.pr_creator")
 
 
 class PullRequestCreator:
@@ -35,7 +35,7 @@ class PullRequestCreator:
         cve_str = ", ".join(finding.cve) if finding.cve else "N/A"
         steps_md = "\n".join(f"- {step}" for step in remediation.remediation_steps)
 
-        return f"""## 🛡️ CyberSecurityBot — Automated Security Fix
+        return f"""## 🛡️ Aegis — Automated Security Fix
 
 ### 📌 Обзор уязвимости
 - **Тип / ID:** `{finding.id}`
@@ -57,7 +57,7 @@ class PullRequestCreator:
 {f"```diff\n{remediation.diff_patch}\n```" if remediation.diff_patch else ""}
 
 ---
-> 🤖 **CyberSecurityBot DevSecOps Engine**  
+> 🤖 **Aegis DevSecOps Engine**  
 > *Сгенерировано автоматически с использованием локального AI-ассистента ({remediation.confidence_score * 100:.0f}% confidence).*  
 > Пожалуйста, проверьте изменения перед слиянием (merge) в основную ветку.
 """

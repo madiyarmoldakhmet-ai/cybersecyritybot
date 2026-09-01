@@ -11,19 +11,19 @@ from rich.panel import Panel
 from rich.text import Text
 from rich import print as rprint
 
-from strix.scanners.sast_scanner import SASTScanner
-from strix.scanners.models import SASTScanResult, Severity
-from strix.scanners.pdf_generator import PDFReportGenerator
-from strix.scanners.auto_fixer import AIAutoFixer
-from strix.scanners.strix_runner import StrixEngine
-from strix.core.config import settings
+from aegis.scanners.sast_scanner import SASTScanner
+from aegis.scanners.models import SASTScanResult, Severity
+from aegis.scanners.pdf_generator import PDFReportGenerator
+from aegis.scanners.auto_fixer import AIAutoFixer
+from aegis.scanners.aegis_runner import AegisEngine
+from aegis.core.config import settings
 
-app = typer.Typer(help="Strix Engine - Autonomous AI-DevSecOps Scanner")
+app = typer.Typer(help="Aegis Engine - Autonomous AI-DevSecOps Scanner")
 console = Console()
 
 @app.callback()
 def main_callback():
-    """Strix Engine - AI-DevSecOps Scanner"""
+    """Aegis Engine - AI-DevSecOps Scanner"""
     pass
 
 def print_banner():
@@ -37,17 +37,17 @@ def print_banner():
                                           __/ |             
                                          |___/              
     """
-    console.print(Panel(Text(banner, style="bold blue", justify="center"), title="Strix CLI"))
+    console.print(Panel(Text(banner, style="bold blue", justify="center"), title="Aegis CLI"))
 
 @app.command()
 def scan(
     target: Path = typer.Argument(..., help="Path to the repository to scan"),
     export_pdf: bool = typer.Option(False, "--export-pdf", help="Generate an Enterprise PDF report"),
     autofix: bool = typer.Option(False, "--autofix", help="Generate AI-based fixes for discovered vulnerabilities"),
-    deep: bool = typer.Option(False, "--deep", help="Run Deep AI Pentest (Strix Agent) instead of fast AST scan"),
+    deep: bool = typer.Option(False, "--deep", help="Run Deep AI Pentest (Aegis Agent) instead of fast AST scan"),
 ):
     """
-    Scan a repository for vulnerabilities using Strix Engine.
+    Scan a repository for vulnerabilities using Aegis Engine.
     """
     print_banner()
 
@@ -60,8 +60,8 @@ def scan(
     try:
         # Run scanners asynchronously
         if deep:
-            console.print("🤖 [cyan]Running Deep AI Pentest (Strix Engine)...[/]")
-            engine = StrixEngine()
+            console.print("🤖 [cyan]Running Deep AI Pentest (Aegis Engine)...[/]")
+            engine = AegisEngine()
             scan_result: SASTScanResult = asyncio.run(engine.scan(target))
         else:
             console.print("⚡ [cyan]Running Fast DevSecOps Pipeline (SAST, SCA, Secrets)...[/]")
@@ -138,7 +138,7 @@ def scan(
     # Export PDF
     if export_pdf:
         console.print("\n📄 [cyan]Generating Enterprise PDF Report...[/]")
-        pdf_path = f"Strix_Report_{target.name}.pdf"
+        pdf_path = f"Aegis_Report_{target.name}.pdf"
         pdf_gen = PDFReportGenerator(pdf_path)
         if pdf_gen.generate(scan_result, target.name):
             console.print(f"✅ [bold green]Report saved to:[/] {os.path.abspath(pdf_path)}")

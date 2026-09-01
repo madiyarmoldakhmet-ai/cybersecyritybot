@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import List
 import uuid
 
-from strix.scanners.models import ScannerType, Severity, VulnerabilityFinding
+from aegis.scanners.models import ScannerType, Severity, VulnerabilityFinding
 
-logger = logging.getLogger("cybersecuritybot.secret_scanner")
+logger = logging.getLogger("aegis.secret_scanner")
 
 class SecretScanner:
     """

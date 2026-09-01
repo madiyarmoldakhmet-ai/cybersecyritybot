@@ -23,7 +23,7 @@ class ScannerType(str, Enum):
     DAST = "dast"
     SCA = "sca"
     SECRET = "secret"
-    STRIX = "strix"
+    STRIX = "aegis"
     MOBILE = "mobile"
     CUSTOM = "custom"
 

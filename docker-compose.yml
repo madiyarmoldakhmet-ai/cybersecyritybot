@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  cybersecuritybot:
+  aegis:
     build: .
-    container_name: cybersecuritybot
+    container_name: aegis
     restart: unless-stopped
     ports:
       - "8000:8000"

@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import httpx
 
-from strix.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
 import uuid
 
-logger = logging.getLogger("cybersecuritybot.sca_scanner")
+logger = logging.getLogger("aegis.sca_scanner")
 
 class SCAScanner:
     """

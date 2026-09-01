@@ -1,5 +1,5 @@
 """
-Configuration module for CyberSecurityBot.
+Configuration module for Aegis.
 Uses Pydantic Settings for strictly typed, environment-driven configuration.
 """
 
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     )
 
     # General App Settings
-    app_name: str = Field(default="CyberSecurityBot", description="Application name")
+    app_name: str = Field(default="Aegis", description="Application name")
     environment: str = Field(default="development", description="Runtime environment")
     debug: bool = Field(default=False, description="Enable debug logging and detailed errors")
     log_level: str = Field(default="INFO", description="Logging level")
@@ -102,18 +102,18 @@ class Settings(BaseSettings):
         description="OpenRouter model identifier"
     )
 
-    # Strix Deep Agentic Pentest Engine Settings (Apache-2.0)
-    strix_enabled: bool = Field(
+    # Aegis Deep Agentic Pentest Engine Settings (Apache-2.0)
+    aegis_enabled: bool = Field(
         default=True,
-        description="Enable Strix Deep AI Pentest Engine"
+        description="Enable Aegis Deep AI Pentest Engine"
     )
-    strix_ollama_base_url: str = Field(
+    aegis_ollama_base_url: str = Field(
         default="http://localhost:11434/v1",
-        description="Ollama OpenAI-compatible API base URL for Strix"
+        description="Ollama OpenAI-compatible API base URL for Aegis"
     )
-    strix_model: str = Field(
+    aegis_model: str = Field(
         default="qwen2.5-coder:14b",
-        description="Local LLM model for Strix Engine (qwen2.5-coder:14b or 7b)"
+        description="Local LLM model for Aegis Engine (qwen2.5-coder:14b or 7b)"
     )
 
     # Scanner Settings

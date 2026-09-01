@@ -1,5 +1,5 @@
 """
-Route and Attack Surface Extractor for CyberSecurityBot.
+Route and Attack Surface Extractor for Aegis.
 Statically discovers API endpoints, methods, parameters, and authentication decorators
 across Python (FastAPI, Flask, Django), JavaScript/TypeScript (Express, NestJS, Next.js), and Go.
 """
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-logger = logging.getLogger("cybersecuritybot.route_extractor")
+logger = logging.getLogger("aegis.route_extractor")
 
 # Files and directories to ignore during route discovery
 IGNORE_DIRS = {
@@ -345,7 +345,7 @@ class RouteExtractor:
         return sorted(list(ops))
 
     def format_attack_surface_summary(self, endpoints: List[DiscoveredEndpoint]) -> str:
-        """Render a concise markdown table and summary of the attack surface for Strix Agents."""
+        """Render a concise markdown table and summary of the attack surface for Aegis Agents."""
         if not endpoints:
             return "No public HTTP endpoints detected in repository."
 

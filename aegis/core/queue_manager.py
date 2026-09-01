@@ -1,5 +1,5 @@
 """
-Concurrency Limiter and Background Task Queue Manager for CyberSecurityBot.
+Concurrency Limiter and Background Task Queue Manager for Aegis.
 Guarantees safe resource usage on local Apple Silicon hardware by limiting
 concurrent Ollama model inference tasks and orchestrating background security audits.
 """
@@ -12,9 +12,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Dict, Optional
 
-from strix.core.config import settings
+from aegis.core.config import settings
 
-logger = logging.getLogger("cybersecuritybot.queue_manager")
+logger = logging.getLogger("aegis.queue_manager")
 
 
 @dataclass

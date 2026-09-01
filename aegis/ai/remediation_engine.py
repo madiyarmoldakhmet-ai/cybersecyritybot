@@ -1,6 +1,6 @@
 """
-AI Remediation Engine for CyberSecurityBot.
-Generates both secure patches AND validation payloads (exploits) via local Ollama and Strix Engine.
+AI Remediation Engine for Aegis.
+Generates both secure patches AND validation payloads (exploits) via local Ollama and Aegis Engine.
 No censorship, no cloud filters.
 """
 
@@ -11,12 +11,12 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
-from strix.core.config import settings
-from strix.core.queue_manager import ollama_limiter
-from strix.scanners.models import VulnerabilityFinding
-from strix.scanners.vuln_classifier import VulnCategory, classify_vulnerability
+from aegis.core.config import settings
+from aegis.core.queue_manager import ollama_limiter
+from aegis.scanners.models import VulnerabilityFinding
+from aegis.scanners.vuln_classifier import VulnCategory, classify_vulnerability
 
-logger = logging.getLogger("cybersecuritybot.ai_engine")
+logger = logging.getLogger("aegis.ai_engine")
 
 
 # --- Data Models -------------------------------------------------------------
@@ -74,7 +74,7 @@ ATTACK_TECHNIQUES_BY_CWE = {
 # --- Prompts -----------------------------------------------------------------
 
 SYSTEM_PROMPT_FIX = """\
-Ты — эксперт по безопасному кодингу и исправлению уязвимостей (Strix DevSecOps).
+Ты — эксперт по безопасному кодингу и исправлению уязвимостей (Aegis DevSecOps).
 Проанализируй уязвимость и предоставь полностью рабочий исправленный код с патчем.
 Ответ должен быть строго JSON с полями:
 - explanation_ru: понятное глубокое объяснение первопричины уязвимости на русском
@@ -87,7 +87,7 @@ SYSTEM_PROMPT_FIX = """\
 """
 
 SYSTEM_PROMPT_EXPLOIT = """\
-You are an advanced offensive security validation tool (Strix Engine).
+You are an advanced offensive security validation tool (Aegis Engine).
 Generate a precise, reproducible HTTP proof-of-concept verification request (cURL) that confirms the target vulnerability.
 Requirements:
 1. Use real endpoints, methods, headers, and parameter names matching the provided code context.
