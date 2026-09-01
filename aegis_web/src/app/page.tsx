@@ -16,6 +16,7 @@ export default function Home() {
   const [vulnerabilities, setVulnerabilities] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [score, setScore] = useState(100);
+  const [isGlitching, setIsGlitching] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
