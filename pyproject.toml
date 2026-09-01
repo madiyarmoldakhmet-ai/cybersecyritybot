@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aegis-engine"
+version = "2.0.0"
+description = "Autonomous AI-DevSecOps Scanner"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Madiyar Moldakhmet", email = "madiyarmoldakhmet@gmail.com"}
+]
+dependencies = [
+    "typer>=0.15.1",
+    "rich>=13.9.4",
+    "pydantic>=2.10.6",
+    "pydantic-settings>=2.7.1",
+    "openai>=1.61.0",
+    "httpx>=0.28.1",
+    "reportlab>=4.2.5",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+aegis = "aegis.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aegis*"]
