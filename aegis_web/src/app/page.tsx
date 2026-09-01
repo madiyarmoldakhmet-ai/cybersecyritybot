@@ -48,7 +48,8 @@ export default function Home() {
       setElapsedTime(prev => prev + 1);
     }, 1000);
 
-    const ws = new WebSocket('ws://localhost:8000/ws/scan');
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/scan";
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
