@@ -43,6 +43,10 @@ class Settings(BaseSettings):
         default=None,
         description="Default Telegram Chat ID for Webhook Commit Guardian alerts"
     )
+    web_app_url: str = Field(
+        default="http://localhost:3000",
+        description="URL of the frontend Next.js application for Telegram Web App integration"
+    )
 
     # GitHub OAuth & Integration
     github_token: Optional[str] = Field(
