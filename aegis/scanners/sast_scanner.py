@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Pattern, Tuple, Union, Set
 
 from aegis.core.config import settings
+from aegis.core.event_bus import ScanEventBus, ScanStarted, FileScanning, CodeAnalyzing, VulnerabilityFound
 from aegis.scanners.ai_filter import AIFalsePositiveFilter
 from aegis.scanners.mobile_scanner import MobileSecurityScanner
 from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
