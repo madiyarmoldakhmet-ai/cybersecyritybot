@@ -43,8 +43,9 @@ class ASTNodeVisitor(ast.NodeVisitor):
         if isinstance(node, ast.Name):
             return node.id
         elif isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name):
-                return f"{node.value.id}.{node.attr}"
+            base = self._get_call_name(node.value)
+            if base:
+                return f"{base}.{node.attr}"
             return node.attr
         return None
 
