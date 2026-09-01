@@ -883,6 +883,7 @@ class SASTScanner:
             ScannerType.BANDIT,
             ScannerType.PIP_AUDIT,
             ScannerType.SECRET,
+            ScannerType.FLUTTER,
         ]
 
         result = SASTScanResult(
