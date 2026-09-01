@@ -14,7 +14,7 @@ import re
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Any
 
 from aegis.scanners.models import VulnerabilityFinding, Severity, ScannerType
 
