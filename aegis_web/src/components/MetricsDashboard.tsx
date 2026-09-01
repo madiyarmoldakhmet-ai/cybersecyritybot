@@ -54,20 +54,20 @@ interface MetricCardProps {
 
 function MetricCard({ title, value, icon, progress, valueColor }: MetricCardProps) {
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between relative overflow-hidden">
+    <div className="bg-[#1f1e1b] border border-[#252320] rounded-xl p-4 flex flex-col justify-between relative overflow-hidden">
       {progress !== undefined && (
         <motion.div 
-          className="absolute bottom-0 left-0 h-1 bg-blue-500/30"
+          className="absolute bottom-0 left-0 h-1 bg-[var(--color-primary)]"
           initial={{ width: 0 }}
           animate={{ width: `${progress}%` }}
           transition={{ duration: 0.3 }}
         />
       )}
       <div className="flex justify-between items-center mb-4">
-        <span className="text-slate-400 text-sm font-medium">{title}</span>
+        <span className="text-[#a09d96] text-sm font-medium">{title}</span>
         {icon}
       </div>
-      <div className={cn("text-2xl font-bold font-mono tracking-tight", valueColor || "text-slate-100")}>
+      <div className={cn("text-2xl font-bold font-mono tracking-tight", valueColor || "text-[#faf9f5]")}>
         {value}
       </div>
     </div>
