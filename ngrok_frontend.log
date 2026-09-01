@@ -21,3 +21,4 @@ t=2026-09-01T19:00:51+0500 lvl=info msg="join connections" obj=join id=890674c2e
 t=2026-09-01T19:01:53+0500 lvl=info msg="join connections" obj=join id=705e91e3ad34 l=[::1]:3000 r=[2a03:2880:11ff:53::]:43250
 t=2026-09-01T19:02:05+0500 lvl=info msg="join connections" obj=join id=9e67add87f7a l=[::1]:3000 r=[2a03:2880:11ff:4c::]:54544
 t=2026-09-01T19:03:14+0500 lvl=info msg="join connections" obj=join id=b8ec04dd8d91 l=[::1]:3000 r=[2a03:2880:11ff:9::]:48144
+t=2026-09-01T19:03:35+0500 lvl=info msg="join connections" obj=join id=2976d81ea678 l=[::1]:3000 r=[2a03:2880:11ff:8::]:57828
