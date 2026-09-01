@@ -537,11 +537,13 @@ class SASTScanner:
         semgrep_config: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         min_secret_entropy: float = 3.6,
+        event_bus: Optional['ScanEventBus'] = None,
     ) -> None:
         self.semgrep_config = semgrep_config or settings.semgrep_config
         self.timeout_seconds = timeout_seconds or settings.scan_timeout_seconds
         self.mobile_scanner = MobileSecurityScanner()
         self.sanitizer = FalsePositiveSanitizer(min_secret_entropy=min_secret_entropy)
+        self.event_bus = event_bus
 
     async def _run_command(
         self, cmd: List[str], cwd: Optional[Path] = None
