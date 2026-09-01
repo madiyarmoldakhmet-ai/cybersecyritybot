@@ -25,6 +25,7 @@ class ScannerType(str, Enum):
     SECRET = "secret"
     STRIX = "aegis"
     MOBILE = "mobile"
+    FLUTTER = "flutter"
     CUSTOM = "custom"
 
 
