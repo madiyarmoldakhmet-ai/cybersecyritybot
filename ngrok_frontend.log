@@ -7,3 +7,4 @@ t=2026-09-01T17:42:31+0500 lvl=info msg="update available" obj=updater
 t=2026-09-01T17:42:31+0500 lvl=info msg="client session established" obj=tunnels.session
 t=2026-09-01T17:42:31+0500 lvl=info msg="tunnel session started" obj=tunnels.session
 t=2026-09-01T17:42:32+0500 lvl=info msg="started tunnel" obj=tunnels name=command_line addr=http://localhost:3000 url=https://unwarlike-pebble-correct.ngrok-free.dev
+t=2026-09-01T18:58:08+0500 lvl=info msg="join connections" obj=join id=028c871ec0f7 l=[::1]:3000 r=[2a03:2880:11ff:41::]:62644
