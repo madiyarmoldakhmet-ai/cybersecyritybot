@@ -830,7 +830,10 @@ class SASTScanner:
         logger.info(f"Starting multi-language SAST & Mobile security audit for: {path}")
 
         from aegis.scanners.secret_scanner import SecretScanner
+        from aegis.scanners.flutter_rules import FlutterSecurityScanner
+        
         secret_scanner = SecretScanner()
+        flutter_scanner = FlutterSecurityScanner()
 
         # Run built-in multi-language analyzer, mobile scanner, and CLI tools concurrently
         ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
@@ -843,9 +846,12 @@ class SASTScanner:
         ml_findings, mobile_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err), secret_findings = await asyncio.gather(
             ml_task, mobile_task, semgrep_task, bandit_task, pip_audit_task, secret_task, return_exceptions=False
         )
+        
+        # Flutter scan runs synchronously for now (very fast)
+        flutter_findings = flutter_scanner.scan(path)
 
         raw_findings: List[VulnerabilityFinding] = (
-            mobile_findings + bandit_findings + semgrep_findings + ml_findings + (pip_findings or []) + secret_findings
+            mobile_findings + bandit_findings + semgrep_findings + ml_findings + (pip_findings or []) + secret_findings + flutter_findings
         )
 
         # Apply Zero-Noise False-Positive Sanitizer (Shannon Entropy & Test Filter)
