@@ -171,11 +171,12 @@ def scan(
         for finding in scan_result.findings:
             sev_color = "red bold" if finding.severity == Severity.CRITICAL else "red" if finding.severity == Severity.HIGH else "yellow" if finding.severity == Severity.MEDIUM else "blue"
             location = f"{finding.file_path}:{finding.line_start or 1}"
+            cwe_str = ", ".join(finding.cwe) if finding.cwe else "N/A"
             findings_table.add_row(
                 f"[{sev_color}]{finding.severity.value}[/]",
                 finding.title,
                 location,
-                finding.cwe or "N/A"
+                cwe_str
             )
 
         console.print(findings_table)
