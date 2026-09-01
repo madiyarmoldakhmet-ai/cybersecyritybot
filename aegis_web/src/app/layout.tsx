@@ -25,13 +25,18 @@ export const metadata: Metadata = {
   description: "Advanced Agentic Security",
 };
 
+import { Providers } from "@/components/Providers";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${garamond.variable} ${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+      <body className="min-h-full flex flex-col font-sans">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
