@@ -1,22 +1,48 @@
 @import "tailwindcss";
 
 @theme {
-  --color-canvas: #faf9f5;
+  --color-canvas: var(--bg-canvas);
   --color-primary: #cc785c;
   --color-primary-active: #a9583e;
-  --color-ink: #141413;
-  --color-body-text: #3d3d3a;
+  --color-ink: var(--fg-ink);
+  --color-body-text: var(--fg-body);
+  
   --color-surface-dark: #181715;
   --color-surface-dark-soft: #1f1e1b;
-  --color-surface-card: #efe9de;
+  --color-surface-card: var(--bg-surface-card);
+  --color-surface-cream-strong: var(--bg-surface-cream-strong);
+  --color-surface-input: var(--bg-surface-input);
+  
   --color-on-dark: #faf9f5;
+  --color-on-dark-soft: #a09d96;
+  --color-muted-soft: var(--fg-muted-soft);
   
   --font-sans: var(--font-inter), sans-serif;
   --font-serif: var(--font-garamond), serif;
   --font-mono: var(--font-jetbrains-mono), monospace;
 }
 
+:root {
+  --bg-canvas: #faf9f5;
+  --fg-ink: #141413;
+  --fg-body: #3d3d3a;
+  --bg-surface-card: #efe9de;
+  --bg-surface-cream-strong: #e8e0d2;
+  --bg-surface-input: #faf9f5;
+  --fg-muted-soft: #8e8b82;
+}
+
+.dark {
+  --bg-canvas: #141413;
+  --fg-ink: #faf9f5;
+  --fg-body: #a09d96;
+  --bg-surface-card: #1f1e1b;
+  --bg-surface-cream-strong: #252320;
+  --bg-surface-input: #181715;
+  --fg-muted-soft: #6c6a64;
+}
+
 body {
-  background: var(--color-canvas);
-  color: var(--color-ink);
+  background: var(--bg-canvas);
+  color: var(--fg-ink);
 }
