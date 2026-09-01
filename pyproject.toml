@@ -21,6 +21,9 @@ dependencies = [
     "httpx>=0.28.1",
     "reportlab>=4.2.5",
     "pyyaml>=6.0",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.4",
+    "websockets>=17.1",
 ]
 
 [project.scripts]
