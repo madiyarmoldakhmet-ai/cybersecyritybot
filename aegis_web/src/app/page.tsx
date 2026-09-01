@@ -132,7 +132,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-[var(--color-canvas)] text-[var(--color-ink)] font-sans flex flex-col">
       {/* Top Nav */}
-      <header className="h-16 border-b border-[#e8e0d2] flex items-center justify-between px-6 shrink-0 bg-[var(--color-canvas)]">
+      <header className="h-16 border-b border-[var(--color-surface-cream-strong)] flex items-center justify-between px-6 shrink-0 bg-[var(--color-canvas)]">
         <div className="flex items-center gap-2">
           {/* Anthropic/Aegis Spike Mark */}
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -161,20 +161,20 @@ export default function Home() {
             <h1 className="font-serif text-5xl lg:text-[64px] leading-[1.05] tracking-[-1.5px] mb-6">
               Meet your thinking partner for security.
             </h1>
-            <p className="text-lg text-[#3d3d3a] leading-relaxed">
+            <p className="text-lg text-[var(--color-body-text)] leading-relaxed">
               Aegis performs deep agentic security audits, analyzing codebases for semantic vulnerabilities, hardcoded secrets, and architectural flaws in real time. 
             </p>
           </div>
 
           {/* Chat Interface */}
-          <div className="flex-1 flex flex-col bg-[#efe9de] rounded-xl overflow-hidden min-h-[400px]">
+          <div className="flex-1 flex flex-col bg-[var(--color-surface-card)] rounded-xl overflow-hidden min-h-[400px]">
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {messages.map((msg) => (
                 <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[85%] rounded-lg p-4 leading-relaxed ${
                     msg.role === 'user' 
                       ? 'bg-[var(--color-primary)] text-white' 
-                      : 'bg-white border border-[#e8e0d2] text-[var(--color-ink)] shadow-sm'
+                      : 'bg-[var(--color-surface-input)] border border-[var(--color-surface-cream-strong)] text-[var(--color-ink)] shadow-sm'
                   }`}>
                     {msg.content}
                     {msg.role === 'assistant' && msg.id === 'streaming' && (
@@ -186,14 +186,14 @@ export default function Home() {
               <div ref={messagesEndRef} />
             </div>
             
-            <div className="p-4 bg-white border-t border-[#e8e0d2]">
+            <div className="p-4 bg-[var(--color-surface-input)] border-t border-[var(--color-surface-cream-strong)]">
               <form onSubmit={handleSendMessage} className="relative">
                 <input
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   placeholder="Ask a question or paste a GitHub URL to scan..."
-                  className="w-full bg-[var(--color-canvas)] border border-[#e6dfd8] rounded-md px-4 py-3 pr-12 focus:outline-none focus:border-[var(--color-primary)] transition-colors placeholder:text-[#8e8b82]"
+                  className="w-full bg-[var(--color-canvas)] border border-[var(--color-surface-cream-strong)] rounded-md px-4 py-3 pr-12 focus:outline-none focus:border-[var(--color-primary)] transition-colors placeholder:text-[var(--color-muted-soft)]"
                 />
                 <button 
                   type="submit"
