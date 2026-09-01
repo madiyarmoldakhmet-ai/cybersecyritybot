@@ -125,9 +125,10 @@ dependencies:
 
     return project_dir
 
-def test_flutter_scanner(vulnerable_flutter_project):
+@pytest.mark.asyncio
+async def test_flutter_scanner(vulnerable_flutter_project):
     scanner = FlutterSecurityScanner()
-    findings = scanner.scan(vulnerable_flutter_project)
+    findings = await scanner.scan(vulnerable_flutter_project)
 
     # We should have 10 findings matching all 10 rules
     assert len(findings) == 10
