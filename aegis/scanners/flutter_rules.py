@@ -536,8 +536,8 @@ class FlutterSecurityScanner:
         skip_dirs = {".git", ".dart_tool", "build", ".flutter-plugins", "node_modules", ".venv"}
         
         for ext in all_extensions:
-            pattern = f"**/*{ext}"
-            for file_path in target.rglob(pattern.lstrip("**/")):
+            pattern = f"*{ext}"
+            for file_path in target.rglob(pattern):
                 # Skip build artifacts and hidden dirs
                 parts = set(file_path.parts)
                 if parts & skip_dirs:
