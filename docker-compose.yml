@@ -1,29 +1,24 @@
 version: '3.8'
 
 services:
-  aegis:
-    build: .
-    container_name: aegis
-    restart: unless-stopped
+  aegis-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
     ports:
       - "8000:8000"
-    environment:
-      # General
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      
-      # Telegram Bot (Change this in production or use .env)
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      
-      # Cloud AI Settings (from .env)
-      - LLM_PROVIDER=${LLM_PROVIDER}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL=${GEMINI_MODEL}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
-      
-      # Webhooks (Optional)
-      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
-    
     volumes:
-      - ./temp_clones:/app/temp_clones # Ensure temp clones are wiped on container restart
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  aegis-web:
+    build:
+      context: ./aegis_web
+      dockerfile: Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - aegis-server
