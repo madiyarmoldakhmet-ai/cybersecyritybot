@@ -581,6 +581,13 @@ class SASTScanner:
         except Exception as ex:
             return -3, "", str(ex)
 
+    async def _emit(self, event) -> None:
+        if self.event_bus:
+            try:
+                await self.event_bus.emit(event)
+            except Exception as e:
+                logger.debug(f"Failed to emit event {event.event_type}: {e}")
+
     def _normalize_semgrep_severity(self, semgrep_sev: str) -> Severity:
         mapping = {
             "ERROR": Severity.HIGH,
