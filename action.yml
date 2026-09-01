@@ -1,0 +1,49 @@
+name: 'Aegis Security Scan'
+description: 'AI-driven DevSecOps scanner for finding and automatically fixing vulnerabilities.'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  target_path:
+    description: 'Path to scan'
+    required: false
+    default: '.'
+  fail_on_critical:
+    description: 'Fail the build if CRITICAL vulnerabilities are found'
+    required: false
+    default: 'true'
+  ai_filter:
+    description: 'Enable LLM false-positive filtering'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install .
+
+    - name: Run Aegis Scan (SARIF Export)
+      shell: bash
+      env:
+        AEGIS_FAIL_ON_CRITICAL: ${{ inputs.fail_on_critical }}
+        AEGIS_AI_FILTER: ${{ inputs.ai_filter }}
+      run: |
+        echo "Starting Aegis scan on ${{ inputs.target_path }}..."
+        aegis scan ${{ inputs.target_path }} --format sarif
+
+    - name: Upload SARIF report to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: results.sarif
