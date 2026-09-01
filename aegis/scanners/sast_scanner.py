@@ -866,11 +866,21 @@ class SASTScanner:
 
         logger.info(f"Starting multi-language SAST & Mobile security audit for: {path}")
 
+        # Emit ScanStarted
+        total_files = sum(1 for root, dirs, files in os.walk(path) for f in files if not any(d in root for d in IGNORED_DIRS) and not any(d.startswith(".") for d in root.split(os.sep)))
+        await self._emit(ScanStarted(repo_url=str(path), total_files=total_files))
+
         from aegis.scanners.secret_scanner import SecretScanner
         from aegis.scanners.flutter_rules import FlutterSecurityScanner
         
         secret_scanner = SecretScanner()
         flutter_scanner = FlutterSecurityScanner()
+        
+        # Pass event_bus to other scanners if they support it
+        if hasattr(secret_scanner, 'event_bus'):
+            secret_scanner.event_bus = self.event_bus
+        if hasattr(flutter_scanner, 'event_bus'):
+            flutter_scanner.event_bus = self.event_bus
 
         # Run built-in multi-language analyzer, mobile scanner, and CLI tools concurrently
         ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
@@ -937,6 +947,11 @@ class SASTScanner:
             f"SAST & Mobile DevSecOps audit completed in {duration}s. "
             f"Discovered {len(clean_findings)} validated findings (sanitized from {len(raw_findings)} raw candidates)."
         )
+        
+        # Complete the event bus
+        if self.event_bus:
+            await self.event_bus.complete(total_findings=len(clean_findings), duration_seconds=duration)
+            
         return result
 
 
