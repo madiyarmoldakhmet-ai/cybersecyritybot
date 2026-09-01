@@ -45,6 +45,8 @@ def fetch_user(query):
 def test_cross_file_taint_analysis(vulnerable_project):
     engine = TaintEngine(str(vulnerable_project))
     findings = engine.analyze()
+    print("Call Graph:", engine.call_graph)
+    print("Findings:", findings)
     
     assert len(findings) == 1
     finding = findings[0]
