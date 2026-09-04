@@ -134,32 +134,38 @@ class OwnershipVerifier:
         clean_token = token.strip() if token else ""
         repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
 
-        if not clean_token:
-            return {
-                "verified": False,
-                "username": "",
-                "repo_owner": "",
-                "role": "None",
-                "message": "GitHub Personal Access Token не предоставлен для проверки авторства.",
-                "can_create_pr": False,
-            }
-
-        if not repo_full_name:
-            return {
-                "verified": False,
-                "username": "",
-                "repo_owner": "",
-                "role": "None",
-                "message": f"Неверный формат репозитория: '{repo_identifier}'. Ожидается 'owner/repo'.",
-                "can_create_pr": False,
-            }
-
         def _sync_check() -> Dict[str, Any]:
             try:
+                # 1. Check if repo is public first (bypass authorship for open source)
+                try:
+                    gh_public = Github(timeout=10)
+                    repo = gh_public.get_repo(repo_full_name)
+                    if not repo.private:
+                        return {
+                            "verified": True,
+                            "username": "Guest",
+                            "repo_owner": repo.owner.login,
+                            "role": "Public",
+                            "message": f"Репозиторий {repo.full_name} является открытым (Open Source). Проверка авторства пропущена (допускается локальное сканирование).",
+                            "can_create_pr": False,
+                        }
+                except Exception:
+                    pass # Fallback to strict token check if not found or API limit
+
+                if not clean_token:
+                    return {
+                        "verified": False,
+                        "username": "",
+                        "repo_owner": "",
+                        "role": "None",
+                        "message": "GitHub Personal Access Token не предоставлен для проверки авторства (а репозиторий не является открытым).",
+                        "can_create_pr": False,
+                    }
+
                 auth = Auth.Token(clean_token)
                 gh = Github(auth=auth, timeout=15)
 
-                # 1. Get authenticated user
+                # 2. Get authenticated user
                 try:
                     current_user = gh.get_user().login
                 except GithubException as auth_err:

@@ -22,12 +22,12 @@ from aegis.scanners.aegis_runner import AegisEngine
 from aegis.scanners.security_score import render_score_card
 from aegis.core.config import settings
 
-app = typer.Typer(help="Aegis Engine - Autonomous AI-DevSecOps Scanner")
+app = typer.Typer(help="Aegis Engine - Security Scanner")
 console = Console()
 
 @app.callback()
 def main_callback():
-    """Aegis Engine - AI-DevSecOps Scanner"""
+    """Aegis Engine - Security Scanner"""
     pass
 
 def print_banner():
@@ -91,7 +91,7 @@ def scan(
     target: Path = typer.Argument(..., help="Path to the repository to scan"),
     export_pdf: bool = typer.Option(False, "--export-pdf", help="Generate an Enterprise PDF report"),
     autofix: bool = typer.Option(False, "--autofix", help="Generate AI-based fixes for discovered vulnerabilities"),
-    deep: bool = typer.Option(False, "--deep", help="Run Deep AI Pentest instead of fast AST scan"),
+    deep: bool = typer.Option(False, "--deep", help="Run Deep scan instead of fast AST scan"),
     format_out: str = typer.Option("table", "--format", help="Output format: sarif, json, or table")
 ):
     """
@@ -137,7 +137,8 @@ def scan(
                 if i > 50: progress.update(task_secrets, advance=2)
                 if i > 75: progress.update(task_ai, advance=4)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         scan_task = loop.create_task(run_scan())
         progress_task = loop.create_task(fake_progress())
         
