@@ -14,7 +14,7 @@ type ChatMessage = {
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: '1', role: 'assistant', content: 'Hello. I am Aegis, your AI thinking partner for security. Paste a GitHub repository link to begin a deep agentic audit, or ask me about vulnerability patterns.' }
+    { id: '1', role: 'assistant', content: 'Aegis — сканер уязвимостей. Отправьте ZIP-архив с кодом или ссылку на репозиторий.' }
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -32,39 +32,50 @@ export default function Home() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Initialize Chat WebSocket
-  useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_CHAT_WS_URL || "ws://localhost:8000/ws/chat";
-    const ws = new WebSocket(wsUrl);
-    chatWsRef.current = ws;
+    const connectChatWs = () => {
+      const wsUrl = process.env.NEXT_PUBLIC_CHAT_WS_URL || "ws://localhost:8000/ws/chat";
+      const ws = new WebSocket(wsUrl);
+      chatWsRef.current = ws;
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'action' && data.action === 'SCAN') {
-        startScan(data.github_url);
-      } else if (data.type === 'chunk') {
-        setIsTyping(false);
-        setMessages(prev => {
-          const last = prev[prev.length - 1];
-          if (last && last.role === 'assistant' && last.id === 'streaming') {
-            return [...prev.slice(0, -1), { ...last, content: last.content + data.content }];
-          } else {
-            return [...prev, { id: 'streaming', role: 'assistant', content: data.content }];
-          }
-        });
-      } else if (data.type === 'done') {
-        setMessages(prev => {
-          const last = prev[prev.length - 1];
-          if (last && last.id === 'streaming') {
-            return [...prev.slice(0, -1), { ...last, id: Date.now().toString() }];
-          }
-          return prev;
-        });
-      }
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'action' && data.action === 'SCAN') {
+          startScan(data.github_url);
+        } else if (data.type === 'chunk') {
+          setIsTyping(false);
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === 'assistant' && last.id === 'streaming') {
+              return [...prev.slice(0, -1), { ...last, content: last.content + data.content }];
+            } else {
+              return [...prev, { id: 'streaming', role: 'assistant', content: data.content }];
+            }
+          });
+        } else if (data.type === 'done') {
+          setMessages(prev => {
+            const last = prev[prev.length - 1];
+            if (last && last.id === 'streaming') {
+              return [...prev.slice(0, -1), { ...last, id: Date.now().toString() }];
+            }
+            return prev;
+          });
+        } else if (data.type === 'error') {
+            setIsTyping(false);
+            setMessages(prev => [...prev.filter(m => m.id !== 'streaming'), { id: Date.now().toString(), role: 'assistant', content: `Ошибка: ${data.message}` }]);
+        }
+      };
+
+      ws.onclose = () => {
+        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', content: 'Соединение потеряно. Переподключение...' }]);
+        setTimeout(connectChatWs, 2000); // retry after 2 seconds
+      };
     };
 
+    connectChatWs();
+
     return () => {
-      ws.close();
+      if (chatWsRef.current) chatWsRef.current.onclose = null;
+      chatWsRef.current?.close();
       if (scanWsRef.current) scanWsRef.current.close();
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -88,6 +99,41 @@ export default function Home() {
     setMessages(prev => [...prev, { id: 'streaming', role: 'assistant', content: '' }]);
 
     chatWsRef.current.send(userMsg);
+  };
+
+  const handleZipUpload = async (file: File) => {
+    if (!file.name.endsWith('.zip')) {
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', content: 'Пожалуйста, загрузите ZIP-архив.' }]);
+      return;
+    }
+
+    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: `[Загружен файл: ${file.name}]` }]);
+    setMessages(prev => [...prev, { id: 'streaming', role: 'assistant', content: 'Загрузка архива и начало сканирования...' }]);
+    
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') + '/api/scan/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      const data = await res.json();
+      setMessages(prev => {
+        const filtered = prev.filter(m => m.id !== 'streaming');
+        if (res.ok) {
+          return [...filtered, { id: Date.now().toString(), role: 'assistant', content: `Сканирование завершено. Найдено уязвимостей: ${data.vulnerabilities?.length || 0}.` }];
+        } else {
+          return [...filtered, { id: Date.now().toString(), role: 'assistant', content: `Ошибка при сканировании: ${data.error || 'Неизвестная ошибка'}` }];
+        }
+      });
+    } catch (err) {
+      setMessages(prev => [
+        ...prev.filter(m => m.id !== 'streaming'),
+        { id: Date.now().toString(), role: 'assistant', content: `Ошибка сети при загрузке: ${err}` }
+      ]);
+    }
   };
 
   const startScan = (repoUrl: string) => {
@@ -159,10 +205,10 @@ export default function Home() {
         <div className="flex-1 flex flex-col max-w-2xl">
           <div className="mb-12 mt-8">
             <h1 className="font-serif text-5xl lg:text-[64px] leading-[1.05] tracking-[-1.5px] mb-6">
-              Meet your thinking partner for security.
+              Aegis Security Scanner
             </h1>
             <p className="text-lg text-[var(--color-body-text)] leading-relaxed">
-              Aegis performs deep agentic security audits, analyzing codebases for semantic vulnerabilities, hardcoded secrets, and architectural flaws in real time. 
+              Сканер уязвимостей исходного кода. Поддерживает SAST, SCA и поиск секретов.
             </p>
           </div>
 
@@ -187,12 +233,12 @@ export default function Home() {
             </div>
             
             <div className="p-4 bg-[var(--color-surface-input)] border-t border-[var(--color-surface-cream-strong)]">
-              <form onSubmit={handleSendMessage} className="relative">
+              <form onSubmit={handleSendMessage} className="relative mb-4">
                 <input
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Ask a question or paste a GitHub URL to scan..."
+                  placeholder="Отправьте ссылку на GitHub..."
                   className="w-full bg-[var(--color-canvas)] border border-[var(--color-surface-cream-strong)] rounded-md px-4 py-3 pr-12 focus:outline-none focus:border-[var(--color-primary)] transition-colors placeholder:text-[var(--color-muted-soft)]"
                 />
                 <button 
@@ -203,6 +249,28 @@ export default function Home() {
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                 </button>
               </form>
+              <div 
+                className="w-full border-2 border-dashed border-[var(--color-surface-cream-strong)] rounded-lg p-6 flex items-center justify-center cursor-pointer hover:border-[var(--color-primary)] transition-colors bg-[var(--color-canvas)]"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    handleZipUpload(e.dataTransfer.files[0]);
+                  }
+                }}
+                onClick={() => document.getElementById('zip-upload')?.click()}
+              >
+                <input 
+                  type="file" 
+                  id="zip-upload" 
+                  accept=".zip" 
+                  className="hidden" 
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) handleZipUpload(e.target.files[0]);
+                  }}
+                />
+                <p className="text-[var(--color-muted-soft)] text-sm font-medium">Перетащите ZIP-архив. Код не сохраняется на сервере.</p>
+              </div>
             </div>
           </div>
         </div>

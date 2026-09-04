@@ -1,6 +1,6 @@
 """
 Aegis Multi-Agent Pentest Engine for Aegis.
-Deep AI Agentic Pentest & Multi-Agent Code Security Analysis.
+Code Security Analysis.
 Licensed under Apache-2.0 (Powered by Aegis Engine Architecture).
 Configured for local Ollama LLM (qwen2.5-coder:14b / 7b / 32b) and cloud Gemini fallback.
 """

@@ -235,9 +235,9 @@ class RemediationEngine:
                 finding_id=finding.id,
                 vuln_name=finding.title,
                 severity=finding.severity.value,
-                explanation_ru=f"Ошибка генерации: {e}",
-                impact_analysis="Проверьте работу Ollama.",
-                remediation_steps=["Запустите `ollama serve` и проверьте модель."],
+                explanation_ru="Не удалось сгенерировать автоматическое исправление. Пожалуйста, проанализируйте уязвимость вручную.",
+                impact_analysis="Требуется ручной анализ рисков. Инструмент не смог завершить генерацию.",
+                remediation_steps=["Изучите описание уязвимости", "Проверьте исходный код", "Примените исправление вручную"],
                 fixed_code=context,
                 confidence_score=0.0,
             )
@@ -308,7 +308,7 @@ class RemediationEngine:
                 headers={},
                 body=None,
                 success_indicator="",
-                curl_command=f"# Ошибка генерации эксплойта: {str(e)[:100]}",
+                curl_command="# Ошибка генерации эксплойта: сервис AI временно недоступен.",
                 confidence=0.0,
             )
 

@@ -7,7 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Dict, Any, List
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import AsyncOpenAI
@@ -30,6 +31,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(Exception)
+async def global_error(request: Request, exc: Exception):
+    logger.exception("Server error")
+    return JSONResponse(status_code=500, content={"error": str(exc)})
 
 SCANS_DIR = Path("/tmp/aegis_scans")
 SCANS_DIR.mkdir(parents=True, exist_ok=True)
@@ -54,6 +60,41 @@ async def clone_repo(repo_url: str, dest_dir: Path) -> bool:
     except Exception as e:
         logger.error(f"Error during git clone: {e}")
         return False
+
+@app.post("/api/scan/upload")
+async def scan_upload(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.endswith(".zip"):
+        return JSONResponse(status_code=400, content={"error": "Только ZIP-архивы разрешены"})
+    
+    scan_uuid = str(uuid.uuid4())
+    repo_dir = SCANS_DIR / scan_uuid
+    zip_path = repo_dir / "upload.zip"
+    extract_dir = repo_dir / "code"
+    
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        content = await file.read()
+        if len(content) > 50 * 1024 * 1024:
+            return JSONResponse(status_code=400, content={"error": "Файл слишком большой (максимум 50MB)"})
+        
+        with open(zip_path, "wb") as f:
+            f.write(content)
+            
+        shutil.unpack_archive(zip_path, extract_dir)
+        
+        event_bus = ScanEventBus(scan_id=scan_uuid)
+        scanner = SASTScanner(event_bus=event_bus)
+        
+        result = await scanner.scan(extract_dir)
+        
+        # We need to make sure the result is serializable.
+        # usually we can just return it, fastapi will serialize it.
+        return {"status": "success", "vulnerabilities": result if result else []}
+    finally:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        logger.info("Код удалён с сервера")
 
 @app.websocket("/ws/scan")
 async def websocket_scan(websocket: WebSocket):
@@ -93,12 +134,13 @@ async def websocket_scan(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Error in websocket handler: {e}")
         try:
-            await websocket.send_json({"event_type": "SystemError", "message": str(e)})
+            await websocket.send_json({"type": "error", "message": str(e)})
         except:
             pass
     finally:
         if repo_dir.exists():
             shutil.rmtree(repo_dir, ignore_errors=True)
+            logger.info("Код удалён с сервера")
         try:
             await websocket.close()
         except:

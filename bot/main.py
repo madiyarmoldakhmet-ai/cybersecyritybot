@@ -6,7 +6,10 @@ Initializes aiogram Dispatcher, middlewares, and starts polling.
 import asyncio
 import logging
 import sys
-from aiogram import Bot, Dispatcher, Router, types
+import uuid
+import shutil
+from pathlib import Path
+from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.client.default import DefaultBotProperties
@@ -14,6 +17,8 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from aegis.core.config import settings
+from aegis.scanners.sast_scanner import SASTScanner
+from aegis.core.event_bus import ScanEventBus
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -26,23 +31,52 @@ router = Router()
 
 @router.message(CommandStart())
 async def send_welcome(message: types.Message):
-    """Handler for the /start command. Sends a welcome message with a Web App button."""
-    web_app_url = settings.web_app_url
-    
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="Launch Aegis Dashboard",
-            web_app=WebAppInfo(url=web_app_url)
-        )]
-    ])
-    
+    """Handler for the /start command. Sends a welcome message."""
     welcome_text = (
-        "🛡 *Welcome to Aegis AI Security Engine!*\n\n"
-        "I am an advanced Autonomous AI-DevSecOps Scanner designed to find 0-day vulnerabilities in Flutter apps.\n\n"
-        "Click the button below to launch the interactive Visual Dashboard and start scanning your repositories in real-time."
+        "Aegis — сканер уязвимостей. Отправьте ZIP-архив с кодом или ссылку на репозиторий."
     )
     
-    await message.answer(welcome_text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+    await message.answer(welcome_text, parse_mode=ParseMode.MARKDOWN)
+
+@router.message(F.document)
+async def handle_document(message: types.Message, bot: Bot):
+    if not message.document.file_name.endswith('.zip'):
+        await message.reply("Пожалуйста, отправьте ZIP-архив.")
+        return
+
+    if message.document.file_size > 20 * 1024 * 1024:
+        await message.reply("Файл слишком большой. Лимит 20MB.")
+        return
+
+    status_msg = await message.reply("Скачиваю архив...")
+    
+    scan_uuid = str(uuid.uuid4())
+    repo_dir = Path(f"/tmp/aegis_scans/{scan_uuid}")
+    zip_path = repo_dir / "upload.zip"
+    extract_dir = repo_dir / "code"
+    
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        await bot.download(message.document, destination=zip_path)
+        await status_msg.edit_text("Распаковка и анализ...")
+        
+        shutil.unpack_archive(zip_path, extract_dir)
+        
+        event_bus = ScanEventBus(scan_id=scan_uuid)
+        scanner = SASTScanner(event_bus=event_bus)
+        
+        result = await scanner.scan(extract_dir)
+        
+        count = len(result) if result else 0
+        await status_msg.edit_text(f"Сканирование завершено. Найдено уязвимостей: {count}.")
+    except Exception as e:
+        logger.error(f"Error processing zip: {e}")
+        await status_msg.edit_text(f"Ошибка при сканировании: {str(e)}")
+    finally:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        logger.info("Код удалён с сервера")
 
 
 async def run_bot() -> None:
