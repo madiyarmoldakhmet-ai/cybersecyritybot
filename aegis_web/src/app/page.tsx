@@ -32,6 +32,7 @@ export default function Home() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
     const connectChatWs = () => {
       const wsUrl = process.env.NEXT_PUBLIC_CHAT_WS_URL || "ws://localhost:8000/ws/chat";
       const ws = new WebSocket(wsUrl);
