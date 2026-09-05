@@ -6,27 +6,38 @@ import shutil
 import uuid
 from pathlib import Path
 from typing import Dict, Any, List
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 
 from aegis.core.event_bus import ScanEventBus
 from aegis.scanners.sast_scanner import SASTScanner
 from aegis.core.config import settings
+from bot.main import run_bot
 
 logger = logging.getLogger("aegis_server")
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Aegis Security Engine API", version="2.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    bot_task = asyncio.create_task(run_bot())
+    yield
+    bot_task.cancel()
+    try:
+        await bot_task
+    except asyncio.CancelledError:
+        pass
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+app = FastAPI(title="Aegis Security Engine API", version="2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -198,3 +209,5 @@ async def websocket_chat(websocket: WebSocket):
             await websocket.close()
         except:
             pass
+
+app.mount("/", StaticFiles(directory="aegis_web/out", html=True), name="static")

@@ -32,8 +32,9 @@ export default function Home() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
     const connectChatWs = () => {
-      const wsUrl = process.env.NEXT_PUBLIC_CHAT_WS_URL || "ws://localhost:8000/ws/chat";
+      const wsUrl = typeof window !== 'undefined' ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/chat` : '';
       const ws = new WebSocket(wsUrl);
       chatWsRef.current = ws;
 
@@ -114,7 +115,8 @@ export default function Home() {
     formData.append('file', file);
 
     try {
-      const res = await fetch((process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') + '/api/scan/upload', {
+      const apiUrl = typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}` : '';
+      const res = await fetch(`${apiUrl}/api/scan/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -150,7 +152,7 @@ export default function Home() {
       setElapsedTime(prev => prev + 1);
     }, 1000);
 
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/scan";
+    const wsUrl = typeof window !== 'undefined' ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/scan` : '';
     const ws = new WebSocket(wsUrl);
     scanWsRef.current = ws;
 
