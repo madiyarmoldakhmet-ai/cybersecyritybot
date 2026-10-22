@@ -138,6 +138,20 @@ class Settings(BaseSettings):
         description="Directory for temporary repository clones during audit"
     )
 
+    # Compliance Reporting Settings
+    report_pdf_enabled: bool = Field(
+        default=True,
+        description="Render a PDF copy next to every Markdown audit report"
+    )
+    report_font_path: Optional[Path] = Field(
+        default=None,
+        description="TTF font with Cyrillic coverage for PDF reports (auto-detected when unset)"
+    )
+    ai_summary_timeout_seconds: int = Field(
+        default=90,
+        description="Timeout for the local Ollama audit summary request"
+    )
+
     @field_validator("allowed_telegram_users", mode="before")
     @classmethod
     def parse_allowed_telegram_users(cls, v):

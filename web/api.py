@@ -21,7 +21,7 @@ from aegis.core.pr_creator import PullRequestCreator
 from aegis.core.queue_manager import ollama_limiter, task_queue
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.dast_scanner import DASTScanner
-from aegis.scanners.models import DASTScanResult, SASTScanResult, VulnerabilityFinding
+from aegis.scanners.models import DASTScanResult, SASTScanResult, ScannerType, VulnerabilityFinding
 from aegis.scanners.sast_scanner import SASTScanner
 from web.webhook import router as webhook_router
 
