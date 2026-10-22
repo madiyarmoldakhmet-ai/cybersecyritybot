@@ -44,7 +44,7 @@ flowchart LR
 
 ## 🚀 Quick Start
 
-**Requirements:** Python 3.11+, Git, [Ollama](https://ollama.com).
+**Requirements:** Python 3.12+, Git, [Ollama](https://ollama.com).
 
 ```bash
 git clone https://github.com/madiyarmoldakhmet-ai/cybersecyritybot.git
