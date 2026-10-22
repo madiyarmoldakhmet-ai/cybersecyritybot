@@ -5,16 +5,20 @@ from typing import Optional, Tuple
 from playwright.async_api import async_playwright
 import uuid
 
+from aegis.scanners.http_dast import HTTPSecurityScanner
+
 logger = logging.getLogger("aegis.dast_scanner")
 
-class DASTScanner:
+class DASTScanner(HTTPSecurityScanner):
     """
     Dynamic Application Security Testing (DAST) Module.
-    Uses Playwright headless browser to execute DOM XSS payloads and capture screenshots.
+    HTTP audits (headers, CORS, cookies, active probes) come from HTTPSecurityScanner;
+    this class adds Playwright headless-browser verification of DOM XSS payloads.
     """
 
     def __init__(self, timeout_seconds: int = 15):
-        self.timeout = timeout_seconds * 1000  # ms
+        super().__init__(timeout_seconds=float(timeout_seconds))
+        self.timeout = timeout_seconds * 1000  # ms, for Playwright
 
     async def verify_xss_poc(self, code_snippet: str, payload: str = "<img src=x onerror=window.STRIX_XSS=true>") -> Tuple[bool, Optional[str]]:
         """

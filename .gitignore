@@ -49,3 +49,7 @@ temp_scans/
 
 # Local audit metrics database
 data/
+
+# Generated scan output & local tunnel logs
+results.sarif
+*.log

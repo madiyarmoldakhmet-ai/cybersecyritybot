@@ -5,7 +5,6 @@ Initializes aiogram Dispatcher, middlewares, and starts polling.
 
 import asyncio
 import logging
-import sys
 import uuid
 import shutil
 from pathlib import Path
@@ -17,14 +16,11 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from aegis.core.config import settings
+from aegis.core.logging_config import setup_logging
 from aegis.scanners.sast_scanner import SASTScanner
 from aegis.core.event_bus import ScanEventBus
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+setup_logging()
 logger = logging.getLogger("aegis.main")
 
 router = Router()
