@@ -152,6 +152,12 @@ class Settings(BaseSettings):
         description="Timeout for the local Ollama audit summary request"
     )
 
+    # Observability
+    metrics_db_path: Path = Field(
+        default=Path("./data/commit_guardian.db"),
+        description="SQLite database that stores audit metrics for the /dashboard page"
+    )
+
     @field_validator("allowed_telegram_users", mode="before")
     @classmethod
     def parse_allowed_telegram_users(cls, v):

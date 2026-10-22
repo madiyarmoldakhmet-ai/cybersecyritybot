@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from aegis.ai.audit_summarizer import AuditSummarizer, AuditSummary
 from aegis.core.config import settings
+from aegis.core.metrics_store import get_metrics_store
 from aegis.reporting import AuditReport, AuditReportWriter
 from aegis.reporting.audit_report import render_markdown
 from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
@@ -174,6 +175,7 @@ async def test_guardian_audit_writes_report_and_alerts(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "temp_clone_dir", tmp_path / "clones")
     monkeypatch.setattr(settings, "default_telegram_chat_id", 12345)
     monkeypatch.setattr(settings, "report_pdf_enabled", False)
+    monkeypatch.setattr(settings, "metrics_db_path", tmp_path / "metrics.db")
     monkeypatch.setattr(webhook, "AuditSummarizer", FakeSummarizer)
 
     with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=FakeProc())), \
@@ -196,6 +198,11 @@ async def test_guardian_audit_writes_report_and_alerts(tmp_path, monkeypatch):
     alert.assert_awaited_once()
     assert alert.await_args.kwargs["report_name"] == reports[0].name
 
+    metrics = get_metrics_store().summary()
+    assert metrics.total_scans == 1
+    assert metrics.critical_found == 1
+    assert metrics.avg_ai_seconds == 1.5
+
 
 @pytest.mark.asyncio
 async def test_guardian_audit_fails_loudly_when_clone_fails(tmp_path, monkeypatch):
@@ -209,6 +216,7 @@ async def test_guardian_audit_fails_loudly_when_clone_fails(tmp_path, monkeypatc
 
     monkeypatch.setattr(settings, "scan_output_dir", tmp_path / "reports")
     monkeypatch.setattr(settings, "temp_clone_dir", tmp_path / "clones")
+    monkeypatch.setattr(settings, "metrics_db_path", tmp_path / "metrics.db")
 
     with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=FailedProc())):
         with pytest.raises(RuntimeError, match="git clone failed"):
@@ -219,3 +227,5 @@ async def test_guardian_audit_fails_loudly_when_clone_fails(tmp_path, monkeypatc
 
     # No report may claim a clean audit for code that was never scanned
     assert not list((tmp_path / "reports").rglob("*.md"))
+    metrics = get_metrics_store().summary()
+    assert metrics.total_scans == 0 and metrics.failed_scans == 1

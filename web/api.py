@@ -23,6 +23,7 @@ from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.dast_scanner import DASTScanner
 from aegis.scanners.models import DASTScanResult, SASTScanResult, ScannerType, VulnerabilityFinding
 from aegis.scanners.sast_scanner import SASTScanner
+from web.dashboard import router as dashboard_router
 from web.webhook import router as webhook_router
 
 logger = logging.getLogger("aegis.api")
@@ -35,8 +36,9 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Include Commit Guardian Webhook router
+# Include Commit Guardian Webhook and Observability Dashboard routers
 app.include_router(webhook_router)
+app.include_router(dashboard_router)
 
 # Enable CORS for future dashboard integration
 app.add_middleware(
@@ -98,6 +100,7 @@ async def root():
         "docs": "/docs",
         "endpoints": {
             "health": "/health",
+            "dashboard": "/dashboard",
             "metrics": "/api/v1/metrics",
             "github_webhook": "/api/v1/webhook/github",
             "sast_scan": "/api/v1/scan/sast",
