@@ -24,7 +24,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "uvicorn>=0.52.4",
     "python-multipart>=0.0.9",
-    "websockets>=17.1",
+    "websockets>=15.0",
 ]
 
 [project.scripts]

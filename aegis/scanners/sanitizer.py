@@ -126,6 +126,10 @@ class FalsePositiveSanitizer:
                     # All extracted literals were low entropy or placeholders
                     return None
             else:
+                # Only short literals (e.g. api_key="ollama", SECRET = "secret"): too short to be a real secret
+                short_literals = re.findall(r"['\"]([^'\"\n]*)['\"]", snippet)
+                if short_literals and all(len(lit.strip()) < 8 for lit in short_literals):
+                    return None
                 # Check snippet directly
                 if self.is_placeholder_text(snippet):
                     return None

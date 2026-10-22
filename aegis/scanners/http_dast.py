@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import httpx
 
+from aegis.core.config import settings
 from aegis.scanners.models import DASTScanResult, ScannerType, Severity, VulnerabilityFinding
 
 logger = logging.getLogger("aegis.http_dast")
@@ -53,9 +54,13 @@ SENSITIVE_DEBUG_PATHS = [
 class HTTPSecurityScanner:
     """Dynamic Application Security Scanner for live web applications and API endpoints."""
 
-    def __init__(self, timeout_seconds: float = 10.0, follow_redirects: bool = True) -> None:
+    def __init__(
+        self, timeout_seconds: float = 10.0, follow_redirects: bool = True, verify_tls: Optional[bool] = None
+    ) -> None:
         self.timeout_seconds = timeout_seconds
         self.follow_redirects = follow_redirects
+        # Certificate validation is on unless explicitly disabled (e.g. for self-signed staging hosts)
+        self.verify_tls = settings.dast_verify_tls if verify_tls is None else verify_tls
         self.headers = {
             "User-Agent": "CyberSecurityBot-SecurityAuditor/2.0 (Powered by Strix Engine; +https://github.com/madiyarmoldakhmet-ai/cybersecyritybot)"
         }
@@ -314,7 +319,7 @@ class HTTPSecurityScanner:
         paths_to_test = ["/"] + (additional_paths or ["/api", "/login", "/health", "/robots.txt"])
 
         async with httpx.AsyncClient(
-            verify=False,
+            verify=self.verify_tls,
             timeout=self.timeout_seconds,
             headers=self.headers,
             follow_redirects=self.follow_redirects
