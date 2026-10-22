@@ -46,3 +46,6 @@ temp_scans/
 .semgrep/
 .bandit/
 .pytest_cache/
+
+# Local audit metrics database
+data/

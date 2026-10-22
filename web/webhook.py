@@ -17,8 +17,9 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
-from aegis.ai.audit_summarizer import AuditSummarizer
+from aegis.ai.audit_summarizer import AuditSummarizer, AuditSummary
 from aegis.core.config import settings
+from aegis.core.metrics_store import get_metrics_store
 from aegis.core.queue_manager import task_queue
 from aegis.reporting import AuditReport, AuditReportWriter
 from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
@@ -186,6 +187,7 @@ async def process_guardian_audit(
 
         # 3. Local AI summary + compliance report (every commit gets a record, clean ones included)
         report_name: Optional[str] = None
+        summary: Optional[AuditSummary] = None
         try:
             summary = await AuditSummarizer().summarize(scan_result, repo_name=repo_name, commit_sha=commit_sha)
             report = AuditReport.from_scan(
@@ -201,6 +203,22 @@ async def process_guardian_audit(
             report_name = (report_paths.pdf or report_paths.markdown).name
         except Exception as e:
             logger.exception(f"Failed to generate audit report for {repo_name}@{commit_sha[:8]}: {e}")
+
+        # 4. Observability metrics for the /dashboard page
+        try:
+            get_metrics_store().record_audit(
+                repo_name=repo_name,
+                commit_sha=commit_sha,
+                branch=branch,
+                severity_counts={sev.value: count for sev, count in scan_result.findings_by_severity.items()},
+                total_findings=scan_result.total_findings,
+                scan_seconds=scan_result.duration_seconds,
+                ai_seconds=summary.duration_seconds if summary else 0.0,
+                ai_generated=bool(summary and summary.ai_generated),
+                report_name=report_name,
+            )
+        except Exception as e:
+            logger.exception(f"Failed to record audit metrics for {repo_name}@{commit_sha[:8]}: {e}")
 
         crit_count = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)
         high_count = scan_result.findings_by_severity.get(Severity.HIGH, 0)
@@ -224,6 +242,13 @@ async def process_guardian_audit(
                 )
 
         return scan_result
+
+    except Exception as e:
+        try:
+            get_metrics_store().record_failure(repo_name, commit_sha, branch, str(e))
+        except Exception:
+            logger.exception("Failed to record audit failure metrics")
+        raise
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

@@ -19,6 +19,8 @@ from aegis.core.event_bus import ScanEventBus
 from aegis.scanners.sast_scanner import SASTScanner
 from aegis.core.config import settings
 from bot.main import run_bot
+from web.dashboard import router as dashboard_router
+from web.webhook import router as webhook_router
 
 logger = logging.getLogger("aegis_server")
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +44,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Commit Guardian: GitHub webhook audits + observability dashboard
+app.include_router(webhook_router)
+app.include_router(dashboard_router)
 
 @app.exception_handler(Exception)
 async def global_error(request: Request, exc: Exception):
@@ -210,4 +216,9 @@ async def websocket_chat(websocket: WebSocket):
         except:
             pass
 
-app.mount("/", StaticFiles(directory="aegis_web/out", html=True), name="static")
+# Mounted last so it never shadows API routes; optional so the API runs without a frontend build
+FRONTEND_DIR = Path("aegis_web/out")
+if FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
+else:
+    logger.warning(f"Frontend build not found at {FRONTEND_DIR}; serving API and /dashboard only")

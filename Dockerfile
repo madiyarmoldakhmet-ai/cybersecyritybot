@@ -17,6 +17,7 @@ COPY --from=frontend-builder /app/aegis_web/out ./aegis_web/out
 COPY aegis/ ./aegis/
 COPY bot/ ./bot/
 COPY aegis_server/ ./aegis_server/
+COPY web/ ./web/
 # Порт для Render/Railway
 ENV PORT=8000 
 CMD uvicorn aegis_server.main:app --host 0.0.0.0 --port $PORT
