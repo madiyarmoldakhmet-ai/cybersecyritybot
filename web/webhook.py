@@ -33,7 +33,10 @@ def verify_github_signature(payload_body: bytes, signature_header: Optional[str]
     """Verify HMAC SHA-256 signature from GitHub webhook header."""
     secret = settings.github_webhook_secret
     if not secret:
-        # If no secret is configured, allow requests (useful for local dev/testing)
+        # Unsigned webhooks are tolerated only outside production (local dev / demos)
+        if settings.environment.lower() == "production":
+            logger.error("Rejected webhook: GITHUB_WEBHOOK_SECRET is required in production.")
+            return False
         return True
 
     if not signature_header or not signature_header.startswith("sha256="):
