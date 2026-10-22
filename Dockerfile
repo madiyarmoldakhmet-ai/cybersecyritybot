@@ -7,6 +7,10 @@ RUN npm run build
 
 FROM python:3.12-slim
 WORKDIR /app
+# git: repository cloning for audits · fonts-dejavu-core: Cyrillic text in PDF audit reports
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY --from=frontend-builder /app/aegis_web/out ./aegis_web/out
