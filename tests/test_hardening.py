@@ -125,3 +125,27 @@ def test_env_example_loads_and_is_local_only(clean_env, monkeypatch):
     assert s.allowed_telegram_users == [12345678, 87654321]
     assert s.default_telegram_chat_id is None
     assert s.llm_provider == LLMProvider.OLLAMA and s.air_gapped
+
+
+def test_sanitizer_drops_short_literal_secret_false_positives():
+    from aegis.scanners.models import ScannerType, Severity, VulnerabilityFinding
+    from aegis.scanners.sanitizer import FalsePositiveSanitizer
+
+    def secret_finding(snippet: str) -> VulnerabilityFinding:
+        return VulnerabilityFinding(
+            id="generic-api-key", scanner=ScannerType.SECRET, title="Hardcoded Generic API Key",
+            description="", severity=Severity.CRITICAL, file_path="aegis/ai/client.py", code_snippet=snippet,
+        )
+
+    sanitizer = FalsePositiveSanitizer()
+    assert sanitizer.sanitize_finding(secret_finding('api_key="ollama",')) is None
+    assert sanitizer.sanitize_finding(secret_finding('SECRET = "secret"')) is None
+    real = secret_finding('api_key = "sk_live_9fA2xQ7mZ4LwP1vR8tYc3K"')
+    assert sanitizer.sanitize_finding(real) is real
+
+
+def test_dast_verifies_tls_by_default(clean_env):
+    from aegis.scanners.http_dast import HTTPSecurityScanner
+
+    assert HTTPSecurityScanner().verify_tls is True
+    assert HTTPSecurityScanner(verify_tls=False).verify_tls is False

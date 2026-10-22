@@ -149,6 +149,10 @@ class Settings(BaseSettings):
         default=Path("./reports"),
         description="Directory to save generated scan reports"
     )
+    dast_verify_tls: bool = Field(
+        default=True,
+        description="Validate TLS certificates during DAST scans (disable only for self-signed staging hosts)"
+    )
     temp_clone_dir: Path = Field(
         default=Path("./temp_scans"),
         description="Directory for temporary repository clones during audit"
