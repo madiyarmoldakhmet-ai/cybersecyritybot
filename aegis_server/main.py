@@ -18,15 +18,34 @@ from openai import AsyncOpenAI
 from aegis.core.event_bus import ScanEventBus
 from aegis.scanners.sast_scanner import SASTScanner
 from aegis.core.config import settings
+from aegis.core.logging_config import setup_logging
 from bot.main import run_bot
+from web.dashboard import router as dashboard_router
+from web.webhook import router as webhook_router
 
+setup_logging()
 logger = logging.getLogger("aegis_server")
-logging.basicConfig(level=logging.INFO)
+
+
+def log_security_posture() -> None:
+    """Log the effective security configuration once at startup."""
+    logger.info(f"Starting {settings.app_name} API v2.0 (environment: {settings.environment})")
+    if settings.air_gapped:
+        logger.info(f"AI mode: local-only, Ollama {settings.ollama_model} at {settings.ollama_base_url}")
+    for notice in settings.llm_policy_notices:
+        logger.warning(notice)
+    if not settings.github_webhook_secret:
+        logger.warning("GITHUB_WEBHOOK_SECRET is not set: webhook signatures are not verified"
+                       + (" and all webhooks will be rejected in production." if settings.environment == "production" else "."))
+    logger.info(f"Audit reports: {settings.scan_output_dir.resolve()} · metrics DB: {settings.metrics_db_path.resolve()}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log_security_posture()
     bot_task = asyncio.create_task(run_bot())
     yield
+    logger.info("Shutting down Telegram bot")
     bot_task.cancel()
     try:
         await bot_task
@@ -37,16 +56,22 @@ app = FastAPI(title="Aegis Security Engine API", version="2.0", lifespan=lifespa
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Commit Guardian: GitHub webhook audits + observability dashboard
+app.include_router(webhook_router)
+app.include_router(dashboard_router)
+
 @app.exception_handler(Exception)
 async def global_error(request: Request, exc: Exception):
-    logger.exception("Server error")
-    return JSONResponse(status_code=500, content={"error": str(exc)})
+    # Full details go to the log only; clients get an opaque reference
+    error_id = uuid.uuid4().hex[:12]
+    logger.exception(f"Unhandled server error {error_id} on {request.method} {request.url.path}")
+    return JSONResponse(status_code=500, content={"error": "Internal server error", "error_id": error_id})
 
 SCANS_DIR = Path("/tmp/aegis_scans")
 SCANS_DIR.mkdir(parents=True, exist_ok=True)
@@ -210,4 +235,9 @@ async def websocket_chat(websocket: WebSocket):
         except:
             pass
 
-app.mount("/", StaticFiles(directory="aegis_web/out", html=True), name="static")
+# Mounted last so it never shadows API routes; optional so the API runs without a frontend build
+FRONTEND_DIR = Path("aegis_web/out")
+if FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
+else:
+    logger.warning(f"Frontend build not found at {FRONTEND_DIR}; serving API and /dashboard only")

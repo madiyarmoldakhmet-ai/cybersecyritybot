@@ -27,7 +27,6 @@ from aegis.scanners.models import SASTScanResult, ScannerType, Severity, Vulnera
 from aegis.scanners.sanitizer import FalsePositiveSanitizer, calculate_shannon_entropy
 
 logger = logging.getLogger("aegis.sast_scanner")
-logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
 # List of directories to ignore during all code traversals and static analysis
 IGNORED_DIRS = {
@@ -958,7 +957,11 @@ class SASTScanner:
 if __name__ == "__main__":
     import sys
 
+    from aegis.core.logging_config import setup_logging
+
+    # Logs go through the logging config; stdout carries only the JSON result for piping
+    setup_logging()
     target = sys.argv[1] if len(sys.argv) > 1 else "."
     scanner = SASTScanner()
     scan_result = asyncio.run(scanner.scan(target))
-    print(scan_result.model_dump_json(indent=2))
+    sys.stdout.write(scan_result.model_dump_json(indent=2) + "\n")

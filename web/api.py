@@ -17,14 +17,17 @@ import httpx
 
 from aegis.ai.remediation_engine import RemediationEngine, RemediationResult
 from aegis.core.config import settings
+from aegis.core.logging_config import setup_logging
 from aegis.core.pr_creator import PullRequestCreator
 from aegis.core.queue_manager import ollama_limiter, task_queue
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.dast_scanner import DASTScanner
-from aegis.scanners.models import DASTScanResult, SASTScanResult, VulnerabilityFinding
+from aegis.scanners.models import DASTScanResult, SASTScanResult, ScannerType, VulnerabilityFinding
 from aegis.scanners.sast_scanner import SASTScanner
+from web.dashboard import router as dashboard_router
 from web.webhook import router as webhook_router
 
+setup_logging()
 logger = logging.getLogger("aegis.api")
 
 app = FastAPI(
@@ -35,13 +38,14 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Include Commit Guardian Webhook router
+# Include Commit Guardian Webhook and Observability Dashboard routers
 app.include_router(webhook_router)
+app.include_router(dashboard_router)
 
-# Enable CORS for future dashboard integration
+# CORS: explicit origins only (a wildcard combined with credentials would let any site call the API)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -60,6 +64,8 @@ class HealthResponse(BaseModel):
     ollama_model: str
     ollama_online: bool
     gemini_configured: bool
+    air_gapped: bool
+    cloud_llm_allowed: bool
 
 
 class SASTScanRequest(BaseModel):
@@ -98,6 +104,7 @@ async def root():
         "docs": "/docs",
         "endpoints": {
             "health": "/health",
+            "dashboard": "/dashboard",
             "metrics": "/api/v1/metrics",
             "github_webhook": "/api/v1/webhook/github",
             "sast_scan": "/api/v1/scan/sast",
@@ -133,6 +140,8 @@ async def health_check():
         ollama_model=settings.ollama_model,
         ollama_online=ollama_online,
         gemini_configured=bool(settings.gemini_api_key),
+        air_gapped=settings.air_gapped,
+        cloud_llm_allowed=settings.allow_cloud_llm,
     )
 
 

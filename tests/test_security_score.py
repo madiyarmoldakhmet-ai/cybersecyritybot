@@ -1,12 +1,19 @@
 import pytest
-from aegis.scanners.models import VulnerabilityFinding, Severity
+from aegis.scanners.models import ScannerType, Severity, VulnerabilityFinding
 from aegis.scanners.security_score import calculate_score, get_grade, generate_badge_url
+
+
+def finding(title: str, severity: Severity, cwe: str = "") -> VulnerabilityFinding:
+    return VulnerabilityFinding(
+        id=title.lower(), scanner=ScannerType.SEMGREP, title=title, description=title,
+        severity=severity, file_path="app.py", cwe=[cwe] if cwe else [],
+    )
 
 def test_calculate_score():
     findings = [
-        VulnerabilityFinding(title="SQLi", severity=Severity.CRITICAL, file_path="app.py", cwe="CWE-89"),
-        VulnerabilityFinding(title="XSS", severity=Severity.HIGH, file_path="app.py", cwe="CWE-79"),
-        VulnerabilityFinding(title="Info", severity=Severity.INFO, file_path="app.py", cwe=""),
+        finding("SQLi", Severity.CRITICAL, "CWE-89"),
+        finding("XSS", Severity.HIGH, "CWE-79"),
+        finding("Info", Severity.INFO),
     ]
     # 100 - 25 - 10 = 65
     score = calculate_score(findings)
@@ -16,7 +23,7 @@ def test_calculate_score():
     assert grade == "C"
 
 def test_score_floor():
-    findings = [VulnerabilityFinding(title="Crit", severity=Severity.CRITICAL, file_path="app.py", cwe="CWE-1")] * 5
+    findings = [finding("Crit", Severity.CRITICAL, "CWE-1")] * 5
     # 100 - 125 = -25 -> floored to 0
     score = calculate_score(findings)
     assert score == 0

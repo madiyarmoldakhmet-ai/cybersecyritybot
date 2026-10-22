@@ -10,7 +10,7 @@ inputs:
     required: false
     default: '.'
   fail_on_critical:
-    description: 'Fail the build if CRITICAL vulnerabilities are found'
+    description: 'Fail the build if CRITICAL or HIGH vulnerabilities (SARIF level "error") are found'
     required: false
     default: 'true'
   ai_filter:
@@ -22,28 +22,64 @@ runs:
   using: 'composite'
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'  # strix-agent requires Python 3.12+
 
     - name: Install dependencies
       shell: bash
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install .
+        pip install -r "${{ github.action_path }}/requirements.txt"
+        pip install "${{ github.action_path }}"
+        # Keep setuptools build output out of the scanned workspace
+        rm -rf "${{ github.action_path }}/build"
 
     - name: Run Aegis Scan (SARIF Export)
       shell: bash
+      # Inputs are passed through the environment, never interpolated into the script (shell injection)
       env:
+        AEGIS_TARGET_PATH: ${{ inputs.target_path }}
         AEGIS_FAIL_ON_CRITICAL: ${{ inputs.fail_on_critical }}
         AEGIS_AI_FILTER: ${{ inputs.ai_filter }}
       run: |
-        echo "Starting Aegis scan on ${{ inputs.target_path }}..."
-        aegis scan ${{ inputs.target_path }} --format sarif
+        echo "Starting Aegis scan on ${AEGIS_TARGET_PATH}..."
+        aegis scan "${AEGIS_TARGET_PATH}" --format sarif
+
+    - name: Make SARIF paths repository-relative
+      shell: bash
+      run: |
+        python - <<'PY'
+        import json, os
+        root = os.path.realpath(os.environ["GITHUB_WORKSPACE"])
+        data = json.load(open("results.sarif"))
+        for result in data["runs"][0]["results"]:
+            for location in result.get("locations", []):
+                artifact = location["physicalLocation"]["artifactLocation"]
+                path = os.path.realpath(artifact["uri"])
+                if os.path.isabs(artifact["uri"]) and path.startswith(root + os.sep):
+                    artifact["uri"] = os.path.relpath(path, root)
+        json.dump(data, open("results.sarif", "w"), indent=2)
+        PY
 
     - name: Upload SARIF report to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4
       if: always()
       with:
         sarif_file: results.sarif
+
+    - name: Enforce severity gate
+      if: inputs.fail_on_critical == 'true'
+      shell: bash
+      run: |
+        python - <<'PY'
+        import json, sys
+        results = json.load(open("results.sarif"))["runs"][0]["results"]
+        blocking = [r for r in results if r.get("level") == "error"]
+        for r in blocking:
+            loc = r["locations"][0]["physicalLocation"]
+            print(f"::error file={loc['artifactLocation']['uri']},line={loc['region']['startLine']}::{r['message']['text']}")
+        if blocking:
+            sys.exit(f"Aegis: {len(blocking)} CRITICAL/HIGH finding(s) found")
+        print("Aegis: no CRITICAL/HIGH findings")
+        PY

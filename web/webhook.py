@@ -17,9 +17,12 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
+from aegis.ai.audit_summarizer import AuditSummarizer, AuditSummary
 from aegis.core.config import settings
+from aegis.core.metrics_store import get_metrics_store
 from aegis.core.queue_manager import task_queue
-from aegis.scanners.models import SASTScanResult, Severity, VulnerabilityFinding
+from aegis.reporting import AuditReport, AuditReportWriter
+from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
 from aegis.scanners.sast_scanner import SASTScanner
 
 logger = logging.getLogger("aegis.webhook")
@@ -30,7 +33,10 @@ def verify_github_signature(payload_body: bytes, signature_header: Optional[str]
     """Verify HMAC SHA-256 signature from GitHub webhook header."""
     secret = settings.github_webhook_secret
     if not secret:
-        # If no secret is configured, allow requests (useful for local dev/testing)
+        # Unsigned webhooks are tolerated only outside production (local dev / demos)
+        if settings.environment.lower() == "production":
+            logger.error("Rejected webhook: GITHUB_WEBHOOK_SECRET is required in production.")
+            return False
         return True
 
     if not signature_header or not signature_header.startswith("sha256="):
@@ -50,7 +56,8 @@ async def send_telegram_alert(
     author: str,
     branch: str,
     scan_result: SASTScanResult,
-    commit_url: Optional[str] = None
+    commit_url: Optional[str] = None,
+    report_name: Optional[str] = None
 ) -> None:
     """Dispatch rich Commit Guardian security alert via Telegram Bot."""
     if not settings.telegram_bot_token:
@@ -85,6 +92,9 @@ async def send_telegram_alert(
                 f"   📁 `{f.file_path}` (стр. {f.line_start or 1})\n"
                 f"   💡 {f.recommendation or f.description[:100]}"
             )
+
+        if report_name:
+            alert_lines.append(f"\n📄 **Отчёт аудита:** `{report_name}`")
 
         alert_text = "\n".join(alert_lines)
 
@@ -133,7 +143,13 @@ async def process_guardian_audit(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        await asyncio.wait_for(proc.communicate(), timeout=45.0)
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=45.0)
+        if proc.returncode != 0:
+            # Never report an empty checkout as a clean audit
+            err = stderr.decode("utf-8", errors="replace")
+            if settings.github_token:
+                err = err.replace(settings.github_token, "***")
+            raise RuntimeError(f"git clone failed for {repo_name}@{branch}: {err.strip()[:300]}")
 
         # 1. Run Aegis Deep Agentic Scanner
         from aegis.scanners.aegis_runner import AegisEngine
@@ -172,6 +188,41 @@ async def process_guardian_audit(
             errors=aegis_res.errors + sast_res.errors,
         )
 
+        # 3. Local AI summary + compliance report (every commit gets a record, clean ones included)
+        report_name: Optional[str] = None
+        summary: Optional[AuditSummary] = None
+        try:
+            summary = await AuditSummarizer().summarize(scan_result, repo_name=repo_name, commit_sha=commit_sha)
+            report = AuditReport.from_scan(
+                scan_result,
+                summary,
+                repo_name=repo_name,
+                commit_sha=commit_sha,
+                branch=branch,
+                author=author,
+                commit_url=commit_url,
+            )
+            report_paths = AuditReportWriter().write(report)
+            report_name = (report_paths.pdf or report_paths.markdown).name
+        except Exception as e:
+            logger.exception(f"Failed to generate audit report for {repo_name}@{commit_sha[:8]}: {e}")
+
+        # 4. Observability metrics for the /dashboard page
+        try:
+            get_metrics_store().record_audit(
+                repo_name=repo_name,
+                commit_sha=commit_sha,
+                branch=branch,
+                severity_counts={sev.value: count for sev, count in scan_result.findings_by_severity.items()},
+                total_findings=scan_result.total_findings,
+                scan_seconds=scan_result.duration_seconds,
+                ai_seconds=summary.duration_seconds if summary else 0.0,
+                ai_generated=bool(summary and summary.ai_generated),
+                report_name=report_name,
+            )
+        except Exception as e:
+            logger.exception(f"Failed to record audit metrics for {repo_name}@{commit_sha[:8]}: {e}")
+
         crit_count = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)
         high_count = scan_result.findings_by_severity.get(Severity.HIGH, 0)
 
@@ -189,10 +240,18 @@ async def process_guardian_audit(
                     author=author,
                     branch=branch,
                     scan_result=scan_result,
-                    commit_url=commit_url
+                    commit_url=commit_url,
+                    report_name=report_name
                 )
 
         return scan_result
+
+    except Exception as e:
+        try:
+            get_metrics_store().record_failure(repo_name, commit_sha, branch, str(e))
+        except Exception:
+            logger.exception("Failed to record audit failure metrics")
+        raise
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
