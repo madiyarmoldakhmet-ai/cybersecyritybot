@@ -1,7 +1,7 @@
-FROM node:20 AS frontend-builder
+FROM node:22 AS frontend-builder
 WORKDIR /app/aegis_web
 COPY aegis_web/package*.json ./
-RUN npm install
+RUN npm ci --no-audit --no-fund
 COPY aegis_web/ ./
 RUN npm run build
 
