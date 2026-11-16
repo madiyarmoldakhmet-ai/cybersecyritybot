@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Optional, Tuple
@@ -30,6 +31,9 @@ class DASTScanner(HTTPSecurityScanner):
         html_file = Path(f"/tmp/aegis_poc_{temp_id}.html")
         screenshot_file = Path(f"/tmp/aegis_screenshot_{temp_id}.png")
 
+        safe_payload_js = json.dumps(payload).replace("</", "<\\/")
+        safe_snippet = code_snippet.replace("</script", "<\\/script")
+
         # Create a test harness HTML
         test_html = f"""
         <!DOCTYPE html>
@@ -44,10 +48,10 @@ class DASTScanner(HTTPSecurityScanner):
                 
                 // Inject the vulnerable snippet
                 try {{
-                    const payload = `{payload}`;
+                    const payload = {safe_payload_js};
                     const container = document.getElementById("aegis-container");
                     
-                    {code_snippet}
+                    {safe_snippet}
                 }} catch (e) {{
                     console.error("Aegis PoC Error:", e);
                 }}

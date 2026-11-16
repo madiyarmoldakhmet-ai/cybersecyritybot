@@ -15,29 +15,47 @@ class TaintFinding(BaseModel):
     severity: str
     code_snippets: List[str]
 
-SOURCES = {"request.args", "request.form", "request.json", "input", "sys.argv", "os.environ"}
-SINKS = {"cursor.execute", "os.system", "subprocess.run", "eval", "exec", "open", "pickle.loads", "yaml.load"}
-SANITIZERS = {"escape", "bleach.clean", "int", "validate"}
+SOURCES = {
+    "request.args",
+    "request.form",
+    "request.json",
+    "request.query_params",
+    "request.body",
+    "input",
+    "sys.argv",
+    "os.environ",
+}
+SINKS = {"cursor.execute", "os.system", "subprocess.run", "subprocess.Popen", "eval", "exec", "open", "pickle.loads", "yaml.load"}
+SANITIZERS = {"escape", "bleach.clean", "int", "validate", "html.escape"}
+
 
 class ASTNodeVisitor(ast.NodeVisitor):
     def __init__(self, filepath: str):
         self.filepath = filepath
-        self.functions = {} # name -> {ast_node, calls, sources, sinks, sanitizers}
-        self.current_func = None
-        
-    def visit_FunctionDef(self, node):
+        self.functions = {}  # qualified_key -> {name, node, calls, sources, sinks, sanitizers, file}
+        self.current_func: Optional[str] = None
+
+    def _visit_fn(self, node):
         prev_func = self.current_func
-        self.current_func = node.name
-        self.functions[node.name] = {
+        qname = f"{self.filepath}::{node.name}"
+        self.current_func = qname
+        self.functions[qname] = {
+            "name": node.name,
             "node": node,
             "calls": set(),
             "sources": [],
             "sinks": [],
             "sanitizers": set(),
-            "file": self.filepath
+            "file": self.filepath,
         }
         self.generic_visit(node)
         self.current_func = prev_func
+
+    def visit_FunctionDef(self, node):
+        self._visit_fn(node)
+
+    def visit_AsyncFunctionDef(self, node):
+        self._visit_fn(node)
 
     def _get_call_name(self, node):
         if isinstance(node, ast.Name):
@@ -53,55 +71,69 @@ class ASTNodeVisitor(ast.NodeVisitor):
         call_name = self._get_call_name(node.func)
         if call_name and self.current_func:
             self.functions[self.current_func]["calls"].add(call_name)
-            
+
             if call_name in SOURCES or any(call_name.startswith(s) for s in SOURCES):
                 self.functions[self.current_func]["sources"].append((call_name, node.lineno))
             elif call_name in SINKS:
                 self.functions[self.current_func]["sinks"].append((call_name, node.lineno))
             elif call_name in SANITIZERS:
                 self.functions[self.current_func]["sanitizers"].add(call_name)
-                
+
         self.generic_visit(node)
+
 
 class TaintEngine:
     def __init__(self, target_dir: str):
         self.target_dir = Path(target_dir)
-        self.call_graph = {} # func_name -> {file, calls, sources, sinks, sanitizers}
-        
+        self.call_graph = {}  # qualified_key -> {name, file, calls, sources, sinks, sanitizers}
+        self._name_index: Dict[str, List[str]] = {}
+
     def build_graph(self):
+        self.call_graph = {}
+        self._name_index = {}
+        skip_parts = {"venv", ".venv", "node_modules", "__pycache__", ".git", "site-packages"}
         for py_file in self.target_dir.rglob("*.py"):
-            if "venv" in str(py_file) or "node_modules" in str(py_file):
+            if any(part in skip_parts for part in py_file.parts):
                 continue
-                
+
             try:
-                with open(py_file, "r", encoding="utf-8") as f:
+                with open(py_file, "r", encoding="utf-8", errors="replace") as f:
                     tree = ast.parse(f.read(), filename=str(py_file))
                 visitor = ASTNodeVisitor(str(py_file))
                 visitor.visit(tree)
-                self.call_graph.update(visitor.functions)
+                for qname, meta in visitor.functions.items():
+                    self.call_graph[qname] = meta
+                    self._name_index.setdefault(meta["name"], []).append(qname)
             except Exception:
                 continue
+
+    def _resolve_callees(self, caller_file: str, call_name: str) -> List[str]:
+        short_name = call_name.split(".")[-1]
+        candidates = self._name_index.get(call_name) or self._name_index.get(short_name) or []
+        if not candidates:
+            return []
+        same_file = [c for c in candidates if self.call_graph[c]["file"] == caller_file]
+        return same_file if same_file else candidates
 
     def analyze(self) -> List[TaintFinding]:
         self.build_graph()
         findings = []
-        
+
         # Start BFS from any function containing a Source
-        for func_name, data in self.call_graph.items():
+        for func_key, data in self.call_graph.items():
+            func_label = data["name"]
             for source_name, src_line in data["sources"]:
-                # If there is a sanitizer in the same function, we naively assume it's sanitized
                 if data["sanitizers"]:
                     continue
-                    
-                # Queue for BFS: (current_func, path_so_far, visited)
-                queue = deque([(func_name, [f"{func_name}()"], {func_name})])
-                
+
+                queue = deque([(func_key, [f"{func_label}()"], {func_key})])
+
                 while queue:
-                    curr_func, path, visited = queue.popleft()
-                    curr_data = self.call_graph.get(curr_func)
-                    if not curr_data: continue
-                    
-                    # Check if current function has a Sink
+                    curr_key, path, visited = queue.popleft()
+                    curr_data = self.call_graph.get(curr_key)
+                    if not curr_data:
+                        continue
+
                     for sink_name, snk_line in curr_data["sinks"]:
                         findings.append(TaintFinding(
                             source_file=data["file"],
@@ -111,14 +143,15 @@ class TaintEngine:
                             taint_path=path,
                             vulnerability_type="Tainted Data Flow",
                             severity="CRITICAL" if "execute" in sink_name or "system" in sink_name or "exec" in sink_name else "HIGH",
-                            code_snippets=[f"Source: {source_name} at line {src_line}", f"Sink: {sink_name} at line {snk_line}"]
+                            code_snippets=[f"Source: {source_name} at line {src_line}", f"Sink: {sink_name} at line {snk_line}"],
                         ))
-                    
-                    # Continue BFS via calls
+
                     for call in curr_data["calls"]:
-                        if call in self.call_graph and call not in visited:
-                            call_data = self.call_graph[call]
-                            if not call_data["sanitizers"]:
-                                queue.append((call, path + [f"-> {call}()"], visited | {call}))
-                                
+                        for target_key in self._resolve_callees(curr_data["file"], call):
+                            if target_key not in visited:
+                                call_data = self.call_graph[target_key]
+                                if not call_data["sanitizers"]:
+                                    target_label = call_data["name"]
+                                    queue.append((target_key, path + [f"-> {target_label}()"], visited | {target_key}))
+
         return findings

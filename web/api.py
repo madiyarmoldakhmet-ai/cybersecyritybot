@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import httpx
@@ -38,9 +38,7 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Include Commit Guardian Webhook and Observability Dashboard routers
-app.include_router(webhook_router)
-app.include_router(dashboard_router)
+api_router = APIRouter()
 
 # CORS: explicit origins only (a wildcard combined with credentials would let any site call the API)
 app.add_middleware(
@@ -115,13 +113,13 @@ async def root():
     }
 
 
-@app.get("/api/v1/metrics", tags=["General"])
+@api_router.get("/api/v1/metrics", tags=["General"])
 async def get_system_metrics():
     """Retrieve operational queue and concurrency metrics."""
     return task_queue.get_metrics()
 
 
-@app.get("/health", response_model=HealthResponse, tags=["General"])
+@api_router.get("/health", response_model=HealthResponse, tags=["General"])
 async def health_check():
     """Verify system health, LLM connectivity, and configuration."""
     ollama_online = False
@@ -145,7 +143,7 @@ async def health_check():
     )
 
 
-@app.post("/api/v1/scan/sast", response_model=SASTScanResult, tags=["Scanners"])
+@api_router.post("/api/v1/scan/sast", response_model=SASTScanResult, tags=["Scanners"])
 async def trigger_sast_scan(req: SASTScanRequest):
     """Execute SAST security scan on local folder or GitHub repository."""
     scanner = SASTScanner()
@@ -239,7 +237,7 @@ async def trigger_sast_scan(req: SASTScanRequest):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-@app.post("/api/v1/scan/dast", response_model=DASTScanResult, tags=["Scanners"])
+@api_router.post("/api/v1/scan/dast", response_model=DASTScanResult, tags=["Scanners"])
 async def trigger_dast_scan(req: DASTScanRequest):
     """Execute dynamic security audit (Headers, CORS, Cookies) on live URL."""
     dast = DASTScanner()
@@ -250,7 +248,7 @@ async def trigger_dast_scan(req: DASTScanRequest):
     return result
 
 
-@app.post("/api/v1/remediate", response_model=RemediationResult, tags=["AI Remediation"])
+@api_router.post("/api/v1/remediate", response_model=RemediationResult, tags=["AI Remediation"])
 async def remediate_vulnerability(req: RemediationRequest):
     """Generate root-cause explanation and secure code patch via local/cloud LLM."""
     engine = RemediationEngine()
@@ -261,7 +259,7 @@ async def remediate_vulnerability(req: RemediationRequest):
     return remediation
 
 
-@app.post("/api/v1/pr", tags=["Pull Requests"])
+@api_router.post("/api/v1/pr", tags=["Pull Requests"])
 async def create_pull_request(req: PRCreateRequest):
     """Apply remediated code and open a GitHub Pull Request."""
     success, msg, pr_url = await PullRequestCreator.create_remediation_pr(
@@ -281,3 +279,8 @@ async def create_pull_request(req: PRCreateRequest):
         "message": msg,
         "pull_request_url": pr_url
     }
+
+
+app.include_router(webhook_router)
+app.include_router(dashboard_router)
+app.include_router(api_router)

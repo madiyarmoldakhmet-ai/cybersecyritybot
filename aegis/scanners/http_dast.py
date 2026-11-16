@@ -149,6 +149,32 @@ class HTTPSecurityScanner:
 
         return findings
 
+    def _check_information_disclosure(self, url: str, headers: httpx.Headers) -> List[VulnerabilityFinding]:
+        """Audit response headers for Server/Framework/Runtime version disclosure."""
+        findings: List[VulnerabilityFinding] = []
+        lower_headers = {k.lower(): v for k, v in headers.items()}
+
+        for header_name in ("server", "x-powered-by", "x-aspnet-version"):
+            val = lower_headers.get(header_name, "").strip()
+            if val and any(ch.isdigit() for ch in val):
+                findings.append(
+                    VulnerabilityFinding(
+                        id=f"dast.info-disclosure-{header_name}",
+                        scanner=ScannerType.DAST,
+                        title=f"Technology Stack Disclosure via '{header_name}' Header",
+                        description=f"Server exposed exact software/version information in '{header_name}: {val}'.",
+                        severity=Severity.LOW,
+                        file_path=url,
+                        code_snippet=f"{header_name}: {val}",
+                        cwe=["CWE-200"],
+                        cve=[],
+                        recommendation=f"Strip or obfuscate the '{header_name}' header in reverse-proxy / application config.",
+                        raw_metadata={"header": header_name, "value": val},
+                    )
+                )
+
+        return findings
+
     async def _check_cors_configuration(self, url: str, client: httpx.AsyncClient) -> List[VulnerabilityFinding]:
         """Audit for permissive CORS and Origin Reflection."""
         findings: List[VulnerabilityFinding] = []
@@ -338,6 +364,7 @@ class HTTPSecurityScanner:
                     resp = await client.get(full_url)
                     # Passive checks
                     all_findings.extend(self._check_security_headers(full_url, resp.headers))
+                    all_findings.extend(self._check_information_disclosure(full_url, resp.headers))
                     all_findings.extend(await self._check_cookie_security(full_url, resp))
                     all_findings.extend(await self._check_cors_configuration(full_url, client))
 

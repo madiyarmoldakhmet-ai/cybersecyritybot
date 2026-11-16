@@ -240,6 +240,39 @@ class PythonASTSecurityVisitor(ast.NodeVisitor):
         self.file_content = file_content
         self.lines = file_content.splitlines()
         self.findings: List[VulnerabilityFinding] = []
+        self.dynamic_string_vars: Set[str] = set()
+
+    def _visit_fn_scope(self, node: ast.AST) -> None:
+        prev_vars = self.dynamic_string_vars
+        self.dynamic_string_vars = set()
+        self.generic_visit(node)
+        self.dynamic_string_vars = prev_vars
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_fn_scope(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_fn_scope(node)
+
+    def _is_dynamic_expr(self, expr: ast.AST) -> bool:
+        if isinstance(expr, (ast.BinOp, ast.JoinedStr)):
+            return True
+        if isinstance(expr, ast.Name) and expr.id in self.dynamic_string_vars:
+            return True
+        if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "format":
+            return True
+        return False
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if self._is_dynamic_expr(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.dynamic_string_vars.add(target.id)
+        else:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.dynamic_string_vars.discard(target.id)
+        self.generic_visit(node)
 
     def _get_snippet(self, start_line: int, end_line: Optional[int] = None, padding: int = 15) -> str:
         """Extract a 30-line code window (15 lines before, 15 lines after) around the finding."""
@@ -278,8 +311,7 @@ class PythonASTSecurityVisitor(ast.NodeVisitor):
         # 2. SQL Injection in cursor.execute()
         if func_name == "execute" and node.args:
             first_arg = node.args[0]
-            is_dynamic_sql = isinstance(first_arg, (ast.BinOp, ast.JoinedStr))
-            if is_dynamic_sql:
+            if self._is_dynamic_expr(first_arg):
                 self.findings.append(
                     VulnerabilityFinding(
                         id="sql-injection-dynamic-query",
@@ -853,10 +885,47 @@ class SASTScanner:
                         )
             except Exception:
                 pass
-            return all_findings, None
+        return all_findings, None
+
+    async def run_taint_analysis(self, target_path: Path) -> List[VulnerabilityFinding]:
+        """Run cross-file Python AST taint analysis and normalize findings."""
+        from aegis.scanners.taint_engine import TaintEngine
+
+        def _run() -> List[VulnerabilityFinding]:
+            taint_findings = TaintEngine(str(target_path)).analyze()
+            converted: List[VulnerabilityFinding] = []
+            for idx, tf in enumerate(taint_findings, 1):
+                sink_p = Path(tf.sink_file)
+                rel_sink = sink_p.relative_to(target_path).as_posix() if sink_p.is_relative_to(target_path) else str(sink_p)
+                src_p = Path(tf.source_file)
+                rel_src = src_p.relative_to(target_path).as_posix() if src_p.is_relative_to(target_path) else str(src_p)
+                sev = Severity.CRITICAL if tf.severity == "CRITICAL" else Severity.HIGH
+                flow_str = " ".join(tf.taint_path)
+                converted.append(
+                    VulnerabilityFinding(
+                        id=f"taint-flow-{idx}",
+                        scanner=ScannerType.CUSTOM,
+                        title=f"{tf.vulnerability_type}: {flow_str}",
+                        description=(
+                            f"Untrusted input from `{rel_src}:{tf.source_line}` reaches sink at "
+                            f"`{rel_sink}:{tf.sink_line}` via `{flow_str}` without sanitization."
+                        ),
+                        severity=sev,
+                        file_path=rel_sink,
+                        line_start=tf.sink_line,
+                        line_end=tf.sink_line,
+                        code_snippet="\n".join(tf.code_snippets),
+                        cwe=["CWE-20", "CWE-89"],
+                        cve=[],
+                        recommendation="Validate and sanitize untrusted input at the entry point and use parameterized sinks.",
+                    )
+                )
+            return converted
+
+        return await asyncio.to_thread(_run)
 
     async def scan(self, target_path: Union[str, Path]) -> SASTScanResult:
-        """Run multi-language SAST, Mobile DevSecOps rules, and dependency scanners concurrently with zero-noise sanitization."""
+        """Run multi-language SAST, Mobile DevSecOps rules, Taint Engine, and dependency vulnerability scanners concurrently with zero-noise sanitization."""
         start_time = time.time()
         path = Path(target_path).resolve()
 
@@ -871,9 +940,11 @@ class SASTScanner:
 
         from aegis.scanners.secret_scanner import SecretScanner
         from aegis.scanners.flutter_rules import FlutterSecurityScanner
+        from aegis.scanners.sca_scanner import SCAScanner
         
         secret_scanner = SecretScanner()
         flutter_scanner = FlutterSecurityScanner()
+        sca_scanner = SCAScanner()
         
         # Pass event_bus to other scanners if they support it
         if hasattr(secret_scanner, 'event_bus'):
@@ -881,24 +952,32 @@ class SASTScanner:
         if hasattr(flutter_scanner, 'event_bus'):
             flutter_scanner.event_bus = self.event_bus
 
-        # Run built-in multi-language analyzer, mobile scanner, and CLI tools concurrently
+        # Run built-in multi-language analyzer, mobile scanner, taint engine, SCA, and CLI tools concurrently
         ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
         mobile_task = asyncio.create_task(self.mobile_scanner.scan(path))
+        taint_task = asyncio.create_task(self.run_taint_analysis(path))
+        sca_task = asyncio.create_task(sca_scanner.scan(path))
         semgrep_task = asyncio.create_task(self.run_semgrep(path))
         bandit_task = asyncio.create_task(self.run_bandit(path))
         pip_audit_task = asyncio.create_task(self.run_pip_audit(path))
         secret_task = asyncio.create_task(secret_scanner.scan(path))
 
-        ml_findings, mobile_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err), secret_findings = await asyncio.gather(
-            ml_task, mobile_task, semgrep_task, bandit_task, pip_audit_task, secret_task, return_exceptions=False
+        ml_findings, mobile_findings, taint_findings, sca_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err), secret_findings = await asyncio.gather(
+            ml_task, mobile_task, taint_task, sca_task, semgrep_task, bandit_task, pip_audit_task, secret_task, return_exceptions=False
         )
         
         # Flutter scan runs asynchronously now
         flutter_findings = await flutter_scanner.scan(path)
 
         raw_findings: List[VulnerabilityFinding] = (
-            mobile_findings + bandit_findings + semgrep_findings + ml_findings + (pip_findings or []) + secret_findings + flutter_findings
+            mobile_findings + bandit_findings + semgrep_findings + ml_findings + taint_findings + sca_findings + (pip_findings or []) + secret_findings + flutter_findings
         )
+
+        # Normalize paths relative to target_path for consistent deduplication and reports
+        for f in raw_findings:
+            fp = Path(f.file_path)
+            if fp.is_absolute() and fp.is_relative_to(path):
+                f.file_path = fp.relative_to(path).as_posix()
 
         # Apply Zero-Noise False-Positive Sanitizer (Shannon Entropy & Test Filter)
         clean_findings = self.sanitizer.sanitize_findings(raw_findings)
@@ -925,6 +1004,7 @@ class SASTScanner:
         scanners_run = [
             ScannerType.MOBILE,
             ScannerType.CUSTOM,
+            ScannerType.SCA,
             ScannerType.SEMGREP,
             ScannerType.BANDIT,
             ScannerType.PIP_AUDIT,

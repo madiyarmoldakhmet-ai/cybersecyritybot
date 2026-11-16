@@ -107,7 +107,7 @@ class SCAScanner:
         for i in range(0, len(queries), batch_size):
             batch = queries[i:i+batch_size]
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
+                async with httpx.AsyncClient(timeout=5.0) as client:
                     resp = await client.post(
                         self.OSV_API_URL, 
                         json={"queries": batch}

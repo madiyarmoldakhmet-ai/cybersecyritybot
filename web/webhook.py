@@ -7,13 +7,16 @@ SAST & Mobile DevSecOps scans in the background, and dispatches urgent Telegram 
 import asyncio
 import hashlib
 import hmac
+import html
 import logging
 import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse, urlunparse
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 
@@ -70,31 +73,33 @@ async def send_telegram_alert(
         high_count = scan_result.findings_by_severity.get(Severity.HIGH, 0)
         med_count = scan_result.findings_by_severity.get(Severity.MEDIUM, 0)
 
+        e = html.escape
         alert_lines = [
-            "🚨 **[Commit Guardian] Обнаружена угроза безопасности!**\n",
-            f"📦 **Репозиторий:** `{repo_name}`",
-            f"🌿 **Ветка:** `{branch}`",
-            f"👤 **Автор коммита:** `{author}`",
-            f"🔖 **Коммит:** `{commit_sha[:8]}`\n",
-            "📊 **Результаты сканирования (SAST & Mobile):**",
-            f"• 🔴 Critical: `{crit_count}`",
-            f"• 🟠 High: `{high_count}`",
-            f"• 🟡 Medium: `{med_count}`\n",
-            "🔍 **Критические уязвимости:**",
+            "🚨 <b>[Commit Guardian] Обнаружена угроза безопасности!</b>\n",
+            f"📦 <b>Репозиторий:</b> <code>{e(repo_name)}</code>",
+            f"🌿 <b>Ветка:</b> <code>{e(branch)}</code>",
+            f"👤 <b>Автор коммита:</b> <code>{e(author)}</code>",
+            f"🔖 <b>Коммит:</b> <code>{e(commit_sha[:8])}</code>\n",
+            "📊 <b>Результаты сканирования (SAST &amp; Mobile):</b>",
+            f"• 🔴 Critical: <code>{crit_count}</code>",
+            f"• 🟠 High: <code>{high_count}</code>",
+            f"• 🟡 Medium: <code>{med_count}</code>\n",
+            "🔍 <b>Критические уязвимости:</b>",
         ]
 
         # List top 3 high/critical findings
         high_findings = [f for f in scan_result.findings if f.severity in (Severity.CRITICAL, Severity.HIGH)][:3]
         for idx, f in enumerate(high_findings, 1):
             scanner_badge = "📱 Mobile" if f.scanner.value == "mobile" else f.scanner.value
+            rec = f.recommendation or f.description[:100]
             alert_lines.append(
-                f"{idx}. [{f.severity.value}] **{f.title}** ({scanner_badge})\n"
-                f"   📁 `{f.file_path}` (стр. {f.line_start or 1})\n"
-                f"   💡 {f.recommendation or f.description[:100]}"
+                f"{idx}. [{e(f.severity.value)}] <b>{e(f.title)}</b> ({e(scanner_badge)})\n"
+                f"   📁 <code>{e(f.file_path)}</code> (стр. {f.line_start or 1})\n"
+                f"   💡 {e(rec)}"
             )
 
         if report_name:
-            alert_lines.append(f"\n📄 **Отчёт аудита:** `{report_name}`")
+            alert_lines.append(f"\n📄 <b>Отчёт аудита:</b> <code>{e(report_name)}</code>")
 
         alert_text = "\n".join(alert_lines)
 
@@ -108,7 +113,7 @@ async def send_telegram_alert(
             chat_id=chat_id,
             text=alert_text,
             reply_markup=kb,
-            parse_mode="Markdown",
+            parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
         logger.info(f"📬 Sent Commit Guardian Telegram alert to chat_id={chat_id} for {repo_name}")
@@ -134,12 +139,17 @@ async def process_guardian_audit(
 
     auth_clone_url = clone_url
     if settings.github_token:
-        auth_clone_url = f"https://x-access-token:{settings.github_token}@github.com/{repo_name}.git"
+        parsed = urlparse(clone_url or "")
+        if parsed.scheme == "https" and parsed.netloc:
+            host = parsed.netloc.split("@")[-1]
+            auth_clone_url = urlunparse(parsed._replace(netloc=f"x-access-token:{settings.github_token}@{host}"))
+        else:
+            auth_clone_url = f"https://x-access-token:{settings.github_token}@github.com/{repo_name}.git"
 
     try:
         # Clone single branch depth 1
         proc = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", "1", "--branch", branch, auth_clone_url, str(temp_dir),
+            "git", "clone", "--depth", "1", "--branch", branch, "--", auth_clone_url, str(temp_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )

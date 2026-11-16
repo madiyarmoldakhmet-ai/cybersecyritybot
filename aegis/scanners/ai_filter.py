@@ -5,7 +5,8 @@ from typing import List, Optional
 
 from openai import AsyncOpenAI
 
-from aegis.core.config import settings
+from aegis.core.config import LLMProvider, settings
+from aegis.core.queue_manager import ollama_limiter
 from aegis.scanners.models import VulnerabilityFinding, Severity
 
 logger = logging.getLogger("aegis.ai_filter")
@@ -34,17 +35,17 @@ class AIFalsePositiveFilter:
         self.model_name = ""
         self.enabled = False
 
-        if settings.use_local_llm or settings.llm_provider == "ollama":
+        if settings.air_gapped or settings.llm_provider == LLMProvider.OLLAMA:
             self.model_name = settings.ollama_model or "qwen2.5-coder:14b"
             self.client = AsyncOpenAI(
-                base_url=settings.ollama_base_url + "/v1",
+                base_url=settings.ollama_base_url.rstrip("/") + "/v1",
                 api_key="ollama", # Ollama doesn't require an API key
                 timeout=float(timeout_seconds),
                 max_retries=1,
             )
             self.enabled = True
-        elif settings.llm_provider == "openrouter" and settings.openrouter_api_key:
-            self.model_name = settings.openrouter_model or "anthropic/claude-sonnet-5"
+        elif settings.llm_provider == LLMProvider.OPENROUTER and settings.openrouter_api_key:
+            self.model_name = settings.openrouter_model or "anthropic/claude-3.5-sonnet"
             self.client = AsyncOpenAI(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=settings.openrouter_api_key,
@@ -78,15 +79,22 @@ class AIFalsePositiveFilter:
         )
 
         try:
-            resp = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": AI_FILTER_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                max_tokens=200,
-            )
+            async def _call():
+                return await self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": AI_FILTER_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.1,
+                    max_tokens=200,
+                )
+
+            if settings.air_gapped:
+                async with ollama_limiter.acquire_slot(f"AIFilter:{finding.file_path}"):
+                    resp = await _call()
+            else:
+                resp = await _call()
             raw_text = resp.choices[0].message.content or ""
             
             # Extract JSON block

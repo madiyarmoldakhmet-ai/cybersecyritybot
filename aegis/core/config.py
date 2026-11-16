@@ -118,7 +118,7 @@ class Settings(BaseSettings):
         description="OpenRouter API key for Claude 3.5/GPT-4o cloud inference"
     )
     openrouter_model: str = Field(
-        default="anthropic/claude-sonnet-5",
+        default="anthropic/claude-3.5-sonnet",
         description="OpenRouter model identifier"
     )
 
@@ -177,6 +177,18 @@ class Settings(BaseSettings):
         default=Path("./data/commit_guardian.db"),
         description="SQLite database that stores audit metrics for the /dashboard page"
     )
+
+    @field_validator("default_telegram_chat_id", mode="before")
+    @classmethod
+    def parse_default_telegram_chat_id(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            cleaned = v.split("#", 1)[0].strip()
+            if not cleaned:
+                return None
+            return int(cleaned)
+        return v
 
     @field_validator("allowed_telegram_users", mode="before")
     @classmethod
