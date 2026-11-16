@@ -15,11 +15,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 
+from aegis.core.archive_utils import safe_extract_zip
 from aegis.core.event_bus import ScanEventBus
+from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.sast_scanner import SASTScanner
-from aegis.core.config import settings
+from aegis.core.config import LLMProvider, settings
 from aegis.core.logging_config import setup_logging
+from aegis.core.queue_manager import ollama_limiter
 from bot.main import run_bot
+from web.api import api_router
 from web.dashboard import router as dashboard_router
 from web.webhook import router as webhook_router
 
@@ -62,9 +66,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Commit Guardian: GitHub webhook audits + observability dashboard
+# Commit Guardian: GitHub webhook audits, observability dashboard & REST API
 app.include_router(webhook_router)
 app.include_router(dashboard_router)
+app.include_router(api_router)
 
 @app.exception_handler(Exception)
 async def global_error(request: Request, exc: Exception):
@@ -80,17 +85,23 @@ class ScanRequest(BaseModel):
     github_url: str
 
 async def clone_repo(repo_url: str, dest_dir: Path) -> bool:
-    """Clones a git repository into the specified directory."""
-    logger.info(f"Cloning {repo_url} into {dest_dir}...")
+    """Clones a validated public GitHub repository into the specified directory."""
+    repo_name = OwnershipVerifier.parse_github_repo(repo_url)
+    if not repo_name:
+        logger.warning(f"Rejected invalid or non-GitHub clone URL: {repo_url}")
+        return False
+
+    safe_url = f"https://github.com/{repo_name}.git"
+    logger.info(f"Cloning {safe_url} into {dest_dir}...")
     try:
         process = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", "1", repo_url, str(dest_dir),
+            "git", "clone", "--depth", "1", "--", safe_url, str(dest_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        await process.communicate()
+        _, _ = await asyncio.wait_for(process.communicate(), timeout=45.0)
         if process.returncode != 0:
-            logger.error(f"Failed to clone repository: {repo_url}")
+            logger.error(f"Failed to clone repository: {safe_url}")
             return False
         return True
     except Exception as e:
@@ -99,7 +110,7 @@ async def clone_repo(repo_url: str, dest_dir: Path) -> bool:
 
 @app.post("/api/scan/upload")
 async def scan_upload(file: UploadFile = File(...)):
-    if not file.filename or not file.filename.endswith(".zip"):
+    if not file.filename or not file.filename.lower().endswith(".zip"):
         return JSONResponse(status_code=400, content={"error": "Только ZIP-архивы разрешены"})
     
     scan_uuid = str(uuid.uuid4())
@@ -117,17 +128,24 @@ async def scan_upload(file: UploadFile = File(...)):
         
         with open(zip_path, "wb") as f:
             f.write(content)
-            
-        shutil.unpack_archive(zip_path, extract_dir)
+
+        try:
+            safe_extract_zip(zip_path, extract_dir)
+        except Exception as zip_err:
+            return JSONResponse(status_code=400, content={"error": f"Некорректный или опасный ZIP-архив: {zip_err}"})
         
         event_bus = ScanEventBus(scan_id=scan_uuid)
         scanner = SASTScanner(event_bus=event_bus)
         
         result = await scanner.scan(extract_dir)
-        
-        # We need to make sure the result is serializable.
-        # usually we can just return it, fastapi will serialize it.
-        return {"status": "success", "vulnerabilities": result if result else []}
+
+        findings_list = [f.model_dump() for f in result.findings] if result else []
+        return {
+            "status": "success",
+            "total_findings": result.total_findings if result else 0,
+            "vulnerabilities": findings_list,
+            "scan_result": result.model_dump() if result else None,
+        }
     finally:
         shutil.rmtree(repo_dir, ignore_errors=True)
         logger.info("Код удалён с сервера")
@@ -140,14 +158,15 @@ async def websocket_scan(websocket: WebSocket):
     
     try:
         data = await websocket.receive_json()
-        repo_url = data.get("github_url")
-        if not repo_url:
-            await websocket.send_json({"error": "Missing github_url"})
+        repo_url = (data.get("github_url") or "").strip()
+        repo_name = OwnershipVerifier.parse_github_repo(repo_url)
+        if not repo_name:
+            await websocket.send_json({"event_type": "SystemError", "message": "Invalid GitHub URL or owner/repo format."})
             await websocket.close()
             return
             
-        await websocket.send_json({"event_type": "SystemLog", "message": f"Cloning repository {repo_url}..."})
-        success = await clone_repo(repo_url, repo_dir)
+        await websocket.send_json({"event_type": "SystemLog", "message": f"Cloning repository {repo_name}..."})
+        success = await clone_repo(repo_name, repo_dir)
         
         if not success:
             await websocket.send_json({"event_type": "SystemError", "message": "Failed to clone repository."})
@@ -156,13 +175,26 @@ async def websocket_scan(websocket: WebSocket):
             
         event_bus = ScanEventBus(scan_id=scan_uuid)
         scanner = SASTScanner(event_bus=event_bus)
-        
-        scan_task = asyncio.create_task(scanner.scan(repo_dir))
+
+        async def _run_and_finish():
+            try:
+                return await scanner.scan(repo_dir)
+            finally:
+                if not event_bus._completed:
+                    await event_bus.complete(total_findings=0, duration_seconds=0.0)
+
+        scan_task = asyncio.create_task(_run_and_finish())
         
         async for event in event_bus.subscribe():
-            await websocket.send_json(event.model_dump())
+            await websocket.send_json(event.model_dump(mode="json"))
             
         result = await scan_task
+        await websocket.send_json({
+            "event_type": "ScanResult",
+            "total_findings": result.total_findings,
+            "findings": [f.model_dump(mode="json") for f in result.findings],
+            "duration_seconds": result.duration_seconds,
+        })
         await websocket.send_json({"event_type": "SystemLog", "message": "Scan completely finished."})
         
     except WebSocketDisconnect:
@@ -170,7 +202,7 @@ async def websocket_scan(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Error in websocket handler: {e}")
         try:
-            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.send_json({"event_type": "SystemError", "message": "Scan failed due to an internal error."})
         except:
             pass
     finally:
@@ -187,12 +219,16 @@ async def websocket_scan(websocket: WebSocket):
 async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
     
-    # Initialize OpenAI client with OpenRouter or Ollama
-    client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1" if settings.openrouter_api_key else settings.ollama_base_url + "/v1",
-        api_key=settings.openrouter_api_key or "ollama"
-    )
-    model = settings.openrouter_model if settings.openrouter_api_key else settings.ollama_model
+    # Enforce local-LLM policy consistently with settings.enforce_local_llm_policy()
+    if not settings.air_gapped and settings.llm_provider == LLMProvider.OPENROUTER and settings.openrouter_api_key:
+        client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=settings.openrouter_api_key)
+        model = settings.openrouter_model
+    elif not settings.air_gapped and settings.llm_provider == LLMProvider.GEMINI and settings.gemini_api_key:
+        client = AsyncOpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=settings.gemini_api_key)
+        model = settings.gemini_model
+    else:
+        client = AsyncOpenAI(base_url=settings.ollama_base_url.rstrip("/") + "/v1", api_key="ollama")
+        model = settings.ollama_model
     
     chat_history = [
         {"role": "system", "content": "You are Aegis, a highly advanced agentic AI security scanner. You help users analyze GitHub repositories for vulnerabilities, verify authorship, and explain security concepts. If a user asks you to scan a repository, you must output a special JSON payload containing {\"action\": \"SCAN\", \"github_url\": \"URL\"}. Otherwise, just respond conversationally."}

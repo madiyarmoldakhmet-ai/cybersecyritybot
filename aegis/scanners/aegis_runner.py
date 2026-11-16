@@ -16,7 +16,8 @@ from typing import Any, Dict, List, Optional, Set
 
 from openai import AsyncOpenAI
 
-from aegis.core.config import settings
+from aegis.core.config import LLMProvider, settings
+from aegis.core.queue_manager import ollama_limiter
 from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
 from aegis.scanners.route_extractor import DiscoveredEndpoint, RouteExtractor
 
@@ -110,17 +111,21 @@ class AegisEngine:
         timeout_seconds: int = 180,
     ) -> None:
         self.timeout_seconds = timeout_seconds
+        self.ollama_base_url = (
+            ollama_base_url
+            or settings.ollama_base_url.rstrip("/") + "/v1"
+        )
 
-        if settings.llm_provider == "openrouter" and settings.openrouter_api_key:
+        if not settings.air_gapped and settings.llm_provider == LLMProvider.OPENROUTER and settings.openrouter_api_key:
             # Use Claude 3.5 Sonnet or similar via OpenRouter
-            self.model_name = settings.openrouter_model or "anthropic/claude-sonnet-5"
+            self.model_name = settings.openrouter_model or "anthropic/claude-3.5-sonnet"
             self.client = AsyncOpenAI(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=settings.openrouter_api_key,
                 timeout=float(self.timeout_seconds),
                 max_retries=2,
             )
-        elif settings.llm_provider == "gemini" and settings.gemini_api_key:
+        elif not settings.air_gapped and settings.llm_provider == LLMProvider.GEMINI and settings.gemini_api_key:
             # Use Gemini Cloud AI via OpenAI-compatible endpoint
             self.model_name = settings.gemini_model or "gemini-2.5-flash"
             self.client = AsyncOpenAI(
@@ -131,14 +136,10 @@ class AegisEngine:
             )
         else:
             # Fallback to local Ollama AI
-            self.ollama_base_url = (
-                ollama_base_url
-                or getattr(settings, "aegis_ollama_base_url", "http://localhost:11434/v1")
-            )
             self.model_name = (
                 model_name
-                or getattr(settings, "aegis_model", "qwen2.5-coder:14b")
                 or settings.ollama_model
+                or getattr(settings, "aegis_model", "qwen2.5-coder:14b")
             )
             self.client = AsyncOpenAI(
                 base_url=self.ollama_base_url,
@@ -341,15 +342,22 @@ class AegisEngine:
 
         recon_analysis = ""
         try:
-            recon_resp = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": STRIX_RECON_SYSTEM_PROMPT},
-                    {"role": "user", "content": recon_prompt},
-                ],
-                temperature=0.2,
-                max_tokens=1000,
-            )
+            async def _run_recon():
+                return await self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": STRIX_RECON_SYSTEM_PROMPT},
+                        {"role": "user", "content": recon_prompt},
+                    ],
+                    temperature=0.2,
+                    max_tokens=1000,
+                )
+
+            if settings.air_gapped:
+                async with ollama_limiter.acquire_slot(f"AegisRecon:{repo_dir.name}"):
+                    recon_resp = await _run_recon()
+            else:
+                recon_resp = await _run_recon()
             recon_analysis = recon_resp.choices[0].message.content or ""
         except Exception as ex:
             logger.warning(f"Aegis Recon Agent failed, proceeding with direct analysis: {ex}")
@@ -367,15 +375,22 @@ class AegisEngine:
         )
 
         try:
-            attack_resp = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": STRIX_ATTACK_SYSTEM_PROMPT},
-                    {"role": "user", "content": attack_user_prompt},
-                ],
-                temperature=0.2,
-                max_tokens=3000,
-            )
+            async def _run_attack():
+                return await self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": STRIX_ATTACK_SYSTEM_PROMPT},
+                        {"role": "user", "content": attack_user_prompt},
+                    ],
+                    temperature=0.2,
+                    max_tokens=3000,
+                )
+
+            if settings.air_gapped:
+                async with ollama_limiter.acquire_slot(f"AegisAttack:{repo_dir.name}"):
+                    attack_resp = await _run_attack()
+            else:
+                attack_resp = await _run_attack()
             raw_text = attack_resp.choices[0].message.content or ""
             return self._parse_aegis_output(raw_text, repo_dir)
         except Exception as e:
