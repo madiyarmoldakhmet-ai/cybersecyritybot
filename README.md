@@ -31,14 +31,24 @@ flowchart LR
 
 ## ✨ Features
 
-- **Commit Guardian webhook** — `push` and `pull_request` events, HMAC-verified, processed in a background queue.
-- **Multi-engine SAST** — Semgrep, Bandit, pip-audit, secret detection, mobile/Flutter rules and the Aegis deep agentic scanner, merged and de-duplicated.
-- **Local AI analysis** — false-positive filtering and an executive risk summary (in Russian) from the local model, with a rule-based fallback when Ollama is offline.
-- **Compliance reports** — `reports/<owner>__<repo>/<timestamp>_<commit>.md` and `.pdf` (Cyrillic-ready).
-- **Observability dashboard** — `GET /dashboard`: total scans, critical vulnerabilities found, average AI processing time, recent audits; auto-refreshes every 10 s.
-- **Telegram alerts** — severity breakdown, top findings and the report reference, sent the moment risk is detected.
-- **DAST** — HTTP security headers, CORS, cookie flags and safe active probes for live URLs; Playwright-based XSS proof-of-concept verification.
-- **GitHub Action** — run the scanner in CI and publish SARIF to the GitHub Security tab (`action.yml`).
+- **Commit Guardian webhook** — `push` and `pull_request` events, HMAC-verified, processed in a background queue, with automated Pull Request security comments when `GITHUB_TOKEN` is set.
+- **Multi-engine SAST & Policy engine** — Semgrep, Bandit, pip-audit, secret entropy detection, Python AST + cross-file `TaintEngine`, mobile/Flutter rules, and repository-level `.aegis.yml` rules (`ignore_paths`, `ignore_rules`, `severity_threshold`, `custom_rules` e.g. unmasked PII/IIN logging).
+- **Local AI analysis & offline fallback** — false-positive filtering, executive summary in Russian, and CWE-aware remediation patches via Ollama with deterministic rule-based fallback when Ollama is offline.
+- **Compliance reports & downloads** — `reports/<owner>__<repo>/<timestamp>_<commit>.md` and `.pdf` (Cyrillic-ready), downloadable directly from `/dashboard` or `/api/v1/reports/...` and delivered via Telegram.
+- **Interactive web console & 1-click Demo** — `/` (`aegis_web` Next.js static export) with 1-click vulnerable fintech demo audit (`POST /api/scan/demo`), live WebSocket terminal, `Security Score (0–100 / A+..F)`, AI Patch diff modal, and ZIP upload.
+- **Observability dashboard** — `GET /dashboard`: total scans, critical vulnerabilities found, average AI processing time, recent audits with PDF/MD links; auto-refreshes every 10 s without external CDN assets.
+- **Telegram bot** — scan public GitHub repos or ZIP archives directly in Telegram and receive Security Score + attached Compliance PDF report.
+- **DAST & GitHub Action** — HTTP security headers, CORS, cookie flags, Playwright XSS PoC, and SARIF upload to the GitHub Security tab (`action.yml`).
+
+---
+
+## 💼 B2B Model & Deployment Tiers (KZ Fintech / GovTech)
+
+| Plan | Price | Scope |
+|---|---|---|
+| **Pilot (14 days)** | `0 ₸` | Docker setup in 15 min, 1–2 repos, Telegram alerts & PDF reports |
+| **Team On-Premise** | `190 000 ₸ / mo` | Up to 25 developers, local Ollama, `.aegis.yml` PII rules, PR comments & SIEM logs |
+| **Enterprise Air-Gapped** | Custom (from `650 000 ₸ / mo`) | Air-gapped perimeter deployment, custom compliance rules, SLA |
 
 ---
 
@@ -107,11 +117,14 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/webhook/github` | GitHub webhook receiver (push, pull_request, ping) |
+| `POST` | `/api/scan/demo` | 1-click stage demo audit against built-in KZ fintech fixture |
+| `POST` | `/api/scan/upload` | ZIP archive local scan + Compliance PDF generation |
 | `GET` | `/dashboard` | Observability dashboard |
 | `GET` | `/api/v1/dashboard/metrics` | Dashboard metrics as JSON |
+| `GET` | `/api/v1/reports/{repo_slug}/{filename}` | Download persisted PDF / Markdown compliance report |
 | `GET` | `/api/v1/metrics` | Queue and Ollama concurrency metrics |
-| `GET` | `/health` | Health, Ollama connectivity, air-gap status (`web.api` app) |
-| `POST` | `/api/v1/scan/sast` · `/api/v1/scan/dast` | On-demand scans (`web.api` app) |
+| `GET` | `/health` | Health, Ollama connectivity, air-gap status |
+| `POST` | `/api/v1/scan/sast` · `/api/v1/scan/dast` · `/api/v1/remediate` | On-demand scans & remediation patches |
 
 Interactive docs: `/docs`.
 
