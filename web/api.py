@@ -5,6 +5,7 @@ Provides endpoints for automated SAST & DAST scans, LLM remediation, and PR gene
 
 import asyncio
 import logging
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import httpx
 
@@ -148,8 +150,13 @@ async def trigger_sast_scan(req: SASTScanRequest):
     """Execute SAST security scan on local folder or GitHub repository."""
     scanner = SASTScanner()
 
-    # 1. Local path scan
+    # 1. Local path scan (disabled in production to prevent server filesystem exposure)
     if req.local_path:
+        if settings.environment.lower() == "production":
+            raise HTTPException(
+                status_code=403,
+                detail="Local path scanning is disabled in production; use repo_url or ZIP upload.",
+            )
         target = Path(req.local_path)
         if not target.exists():
             raise HTTPException(status_code=404, detail=f"Local path does not exist: {req.local_path}")
@@ -279,6 +286,30 @@ async def create_pull_request(req: PRCreateRequest):
         "message": msg,
         "pull_request_url": pr_url
     }
+
+
+_SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+@api_router.get("/api/v1/reports/{repo_slug}/{filename}", tags=["Reports"])
+async def download_audit_report(repo_slug: str, filename: str):
+    """Serve a persisted Markdown or PDF compliance audit report safely."""
+    if not _SAFE_SEGMENT_RE.match(repo_slug) or not _SAFE_SEGMENT_RE.match(filename):
+        raise HTTPException(status_code=400, detail="Invalid report path segment.")
+    if ".." in repo_slug or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid report path segment.")
+
+    ext = Path(filename).suffix.lower()
+    if ext not in {".pdf", ".md"}:
+        raise HTTPException(status_code=400, detail="Only .pdf and .md compliance reports are downloadable.")
+
+    base_dir = Path(settings.scan_output_dir).resolve()
+    target = (base_dir / repo_slug / filename).resolve()
+    if not target.is_relative_to(base_dir) or not target.is_file():
+        raise HTTPException(status_code=404, detail="Audit report not found.")
+
+    media_type = "application/pdf" if ext == ".pdf" else "text/markdown; charset=utf-8"
+    return FileResponse(path=target, media_type=media_type, filename=target.name)
 
 
 app.include_router(webhook_router)

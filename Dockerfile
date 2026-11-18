@@ -18,6 +18,8 @@ COPY aegis/ ./aegis/
 COPY bot/ ./bot/
 COPY aegis_server/ ./aegis_server/
 COPY web/ ./web/
+COPY demo_targets/ ./demo_targets/
+COPY .aegis.yml ./
 # Run as an unprivileged user; it owns only the directories the app writes to
 RUN useradd --create-home --uid 10001 guardian \
     && mkdir -p /app/reports /app/data /app/temp_scans \

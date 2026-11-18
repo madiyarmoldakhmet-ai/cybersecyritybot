@@ -16,8 +16,10 @@ from pydantic import BaseModel
 from openai import AsyncOpenAI
 
 from aegis.core.archive_utils import safe_extract_zip
+from aegis.core.audit_pipeline import AuditArtifacts, finalize_scan_audit
 from aegis.core.event_bus import ScanEventBus
 from aegis.core.verifier import OwnershipVerifier
+from aegis.scanners.models import SASTScanResult
 from aegis.scanners.sast_scanner import SASTScanner
 from aegis.core.config import LLMProvider, settings
 from aegis.core.logging_config import setup_logging
@@ -56,7 +58,27 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
-app = FastAPI(title="Aegis Security Engine API", version="2.0", lifespan=lifespan)
+app = FastAPI(title="Commit Guardian Security API", version="2.0", lifespan=lifespan)
+
+DEMO_TARGET_DIR = Path(__file__).resolve().parent.parent / "demo_targets" / "fintech_demo"
+
+
+def _build_scan_payload(result: SASTScanResult, repo_name: str, artifacts: AuditArtifacts) -> Dict[str, Any]:
+    """Serialize SAST scan results, security score, and report URLs for the web console."""
+    return {
+        "status": "success",
+        "repo_name": repo_name,
+        "total_findings": result.total_findings,
+        "security_score": artifacts.score,
+        "grade": artifacts.grade,
+        "recommendation": artifacts.recommendation,
+        "summary": artifacts.summary.text if artifacts.summary else "",
+        "summary_ai_generated": bool(artifacts.summary and artifacts.summary.ai_generated),
+        "report_pdf_url": artifacts.report_pdf_url,
+        "report_md_url": artifacts.report_md_url,
+        "vulnerabilities": [f.model_dump() for f in result.findings],
+        "scan_result": result.model_dump(),
+    }
 
 app.add_middleware(
     CORSMiddleware,
@@ -108,6 +130,26 @@ async def clone_repo(repo_url: str, dest_dir: Path) -> bool:
         logger.error(f"Error during git clone: {e}")
         return False
 
+@app.post("/api/scan/demo")
+async def scan_demo():
+    """Run a 1-click live demo audit against the built-in fintech/GovTech target."""
+    if not DEMO_TARGET_DIR.is_dir():
+        return JSONResponse(status_code=404, content={"error": "Demo target directory is missing."})
+
+    scan_uuid = uuid.uuid4().hex[:12]
+    scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
+    result = await scanner.scan(DEMO_TARGET_DIR)
+    repo_name = "demo/kz-fintech-app"
+    artifacts = await finalize_scan_audit(
+        result,
+        repo_name=repo_name,
+        commit_sha=scan_uuid,
+        branch="demo",
+        author="stage-demo",
+    )
+    return _build_scan_payload(result, repo_name, artifacts)
+
+
 @app.post("/api/scan/upload")
 async def scan_upload(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".zip"):
@@ -138,14 +180,16 @@ async def scan_upload(file: UploadFile = File(...)):
         scanner = SASTScanner(event_bus=event_bus)
         
         result = await scanner.scan(extract_dir)
-
-        findings_list = [f.model_dump() for f in result.findings] if result else []
-        return {
-            "status": "success",
-            "total_findings": result.total_findings if result else 0,
-            "vulnerabilities": findings_list,
-            "scan_result": result.model_dump() if result else None,
-        }
+        archive_label = Path(file.filename).stem or "archive"
+        repo_name = f"upload/{archive_label}"
+        artifacts = await finalize_scan_audit(
+            result,
+            repo_name=repo_name,
+            commit_sha=scan_uuid[:12],
+            branch="zip-upload",
+            author="web-upload",
+        )
+        return _build_scan_payload(result, repo_name, artifacts)
     finally:
         shutil.rmtree(repo_dir, ignore_errors=True)
         logger.info("Код удалён с сервера")
@@ -189,9 +233,24 @@ async def websocket_scan(websocket: WebSocket):
             await websocket.send_json(event.model_dump(mode="json"))
             
         result = await scan_task
+        artifacts = await finalize_scan_audit(
+            result,
+            repo_name=repo_name,
+            commit_sha=scan_uuid[:12],
+            branch="main",
+            author="web-console",
+        )
         await websocket.send_json({
             "event_type": "ScanResult",
+            "repo_name": repo_name,
             "total_findings": result.total_findings,
+            "security_score": artifacts.score,
+            "grade": artifacts.grade,
+            "recommendation": artifacts.recommendation,
+            "summary": artifacts.summary.text if artifacts.summary else "",
+            "summary_ai_generated": bool(artifacts.summary and artifacts.summary.ai_generated),
+            "report_pdf_url": artifacts.report_pdf_url,
+            "report_md_url": artifacts.report_md_url,
             "findings": [f.model_dump(mode="json") for f in result.findings],
             "duration_seconds": result.duration_seconds,
         })
@@ -231,7 +290,7 @@ async def websocket_chat(websocket: WebSocket):
         model = settings.ollama_model
     
     chat_history = [
-        {"role": "system", "content": "You are Aegis, a highly advanced agentic AI security scanner. You help users analyze GitHub repositories for vulnerabilities, verify authorship, and explain security concepts. If a user asks you to scan a repository, you must output a special JSON payload containing {\"action\": \"SCAN\", \"github_url\": \"URL\"}. Otherwise, just respond conversationally."}
+        {"role": "system", "content": "You are Commit Guardian, an on-premise AI AppSec assistant. Help developers analyze GitHub repositories, understand vulnerabilities, and verify on-premise privacy (no code leaves the server). Reply concisely in Russian."}
     ]
     
     try:
@@ -239,26 +298,36 @@ async def websocket_chat(websocket: WebSocket):
             data = await websocket.receive_text()
             chat_history.append({"role": "user", "content": data})
             
-            # Simple heuristic for scanning intent instead of robust tool calling for speed
-            if "github.com/" in data and ("scan" in data.lower() or "проверь" in data.lower() or "check" in data.lower()):
+            # Trigger scan when a GitHub URL or owner/repo + scan intent is sent
+            if "github.com/" in data:
                 url = [word for word in data.split() if "github.com" in word][0]
                 await websocket.send_json({"type": "action", "action": "SCAN", "github_url": url})
-                chat_history.append({"role": "assistant", "content": f"I've initiated the scan for {url} on the secure terminal."})
+                chat_history.append({"role": "assistant", "content": f"Запустил локальное сканирование для {url}."})
+                await websocket.send_json({"type": "chunk", "content": f"Запустил аудит репозитория {url}. Результаты и отчёт появятся в консоли справа."})
+                await websocket.send_json({"type": "done"})
                 continue
                 
-            stream = await client.chat.completions.create(
-                model=model,
-                messages=chat_history,
-                stream=True
-            )
-            
-            full_response = ""
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    full_response += content
-                    await websocket.send_json({"type": "chunk", "content": content})
-                    
+            try:
+                stream = await client.chat.completions.create(
+                    model=model,
+                    messages=chat_history,
+                    stream=True,
+                )
+                full_response = ""
+                async for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        full_response += content
+                        await websocket.send_json({"type": "chunk", "content": content})
+            except Exception as llm_err:
+                logger.warning(f"Local LLM chat unavailable, serving offline fallback: {llm_err}")
+                full_response = (
+                    f"Локальная модель Ollama ({settings.ollama_model}) на этом хосте сейчас не запущена — "
+                    "и это нормально для демо-режима: весь статический движок (SAST, Taint, Secrets, PDF-отчёты и AI-фиксы) "
+                    "работает полностью автономно без интернета. Отправьте ссылку на GitHub, перетащите ZIP-архив или нажмите «Демо-аудит»."
+                )
+                await websocket.send_json({"type": "chunk", "content": full_response})
+
             await websocket.send_json({"type": "done"})
             chat_history.append({"role": "assistant", "content": full_response})
             

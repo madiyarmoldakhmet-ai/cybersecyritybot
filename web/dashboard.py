@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
+from aegis.core.audit_pipeline import report_urls_for
 from aegis.core.config import settings
 from aegis.core.metrics_store import DashboardMetrics, get_metrics_store
 
@@ -65,6 +66,14 @@ def _row(audit: Dict[str, Any]) -> str:
     else:
         status = '<span class="pill pill-ok">чисто</span>'
     ai = _fmt_seconds(audit["ai_seconds"]) if audit["ai_generated"] else "—"
+    pdf_url, md_url = report_urls_for(audit["repo_name"], audit.get("report_name"))
+    if pdf_url and md_url and audit["status"] != "failed":
+        report_links = (
+            f'<a class="link" href="{e(pdf_url)}" target="_blank">PDF</a> · '
+            f'<a class="link" href="{e(md_url)}" target="_blank">MD</a>'
+        )
+    else:
+        report_links = '<span class="muted">—</span>'
     return (
         "<tr>"
         f'<td class="mono muted">{e(_fmt_time(audit["created_at"]))}</td>'
@@ -76,6 +85,7 @@ def _row(audit: Dict[str, Any]) -> str:
         f'<td class="num {"" if audit["low"] else "muted"}">{audit["low"]}</td>'
         f'<td class="num mono">{e(ai)}</td>'
         f"<td>{status}</td>"
+        f'<td class="mono small">{report_links}</td>'
         "</tr>"
     )
 
@@ -83,7 +93,7 @@ def _row(audit: Dict[str, Any]) -> str:
 def _render(m: DashboardMetrics, nonce: str) -> str:
     e = html.escape
     rows = "".join(_row(a) for a in m.recent) or (
-        '<tr><td colspan="9" class="empty">Пока нет проверок. Отправьте push в подключённый репозиторий.</td></tr>'
+        '<tr><td colspan="10" class="empty">Пока нет проверок. Отправьте push в подключённый репозиторий или запустите демо.</td></tr>'
     )
     return f"""<!doctype html>
 <html lang="ru">
@@ -136,6 +146,10 @@ def _render(m: DashboardMetrics, nonce: str) -> str:
   .pill-ok {{ color: var(--accent); background: rgba(198,244,50,.1); }}
   .pill-risk {{ color: var(--crit); background: rgba(255,92,92,.12); }}
   .pill-fail {{ color: var(--muted); background: rgba(255,255,255,.06); }}
+  .link {{ color: var(--accent); text-decoration: none; }}
+  .link:hover {{ text-decoration: underline; }}
+  .nav-link {{ color: var(--text); text-decoration: none; background: rgba(255,255,255,.06); }}
+  .nav-link:hover {{ border-color: var(--accent); }}
   .empty {{ color: var(--muted); text-align: center; padding: 40px; }}
   footer {{ color: var(--muted); font: 12px var(--mono); margin-top: 24px; }}
   @media (max-width: 760px) {{
@@ -153,6 +167,7 @@ def _render(m: DashboardMetrics, nonce: str) -> str:
       <h1>Мониторинг безопасности</h1>
     </div>
     <div class="status">
+      <a class="chip nav-link" href="/">← Консоль сканера</a>
       <span class="chip"><span class="dot"></span>AI: <b>{e(_llm_mode())}</b></span>
       <span class="chip">данные не покидают сервер</span>
     </div>
@@ -189,7 +204,7 @@ def _render(m: DashboardMetrics, nonce: str) -> str:
       <thead><tr>
         <th>Время (UTC)</th><th>Репозиторий</th><th>Коммит</th>
         <th class="num">CRIT</th><th class="num">HIGH</th><th class="num">MED</th><th class="num">LOW</th>
-        <th class="num">AI</th><th>Статус</th>
+        <th class="num">AI</th><th>Статус</th><th>Отчёт</th>
       </tr></thead>
       <tbody id="recent">{rows}</tbody>
     </table>
@@ -218,6 +233,19 @@ def _render(m: DashboardMetrics, nonce: str) -> str:
     else if (a.critical || a.high) {{ pill.className = "pill pill-risk"; pill.textContent = "риск"; }}
     else {{ pill.className = "pill pill-ok"; pill.textContent = "чисто"; }}
     st.appendChild(pill); tr.appendChild(st);
+    var repCell = document.createElement("td"); repCell.className = "mono small";
+    if (a.report_name && a.status !== "failed") {{
+      var slug = (a.repo_name || "unknown").replace(/\\//g, "__").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._]+|[._]+$/g, "").slice(0, 100) || "unknown-repo";
+      var cleanFile = String(a.report_name).replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._]+|[._]+$/g, "").slice(0, 100);
+      var base = cleanFile.replace(/\\.[^.]+$/, "");
+      var aPdf = document.createElement("a"); aPdf.className = "link"; aPdf.href = "/api/v1/reports/" + slug + "/" + base + ".pdf"; aPdf.target = "_blank"; aPdf.textContent = "PDF";
+      var sep = document.createTextNode(" · ");
+      var aMd = document.createElement("a"); aMd.className = "link"; aMd.href = "/api/v1/reports/" + slug + "/" + base + ".md"; aMd.target = "_blank"; aMd.textContent = "MD";
+      repCell.appendChild(aPdf); repCell.appendChild(sep); repCell.appendChild(aMd);
+    }} else {{
+      repCell.className = "muted"; repCell.textContent = "—";
+    }}
+    tr.appendChild(repCell);
     return tr;
   }}
   function refresh() {{
