@@ -1,9 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
-import { cn } from '@/lib/utils';
-import { Terminal, Shield, FileSearch, Bug, CheckCircle } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+'use client';
 
-type EventType = 'ScanStarted' | 'FileScanning' | 'CodeAnalyzing' | 'VulnerabilityFound' | 'ScanCompleted' | 'SystemLog' | 'SystemError';
+import { useEffect, useRef } from 'react';
+import { cn } from '@/lib/utils';
+
+type EventType =
+  | 'ScanStarted'
+  | 'FileScanning'
+  | 'CodeAnalyzing'
+  | 'VulnerabilityFound'
+  | 'ScanCompleted'
+  | 'SystemLog'
+  | 'SystemError';
 
 export interface ScanEvent {
   event_type: EventType;
@@ -19,144 +26,127 @@ export interface ScanEvent {
 
 interface TerminalWindowProps {
   events: ScanEvent[];
+  targetLabel?: string;
   className?: string;
 }
 
-const getEventIcon = (type: EventType) => {
-  switch (type) {
-    case 'ScanStarted': return <Terminal className="w-4 h-4 text-blue-400" />;
-    case 'FileScanning': return <FileSearch className="w-4 h-4 text-emerald-400" />;
-    case 'CodeAnalyzing': return <Shield className="w-4 h-4 text-cyan-400" />;
-    case 'VulnerabilityFound': return <Bug className="w-4 h-4 text-red-400" />;
-    case 'ScanCompleted': return <CheckCircle className="w-4 h-4 text-green-400" />;
-    case 'SystemLog': return <Terminal className="w-4 h-4 text-gray-400" />;
-    case 'SystemError': return <Bug className="w-4 h-4 text-red-500" />;
-    default: return <Terminal className="w-4 h-4 text-gray-400" />;
-  }
-};
-
-const TypewriterText = ({ text, onComplete }: { text: string, onComplete?: () => void }) => {
-  const [displayed, setDisplayed] = useState('');
-  useEffect(() => {
-    let i = 0;
-    const interval = setInterval(() => {
-      setDisplayed(text.substring(0, i));
-      i++;
-      if (i > text.length) {
-        clearInterval(interval);
-        if (onComplete) onComplete();
-      }
-    }, 15); // Fast hacking speed
-    return () => clearInterval(interval);
-  }, [text, onComplete]);
-  return <span>{displayed}</span>;
-};
-
-export function TerminalWindow({ events, className }: TerminalWindowProps) {
+export function TerminalWindow({ events, targetLabel, className }: TerminalWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Smooth scroll to bottom when new events arrive
   useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [events]);
 
   return (
-    <div className={cn("flex flex-col bg-slate-950/80 backdrop-blur-md rounded-xl overflow-hidden border border-slate-800 shadow-2xl", className)}>
-      {/* Terminal Header */}
-      <div className="flex items-center px-4 py-2 bg-slate-900 border-b border-slate-800">
-        <div className="flex gap-2 mr-4">
-          <div className="w-3 h-3 rounded-full bg-red-500" />
-          <div className="w-3 h-3 rounded-full bg-yellow-500" />
-          <div className="w-3 h-3 rounded-full bg-green-500" />
-        </div>
-        <span className="text-xs text-slate-400 font-mono tracking-wider">COMMIT-GUARDIAN // ON-PREM_SCANNER</span>
+    <div
+      className={cn(
+        'flex flex-col bg-[#111111] text-[#ededed] border border-[#242424] overflow-hidden',
+        className
+      )}
+    >
+      {/* Card Header */}
+      <div className="px-5 pt-4 pb-3 border-b border-[#242424] flex items-baseline justify-between gap-2">
+        <span className="font-mono text-xl tracking-tight text-[#ededed]">Mono</span>
+        <span className="font-mono text-xs text-[#8f8f8f]">Поток сканирования</span>
       </div>
 
-      {/* Terminal Content */}
-      <div 
-        className="flex-1 p-4 overflow-y-auto font-mono text-sm space-y-2 relative"
-      >
-        <AnimatePresence initial={false}>
-          {events.map((event, idx) => {
-            const isLast = idx === events.length - 1;
-            const isCritical = event.severity?.toLowerCase() === 'critical';
-            const isCodeAnalyzing = event.event_type === 'CodeAnalyzing';
-            
-            return (
-              <motion.div
-                key={idx}
-                initial={{ opacity: 0, x: -10 }}
-                animate={isCritical ? { opacity: 1, x: [-10, 10, -10, 10, 0] } : { opacity: 1, x: 0 }}
-                transition={isCritical ? { duration: 0.4 } : { duration: 0.2 }}
-                className={cn(
-                  "flex items-start gap-3 p-2 rounded",
-                  isCritical && "bg-red-950/30 border-l-2 border-red-500"
-                )}
-              >
-                <div className="mt-0.5">{getEventIcon(event.event_type)}</div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-slate-500 text-xs">
-                      [{event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : 'LIVE'}]
-                    </span>
-                    <span className={cn(
-                      "font-semibold uppercase tracking-wider text-xs",
-                      event.event_type === 'VulnerabilityFound' || event.event_type === 'SystemError' ? 'text-red-400' :
-                      event.event_type === 'FileScanning' ? 'text-emerald-400' :
-                      event.event_type === 'CodeAnalyzing' ? 'text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.8)]' :
-                      'text-slate-300'
-                    )}>
-                      {event.event_type}
-                    </span>
-                  </div>
-                  
-                  {/* Event Details */}
-                  <div className="text-slate-300 mt-1 pl-1 border-l-2 border-slate-800 ml-1">
-                    {event.file_path && (
-                      <div className="text-slate-400">Target: <span className="text-emerald-300">{event.file_path}</span></div>
-                    )}
-                    
-                    {event.title && (
-                      <div className={cn("font-semibold mt-1", isCritical ? "text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]" : "text-red-300")}>
-                        [!] {event.title}
-                      </div>
-                    )}
+      {/* Embedded zsh-style terminal frame inspired by prtner.ai Mono card */}
+      <div className="p-4 flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col bg-[#0a0a0a] border border-[#242424] rounded-lg overflow-hidden min-h-0">
+          <div className="flex items-center justify-between px-3.5 py-2 border-b border-[#1c1c1c] bg-[#141414]">
+            <div className="flex items-center gap-1.5" aria-hidden="true">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#3d3d3d]" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[#3d3d3d]" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[#3d3d3d]" />
+            </div>
+            <span className="font-mono text-[11px] text-[#8f8f8f] truncate">
+              {targetLabel ? `~/aegis — ${targetLabel}` : '~/aegis — zsh'}
+            </span>
+            <span className="w-8" aria-hidden="true" />
+          </div>
 
-                    {event.message && (
-                      <div className="text-slate-400 mt-1">
-                        <TypewriterText text={event.message} />
-                        {isLast && !event.snippet && <span className="animate-pulse ml-1">_</span>}
-                      </div>
-                    )}
-
-                    {event.snippet && (
-                      <div className={cn(
-                        "mt-2 font-mono p-3 rounded text-xs overflow-x-auto",
-                        isCritical 
-                          ? "bg-red-950/50 text-red-400 border border-red-500/50 shadow-[0_0_10px_rgba(239,68,68,0.3)]"
-                          : isCodeAnalyzing
-                          ? "bg-cyan-950/30 text-cyan-300 border border-cyan-500/30 shadow-[0_0_10px_rgba(34,211,238,0.3)]" 
-                          : "bg-slate-900 text-slate-400"
-                      )}>
-                        <TypewriterText text={event.snippet} />
-                        {isLast && <span className="animate-pulse ml-1 text-white">_</span>}
-                      </div>
-                    )}
-                  </div>
+          <div
+            role="log"
+            aria-label="Журнал работы сканера"
+            className="cg-scroll flex-1 p-3.5 overflow-y-auto font-mono text-xs leading-relaxed space-y-2.5 min-h-[220px] max-h-[340px]"
+          >
+            {events.length === 0 ? (
+              <div className="space-y-1.5 text-[#8f8f8f]">
+                <div>
+                  <span className="text-[#e94a32]">$</span> aegis scan --policy .aegis.yml --local-only
                 </div>
-              </motion.div>
-            );
-          })}
-        </AnimatePresence>
-        
-        {events.length === 0 && (
-          <div className="text-slate-500 italic">SYSTEM.WAITING_FOR_INPUT<span className="animate-pulse">_</span></div>
-        )}
-        
-        {/* Invisible div for auto-scrolling */}
-        <div ref={bottomRef} />
+                <div className="text-[#6b6a65]">
+                  ready · SAST + межфайловый Taint + ИИН/секреты (0 байт в облако)
+                </div>
+                <div>
+                  <span className="text-[#ededed]">cursor:</span> ожидание GitHub URL, ZIP или «Демо-аудита»
+                  <span className="inline-block w-1.5 h-3.5 ml-1 bg-[#e94a32] align-middle animate-pulse" />
+                </div>
+              </div>
+            ) : (
+              events.map((event, idx) => {
+                const isFinding =
+                  event.event_type === 'VulnerabilityFound' || event.event_type === 'SystemError';
+                const isDone = event.event_type === 'ScanCompleted';
+
+                return (
+                  <div
+                    key={idx}
+                    className={cn(
+                      'border-l-2 pl-2.5 py-0.5',
+                      isFinding
+                        ? 'border-[#e94a32]'
+                        : isDone
+                        ? 'border-emerald-400'
+                        : 'border-[#242424]'
+                    )}
+                  >
+                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                      <span className="text-[#6b6a65] tabular-nums">
+                        {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : 'LIVE'}
+                      </span>
+                      <span
+                        className={cn(
+                          'uppercase tracking-wider',
+                          isFinding
+                            ? 'text-[#e94a32]'
+                            : isDone
+                            ? 'text-emerald-400'
+                            : 'text-[#b8b8b2]'
+                        )}
+                      >
+                        {event.event_type}
+                      </span>
+                      {event.severity && (
+                        <span className="px-1.5 py-0.2 bg-[#1a1a1a] border border-[#2d2d2d] text-[#ededed] text-[10px]">
+                          {event.severity}
+                        </span>
+                      )}
+                    </div>
+
+                    {event.file_path && (
+                      <div className="text-[#b8b8b2] mt-0.5 break-all">
+                        target: <span className="text-emerald-400">{event.file_path}</span>
+                      </div>
+                    )}
+                    {event.title && (
+                      <div className="text-[#ededed] font-medium mt-0.5">{event.title}</div>
+                    )}
+                    {event.message && (
+                      <div className="text-[#8f8f8f] mt-0.5 break-words">{event.message}</div>
+                    )}
+                    {event.snippet && (
+                      <pre className="mt-1.5 p-2 bg-[#141414] border border-[#242424] rounded text-[11px] overflow-x-auto text-[#d6d3cd]">
+                        {event.snippet}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })
+            )}
+            <div ref={bottomRef} />
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -214,3 +214,18 @@ async def test_webhook_posts_github_pr_comment_when_token_set(monkeypatch):
     assert ok is True
     assert posted["url"].endswith("/repos/gov/portal/issues/7/comments")
     assert "90/100 (A+)" in posted["body"]
+
+
+def test_parse_chat_payload_supports_text_context_and_reset():
+    from aegis_server.main import _parse_chat_payload
+
+    assert _parse_chat_payload("  привет  ") == (False, "привет", "")
+    assert _parse_chat_payload("{invalid-json") == (False, "{invalid-json", "")
+    assert _parse_chat_payload('{"reset": true}') == (True, "", "")
+
+    reset, text, note = _parse_chat_payload(
+        '{"message": "Как починить SQLi?", "scan_context": {"repo_name": "demo/kz", "security_score": 40, "grade": "F", "total_findings": 1, "findings": [{"severity": "CRITICAL", "title": "SQL Injection", "file_path": "pay.py", "line_start": 18, "cwe": ["CWE-89"]}]}}'
+    )
+    assert reset is False
+    assert text == "Как починить SQLi?"
+    assert "demo/kz" in note and "40/100 (F)" in note and "SQL Injection (pay.py:18, CWE-89)" in note

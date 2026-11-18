@@ -274,6 +274,45 @@ async def websocket_scan(websocket: WebSocket):
             pass
 
 
+def _parse_chat_payload(raw_data: str) -> tuple[bool, str, str]:
+    """Parse plain text or structured JSON chat payload with optional active scan context."""
+    stripped = raw_data.strip()
+    if not stripped.startswith("{"):
+        return False, stripped, ""
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return False, stripped, ""
+    if not isinstance(payload, dict):
+        return False, stripped, ""
+    if payload.get("reset"):
+        return True, "", ""
+
+    user_text = str(payload.get("message") or "").strip()
+    ctx = payload.get("scan_context")
+    if not isinstance(ctx, dict) or not ctx.get("repo_name"):
+        return False, user_text, ""
+
+    findings = ctx.get("findings") or []
+    top_lines = []
+    for item in findings[:8]:
+        if isinstance(item, dict):
+            sev = item.get("severity", "INFO")
+            title = item.get("title", "Vulnerability")
+            loc = f"{item.get('file_path', '?')}:{item.get('line_start') or 1}"
+            cwe = ", ".join(item.get("cwe") or [])
+            top_lines.append(f"- [{sev}] {title} ({loc}" + (f", {cwe}" if cwe else "") + ")")
+
+    summary_note = (
+        f"[Контекст текущего аудита в консоли] Репозиторий: {ctx.get('repo_name')}; "
+        f"Score: {ctx.get('security_score', '-')}/100 ({ctx.get('grade', '-')}); "
+        f"Всего находок: {ctx.get('total_findings', len(findings))}."
+    )
+    if top_lines:
+        summary_note += "\nКлючевые уязвимости:\n" + "\n".join(top_lines)
+    return False, user_text, summary_note
+
+
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
@@ -289,24 +328,42 @@ async def websocket_chat(websocket: WebSocket):
         client = AsyncOpenAI(base_url=settings.ollama_base_url.rstrip("/") + "/v1", api_key="ollama")
         model = settings.ollama_model
     
-    chat_history = [
-        {"role": "system", "content": "You are Commit Guardian, an on-premise AI AppSec assistant. Help developers analyze GitHub repositories, understand vulnerabilities, and verify on-premise privacy (no code leaves the server). Reply concisely in Russian."}
-    ]
+    system_prompt = (
+        "You are Commit Guardian, an on-premise AI AppSec assistant. Help developers analyze GitHub repositories, "
+        "explain vulnerabilities concisely with safe fixes, and verify on-premise privacy (no code leaves the server). "
+        "Reply clearly in Russian."
+    )
+    chat_history = [{"role": "system", "content": system_prompt}]
     
     try:
         while True:
-            data = await websocket.receive_text()
-            chat_history.append({"role": "user", "content": data})
-            
-            # Trigger scan when a GitHub URL or owner/repo + scan intent is sent
-            if "github.com/" in data:
-                url = [word for word in data.split() if "github.com" in word][0]
-                await websocket.send_json({"type": "action", "action": "SCAN", "github_url": url})
-                chat_history.append({"role": "assistant", "content": f"Запустил локальное сканирование для {url}."})
-                await websocket.send_json({"type": "chunk", "content": f"Запустил аудит репозитория {url}. Результаты и отчёт появятся в консоли справа."})
+            raw_data = await websocket.receive_text()
+            should_reset, data, scan_context_note = _parse_chat_payload(raw_data)
+            if should_reset:
+                chat_history = [{"role": "system", "content": system_prompt}]
                 await websocket.send_json({"type": "done"})
                 continue
-                
+            if not data:
+                await websocket.send_json({"type": "done"})
+                continue
+
+            # Trigger scan when a GitHub URL is sent
+            if "github.com/" in data:
+                url = next((word for word in data.split() if "github.com/" in word), data)
+                chat_history.append({"role": "user", "content": data})
+                await websocket.send_json({"type": "action", "action": "SCAN", "github_url": url})
+                reply = f"Запустил аудит репозитория {url}. Результаты и отчёт появятся в консоли справа."
+                chat_history.append({"role": "assistant", "content": f"Запустил локальное сканирование для {url}."})
+                await websocket.send_json({"type": "chunk", "content": reply})
+                await websocket.send_json({"type": "done"})
+                continue
+
+            user_content = f"{scan_context_note}\n\nВопрос пользователя: {data}" if scan_context_note else data
+            chat_history.append({"role": "user", "content": user_content})
+            # Cap history to system prompt + recent 16 turns to keep local inference fast
+            if len(chat_history) > 17:
+                chat_history = [chat_history[0]] + chat_history[-16:]
+
             try:
                 stream = await client.chat.completions.create(
                     model=model,
@@ -321,11 +378,19 @@ async def websocket_chat(websocket: WebSocket):
                         await websocket.send_json({"type": "chunk", "content": content})
             except Exception as llm_err:
                 logger.warning(f"Local LLM chat unavailable, serving offline fallback: {llm_err}")
-                full_response = (
-                    f"Локальная модель Ollama ({settings.ollama_model}) на этом хосте сейчас не запущена — "
-                    "и это нормально для демо-режима: весь статический движок (SAST, Taint, Secrets, PDF-отчёты и AI-фиксы) "
-                    "работает полностью автономно без интернета. Отправьте ссылку на GitHub, перетащите ZIP-архив или нажмите «Демо-аудит»."
-                )
+                if scan_context_note:
+                    full_response = (
+                        f"Локальная модель Ollama ({settings.ollama_model}) на этом хосте сейчас не запущена, "
+                        "поэтому отвечаю по детерминированным результатам текущего скана:\n\n"
+                        f"{scan_context_note}\n\n"
+                        "Нажми **«Патч»** напротив любой строки в таблице справа — офлайн-движок сформирует готовое исправление кода."
+                    )
+                else:
+                    full_response = (
+                        f"Локальная модель Ollama ({settings.ollama_model}) на этом хосте сейчас не запущена — "
+                        "и это нормально для демо-режима: весь статический движок (SAST, Taint, Secrets, PDF-отчёты и AI-фиксы) "
+                        "работает полностью автономно без интернета. Отправьте ссылку на GitHub, перетащите ZIP-архив или нажмите «Демо-аудит»."
+                    )
                 await websocket.send_json({"type": "chunk", "content": full_response})
 
             await websocket.send_json({"type": "done"})

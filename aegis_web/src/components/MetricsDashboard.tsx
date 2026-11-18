@@ -1,16 +1,14 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
-import { Shield, FileWarning, Clock, Files } from 'lucide-react';
 
 interface MetricsDashboardProps {
   scannedFiles: number;
   totalFiles: number;
   vulnerabilities: number;
   elapsedTime: number;
-  securityScore?: number | null;
-  grade?: string | null;
+  ollamaOnline?: boolean | null;
+  ollamaModel?: string;
   isScanning?: boolean;
   className?: string;
 }
@@ -20,80 +18,77 @@ export function MetricsDashboard({
   totalFiles,
   vulnerabilities,
   elapsedTime,
-  securityScore,
-  grade,
+  ollamaOnline,
+  ollamaModel,
   isScanning = false,
   className,
 }: MetricsDashboardProps) {
-  const progress = totalFiles > 0 ? Math.min(100, (scannedFiles / totalFiles) * 100) : isScanning ? 35 : 0;
+  const progress = totalFiles > 0 ? Math.min(100, (scannedFiles / totalFiles) * 100) : isScanning ? 40 : 0;
 
   return (
-    <div className={cn('grid grid-cols-2 lg:grid-cols-4 gap-3', className)}>
-      <MetricCard
-        title="Файлов"
-        value={totalFiles > 0 ? `${scannedFiles} / ${totalFiles}` : `${scannedFiles || 0}`}
-        icon={<Files className="w-4 h-4 text-blue-400" />}
+    <div
+      className={cn(
+        'grid grid-cols-2 sm:grid-cols-4 border border-[var(--color-line)] bg-[var(--color-line)] gap-px',
+        className
+      )}
+    >
+      <MetricCell
+        code="01 · ФАЙЛЫ"
+        value={totalFiles > 0 ? `${scannedFiles}/${totalFiles}` : `${scannedFiles || 0}`}
+        meta={isScanning ? 'сканирую дерево' : 'локальный скан'}
         progress={isScanning || totalFiles > 0 ? progress : undefined}
       />
-      <MetricCard
-        title="Уязвимости"
-        value={vulnerabilities}
-        icon={<FileWarning className={cn('w-4 h-4', vulnerabilities > 0 ? 'text-red-400' : 'text-emerald-400')} />}
-        valueColor={vulnerabilities > 0 ? 'text-red-400' : 'text-emerald-400'}
+      <MetricCell
+        code="02 · НАХОДКИ"
+        value={`${vulnerabilities}`}
+        meta={vulnerabilities > 0 ? 'требуют патча' : 'чистый контур'}
+        accent={vulnerabilities > 0}
       />
-      <MetricCard
-        title="Время"
-        value={`${elapsedTime.toFixed(1).replace(/\.0$/, '')} с`}
-        icon={<Clock className="w-4 h-4 text-purple-400" />}
+      <MetricCell
+        code="03 · ВРЕМЯ"
+        value={`${elapsedTime.toFixed(1).replace(/\.0$/, '')} c`}
+        meta="без отправки кода"
       />
-      <MetricCard
-        title="Score / Статус"
-        value={
-          isScanning
-            ? 'Сканирую...'
-            : securityScore !== null && securityScore !== undefined
-            ? `${securityScore}/100 (${grade || '-'})`
-            : 'Готов'
-        }
-        icon={<Shield className={cn('w-4 h-4', isScanning ? 'text-amber-400' : 'text-emerald-400')} />}
-        valueColor={
-          isScanning
-            ? 'text-amber-400'
-            : securityScore !== null && securityScore !== undefined && securityScore < 50
-            ? 'text-red-400'
-            : 'text-emerald-400'
-        }
+      <MetricCell
+        code="04 · ДВИЖОК ИИ"
+        value={ollamaOnline ? 'ONLINE' : 'STANDBY'}
+        meta={ollamaModel || 'qwen2.5-coder:14b'}
+        highlight={Boolean(ollamaOnline)}
       />
     </div>
   );
 }
 
-interface MetricCardProps {
-  title: string;
-  value: string | number;
-  icon: React.ReactNode;
+interface MetricCellProps {
+  code: string;
+  value: string;
+  meta: string;
   progress?: number;
-  valueColor?: string;
+  accent?: boolean;
+  highlight?: boolean;
 }
 
-function MetricCard({ title, value, icon, progress, valueColor }: MetricCardProps) {
+function MetricCell({ code, value, meta, progress, accent, highlight }: MetricCellProps) {
   return (
-    <div className="bg-[#1f1e1b] border border-[#2b2926] rounded-xl p-3.5 flex flex-col justify-between relative overflow-hidden">
+    <div className="bg-[var(--color-paper)] p-3.5 sm:p-4 relative flex flex-col justify-between gap-2 min-w-0">
       {progress !== undefined && (
-        <motion.div
-          className="absolute bottom-0 left-0 h-0.5 bg-[var(--color-primary)]"
-          initial={{ width: 0 }}
-          animate={{ width: `${progress}%` }}
-          transition={{ duration: 0.3 }}
+        <div
+          className="absolute bottom-0 left-0 h-0.5 bg-[#e94a32] transition-[width] duration-300"
+          style={{ width: `${progress}%` }}
         />
       )}
-      <div className="flex justify-between items-center mb-2">
-        <span className="text-[#a09d96] text-xs font-medium">{title}</span>
-        {icon}
+      <div className="font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)] truncate">
+        {code}
       </div>
-      <div className={cn('text-lg font-bold font-mono tracking-tight truncate', valueColor || 'text-[#faf9f5]')}>
+      <div
+        className={cn(
+          'font-mono text-xl sm:text-2xl font-medium tracking-tight tabular-nums truncate',
+          accent ? 'text-[#e94a32]' : highlight ? 'text-emerald-500' : 'text-[var(--color-ink)]'
+        )}
+      >
         {value}
       </div>
+      <div className="font-mono text-[11px] text-[var(--color-muted-soft)] truncate">{meta}</div>
     </div>
   );
 }
