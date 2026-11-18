@@ -5,7 +5,7 @@ import os
 import shutil
 import uuid
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Request
@@ -100,30 +100,40 @@ async def global_error(request: Request, exc: Exception):
     logger.exception(f"Unhandled server error {error_id} on {request.method} {request.url.path}")
     return JSONResponse(status_code=500, content={"error": "Internal server error", "error_id": error_id})
 
-SCANS_DIR = Path("/tmp/aegis_scans")
+SCANS_DIR = settings.temp_clone_dir / "web_scans"
 SCANS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 class ScanRequest(BaseModel):
     github_url: str
 
-async def clone_repo(repo_url: str, dest_dir: Path) -> bool:
-    """Clones a validated public GitHub repository into the specified directory."""
+
+async def clone_repo(repo_url: str, dest_dir: Path, token: Optional[str] = None) -> bool:
+    """Clones a validated GitHub repository into the specified directory."""
     repo_name = OwnershipVerifier.parse_github_repo(repo_url)
     if not repo_name:
         logger.warning(f"Rejected invalid or non-GitHub clone URL: {repo_url}")
         return False
 
-    safe_url = f"https://github.com/{repo_name}.git"
-    logger.info(f"Cloning {safe_url} into {dest_dir}...")
+    clean_token = (token or "").strip()
+    safe_url = (
+        f"https://x-access-token:{clean_token}@github.com/{repo_name}.git"
+        if clean_token
+        else f"https://github.com/{repo_name}.git"
+    )
+    logger.info(f"Cloning {repo_name} into {dest_dir}...")
     try:
         process = await asyncio.create_subprocess_exec(
             "git", "clone", "--depth", "1", "--", safe_url, str(dest_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        _, _ = await asyncio.wait_for(process.communicate(), timeout=45.0)
+        _, stderr = await asyncio.wait_for(process.communicate(), timeout=45.0)
         if process.returncode != 0:
-            logger.error(f"Failed to clone repository: {safe_url}")
+            err_msg = stderr.decode("utf-8", errors="replace")[:200]
+            if clean_token:
+                err_msg = err_msg.replace(clean_token, "***")
+            logger.error(f"Failed to clone repository {repo_name}: {err_msg}")
             return False
         return True
     except Exception as e:
@@ -194,6 +204,70 @@ async def scan_upload(file: UploadFile = File(...)):
         shutil.rmtree(repo_dir, ignore_errors=True)
         logger.info("Код удалён с сервера")
 
+async def _authorize_ws_scan(
+    repo_name: str,
+    user_token: Optional[str],
+    proof_token: Optional[str],
+    require_ownership: bool,
+) -> tuple[bool, bool, str, str, bool, str]:
+    """
+    Authorize a WebSocket repository audit and compute authorship metadata.
+    Returns (allowed, verified, status_label, actor, can_create_pr, message).
+    """
+    clean_user_token = (user_token or "").strip()
+    effective_token = clean_user_token or (settings.github_token or "").strip()
+    proof = OwnershipVerifier.verify_proof_token(proof_token, repo_name)
+    if proof:
+        method = proof.get("method", "challenge")
+        actor = proof.get("actor", "verified-author")
+        return (
+            True,
+            True,
+            f"Подтверждён автор ({method}: {actor})",
+            actor,
+            bool(clean_user_token),
+            f"Авторство {repo_name} подтверждено ({actor}).",
+        )
+
+    if clean_user_token:
+        strict = await OwnershipVerifier.verify_repo_ownership_strict(clean_user_token, repo_name)
+        verified = bool(strict.get("verified"))
+        role = strict.get("role", "None")
+        actor = strict.get("username") or repo_name.split("/")[0]
+        if verified:
+            return (
+                True,
+                True,
+                f"Подтверждён ({role}: @{actor})",
+                actor,
+                bool(strict.get("can_create_pr")),
+                strict.get("message", ""),
+            )
+        return (
+            False,
+            False,
+            f"Доступ запрещён ({role})",
+            actor,
+            False,
+            strict.get("message", "Недостаточно прав в репозитории."),
+        )
+
+    if require_ownership:
+        return (
+            False,
+            False,
+            "Авторство не подтверждено",
+            "unverified",
+            False,
+            "Включена строгая проверка авторства: подтвердите владение репозиторием через Token или Commit Challenge.",
+        )
+
+    accessible, msg, can_pr = await OwnershipVerifier.verify_github_access(effective_token, repo_name)
+    if not accessible:
+        return False, False, "Закрытый репозиторий", "unverified", False, msg
+    return True, False, "Публичный доступ (Read-Only)", "public-readonly", can_pr, msg
+
+
 @app.websocket("/ws/scan")
 async def websocket_scan(websocket: WebSocket):
     await websocket.accept()
@@ -203,17 +277,31 @@ async def websocket_scan(websocket: WebSocket):
     try:
         data = await websocket.receive_json()
         repo_url = (data.get("github_url") or "").strip()
+        user_token = (data.get("github_token") or "").strip()
+        proof_token = (data.get("proof_token") or "").strip()
+        require_ownership = bool(data.get("require_ownership", False))
+
         repo_name = OwnershipVerifier.parse_github_repo(repo_url)
         if not repo_name:
-            await websocket.send_json({"event_type": "SystemError", "message": "Invalid GitHub URL or owner/repo format."})
+            await websocket.send_json({"event_type": "SystemError", "message": "Неверный формат GitHub URL или owner/repo."})
             await websocket.close()
             return
-            
-        await websocket.send_json({"event_type": "SystemLog", "message": f"Cloning repository {repo_name}..."})
-        success = await clone_repo(repo_name, repo_dir)
+
+        allowed, auth_verified, auth_status, auth_actor, can_create_pr, auth_msg = await _authorize_ws_scan(
+            repo_name, user_token, proof_token, require_ownership
+        )
+        if not allowed:
+            await websocket.send_json({"event_type": "SystemError", "message": auth_msg})
+            await websocket.close()
+            return
+
+        await websocket.send_json({"event_type": "SystemLog", "message": f"Проверка доступа: {auth_status}"})
+        await websocket.send_json({"event_type": "SystemLog", "message": f"Клонирование репозитория {repo_name}..."})
+        clone_token = user_token or (settings.github_token or "")
+        success = await clone_repo(repo_name, repo_dir, token=clone_token)
         
         if not success:
-            await websocket.send_json({"event_type": "SystemError", "message": "Failed to clone repository."})
+            await websocket.send_json({"event_type": "SystemError", "message": f"Не удалось клонировать репозиторий {repo_name}."})
             await websocket.close()
             return
             
@@ -238,7 +326,7 @@ async def websocket_scan(websocket: WebSocket):
             repo_name=repo_name,
             commit_sha=scan_uuid[:12],
             branch="main",
-            author="web-console",
+            author=auth_actor,
         )
         await websocket.send_json({
             "event_type": "ScanResult",
@@ -251,6 +339,10 @@ async def websocket_scan(websocket: WebSocket):
             "summary_ai_generated": bool(artifacts.summary and artifacts.summary.ai_generated),
             "report_pdf_url": artifacts.report_pdf_url,
             "report_md_url": artifacts.report_md_url,
+            "authorship_verified": auth_verified,
+            "authorship_status": auth_status,
+            "authorship_actor": auth_actor,
+            "can_create_pr": can_create_pr,
             "findings": [f.model_dump(mode="json") for f in result.findings],
             "duration_seconds": result.duration_seconds,
         })
@@ -262,16 +354,16 @@ async def websocket_scan(websocket: WebSocket):
         logger.error(f"Error in websocket handler: {e}")
         try:
             await websocket.send_json({"event_type": "SystemError", "message": "Scan failed due to an internal error."})
-        except:
-            pass
+        except Exception as send_err:
+            logger.debug(f"Could not emit WebSocket SystemError: {send_err}")
     finally:
         if repo_dir.exists():
             shutil.rmtree(repo_dir, ignore_errors=True)
             logger.info("Код удалён с сервера")
         try:
             await websocket.close()
-        except:
-            pass
+        except Exception as close_err:
+            logger.debug(f"WebSocket close skipped: {close_err}")
 
 
 def _parse_chat_payload(raw_data: str) -> tuple[bool, str, str]:
@@ -402,8 +494,8 @@ async def websocket_chat(websocket: WebSocket):
         logger.error(f"Chat Error: {e}")
         try:
             await websocket.close()
-        except:
-            pass
+        except Exception as close_err:
+            logger.debug(f"Chat WebSocket close skipped: {close_err}")
 
 # Mounted last so it never shadows API routes; optional so the API runs without a frontend build
 FRONTEND_DIR = Path("aegis_web/out")

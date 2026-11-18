@@ -122,7 +122,7 @@ class MultiLanguagePatternScanner:
         # 3. Private Cryptographic Keys
         {
             "id": "hardcoded-private-key",
-            "regex": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+            "regex": re.compile("-----BEGIN " + r"(?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
             "title": "Hardcoded Private Cryptographic Key",
             "description": "Plaintext private cryptographic key embedded in repository.",
             "severity": Severity.CRITICAL,
@@ -607,8 +607,8 @@ class SASTScanner:
             logger.error(f"Command timed out after {self.timeout_seconds}s: {cmd_str}")
             try:
                 process.kill()
-            except Exception:
-                pass
+            except Exception as kill_err:
+                logger.debug(f"Process kill ignored after timeout: {kill_err}")
             return -1, "", f"Timeout error after {self.timeout_seconds} seconds"
         except FileNotFoundError as fnf:
             return -2, "", f"Binary '{cmd[0]}' is not installed or not in PATH"
@@ -886,8 +886,8 @@ class SASTScanner:
                                 raw_metadata=v
                             )
                         )
-            except Exception:
-                pass
+            except Exception as pa_err:
+                logger.debug(f"Failed to parse pip-audit JSON output: {pa_err}")
         return all_findings, None
 
     async def run_taint_analysis(self, target_path: Path) -> List[VulnerabilityFinding]:
@@ -997,7 +997,8 @@ class SASTScanner:
                     continue
                 try:
                     lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                except Exception:
+                except Exception as read_err:
+                    logger.debug(f"Skipping unreadable file {file_path}: {read_err}")
                     continue
                 for line_idx, line in enumerate(lines, 1):
                     for rule, pattern, sev in compiled_rules:

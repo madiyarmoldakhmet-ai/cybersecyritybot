@@ -104,7 +104,8 @@ class TaintEngine:
                 for qname, meta in visitor.functions.items():
                     self.call_graph[qname] = meta
                     self._name_index.setdefault(meta["name"], []).append(qname)
-            except Exception:
+            except Exception as parse_err:
+                _ = parse_err  # Skip syntactically invalid Python files without failing taint graph
                 continue
 
     def _resolve_callees(self, caller_file: str, call_name: str) -> List[str]:

@@ -268,8 +268,8 @@ class HTTPSecurityScanner:
                             )
                         )
                         break
-            except Exception:
-                pass
+            except Exception as sqli_err:
+                logger.debug(f"SQLi probe skipped for {test_url}: {sqli_err}")
 
         return findings
 
@@ -297,8 +297,8 @@ class HTTPSecurityScanner:
                         raw_metadata={"payload": payload}
                     )
                 )
-        except Exception:
-            pass
+        except Exception as xss_err:
+            logger.debug(f"Reflected XSS probe skipped for {test_url}: {xss_err}")
 
         return findings
 
@@ -325,8 +325,8 @@ class HTTPSecurityScanner:
                             raw_metadata={"url": target, "status": resp.status_code}
                         )
                     )
-            except Exception:
-                pass
+            except Exception as exp_err:
+                logger.debug(f"Debug exposure check skipped for {target}: {exp_err}")
 
         return findings
 

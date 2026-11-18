@@ -229,3 +229,94 @@ def test_parse_chat_payload_supports_text_context_and_reset():
     assert reset is False
     assert text == "Как починить SQLi?"
     assert "demo/kz" in note and "40/100 (F)" in note and "SQL Injection (pay.py:18, CWE-89)" in note
+
+
+def test_ownership_parser_and_signed_proof_tokens():
+    from aegis.core.verifier import OwnershipVerifier
+
+    assert OwnershipVerifier.parse_github_repo("https://github.com/vercel/next.js.git") == "vercel/next.js"
+    assert OwnershipVerifier.parse_github_repo("https://github.com/owner/my.app/tree/main") == "owner/my.app"
+
+    ch_repo = OwnershipVerifier.issue_challenge("https://github.com/kz-bank/core-api")
+    assert ch_repo["target_type"] == "github"
+    assert ch_repo["target"] == "kz-bank/core-api"
+    assert ch_repo["challenge_code"].startswith("cybersec-verify-")
+
+    ch_domain = OwnershipVerifier.issue_challenge("https://pay.kaspi-demo.kz/login", "domain")
+    assert ch_domain["target_type"] == "domain"
+    assert ch_domain["target"] == "pay.kaspi-demo.kz"
+
+    proof = OwnershipVerifier.create_proof_token("kz-bank/core-api", "commit_challenge", "madiyar")
+    assert OwnershipVerifier.verify_proof_token(proof, "https://github.com/kz-bank/core-api") is not None
+    assert OwnershipVerifier.verify_proof_token(proof, "https://github.com/other/repo") is None
+
+
+@pytest.mark.asyncio
+async def test_ownership_verification_endpoints_and_strict_gate():
+    from aegis.core.verifier import OwnershipVerifier
+    from aegis_server.main import app
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        ch_resp = await client.post("/api/v1/verify/challenge", json={"target": "owner/app.py"})
+        assert ch_resp.status_code == 200
+        code = ch_resp.json()["challenge_code"]
+
+        with patch.object(
+            OwnershipVerifier,
+            "verify_commit_challenge",
+            AsyncMock(return_value=(True, f"Код подтверждения найден: {code}")),
+        ):
+            verify_resp = await client.post(
+                "/api/v1/verify/ownership",
+                json={"target": "owner/app.py", "method": "challenge", "challenge_code": code},
+            )
+        assert verify_resp.status_code == 200
+        vdata = verify_resp.json()
+        assert vdata["verified"] is True and vdata["proof_token"]
+
+        blocked_sast = await client.post(
+            "/api/v1/scan/sast",
+            json={"repo_url": "https://github.com/owner/app.py", "require_ownership": True},
+        )
+        assert blocked_sast.status_code == 403
+
+        blocked_dast = await client.post(
+            "/api/v1/scan/dast",
+            json={"target_url": "https://example.kz", "require_ownership": True},
+        )
+        assert blocked_dast.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_sca_scanner_strips_extras_comments_and_tracks_lines(tmp_path: Path):
+    from aegis.scanners.sca_scanner import SCAScanner
+
+    req = tmp_path / "requirements.txt"
+    req.write_text("# comment\nuvicorn[standard]>=0.30.0  # web server\nfastapi==0.111.0; python_version>='3.9'\n")
+
+    captured_batches = []
+
+    class DummyResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"results": [{}, {}]}
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, json=None):
+            captured_batches.extend(json["queries"])
+            return DummyResp()
+
+    with patch("aegis.scanners.sca_scanner.httpx.AsyncClient", return_value=DummyClient()):
+        findings = await SCAScanner().scan(tmp_path)
+
+    assert findings == []
+    assert [q["package"]["name"] for q in captured_batches] == ["uvicorn", "fastapi"]
+    assert [q["version"] for q in captured_batches] == ["0.30.0", "0.111.0"]

@@ -31,7 +31,7 @@ export function ThemeToggle() {
   }, [mounted, theme]);
 
   if (!mounted) {
-    return <div className="min-h-9 min-w-9 border border-[var(--color-line)]" />;
+    return <div className="min-h-9 min-w-9 rounded-full border border-[var(--color-line)]" />;
   }
 
   const currentRendered = resolvedTheme === 'dark' ? 'dark' : 'light';
@@ -55,7 +55,7 @@ export function ThemeToggle() {
     <button
       type="button"
       onClick={handleToggle}
-      className="min-h-9 min-w-9 px-2.5 border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-ink)] transition-colors inline-flex items-center justify-center cursor-pointer"
+      className="min-h-9 min-w-9 rounded-full border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-ink)] transition-colors inline-flex items-center justify-center cursor-pointer"
       aria-label={currentRendered === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}
     >
       {currentRendered === 'dark' ? (

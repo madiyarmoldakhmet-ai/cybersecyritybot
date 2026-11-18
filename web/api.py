@@ -9,7 +9,7 @@ import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,15 +71,31 @@ class HealthResponse(BaseModel):
 class SASTScanRequest(BaseModel):
     repo_url: Optional[str] = Field(None, description="GitHub repository URL or 'owner/repo'")
     github_token: Optional[str] = Field(None, description="GitHub PAT with repo scope for private repos / PRs")
+    proof_token: Optional[str] = Field(None, description="Signed authorship proof token returned by /api/v1/verify/ownership")
+    require_ownership: bool = Field(False, description="Require verified authorship even on public repositories")
     local_path: Optional[str] = Field(None, description="Local folder path to audit (if running locally)")
 
 
 class DASTScanRequest(BaseModel):
     target_url: str = Field(..., description="Target website or API base URL")
+    proof_token: Optional[str] = Field(None, description="Signed domain ownership proof token")
+    require_ownership: bool = Field(False, description="Require verified domain DNS TXT ownership before active DAST probes")
     additional_endpoints: List[str] = Field(
         default_factory=lambda: ["/api", "/login", "/health"],
         description="Extra endpoints to probe"
     )
+
+
+class VerifyChallengeRequest(BaseModel):
+    target: str = Field(..., description="GitHub repository URL/slug or target domain")
+    target_type: Literal["auto", "github", "domain"] = "auto"
+
+
+class VerifyOwnershipRequest(BaseModel):
+    target: str = Field(..., description="GitHub repository URL/slug or domain")
+    method: Literal["token", "challenge", "dns_txt"] = "token"
+    github_token: Optional[str] = Field(None, description="GitHub PAT for strict permission verification")
+    challenge_code: Optional[str] = Field(None, description="Challenge code for commit, verify.txt, or DNS TXT check")
 
 
 class RemediationRequest(BaseModel):
@@ -109,6 +125,8 @@ async def root():
             "github_webhook": "/api/v1/webhook/github",
             "sast_scan": "/api/v1/scan/sast",
             "dast_scan": "/api/v1/scan/dast",
+            "verify_challenge": "/api/v1/verify/challenge",
+            "verify_ownership": "/api/v1/verify/ownership",
             "remediation": "/api/v1/remediate",
             "create_pr": "/api/v1/pr"
         }
@@ -173,9 +191,24 @@ async def trigger_sast_scan(req: SASTScanRequest):
         raise HTTPException(status_code=400, detail="Invalid GitHub repository format.")
 
     token = (req.github_token or settings.github_token or "").strip()
-    is_accessible, msg, can_create_pr = await OwnershipVerifier.verify_github_access(token, repo_name)
-    if not is_accessible:
-        raise HTTPException(status_code=403, detail=f"Access verification failed: {msg}")
+    proof = OwnershipVerifier.verify_proof_token(req.proof_token, repo_name)
+    if proof:
+        can_create_pr = bool(token)
+    else:
+        if req.require_ownership and not req.github_token:
+            raise HTTPException(
+                status_code=403,
+                detail="Требуется подтверждение авторства: передайте GitHub Token или proof_token из /api/v1/verify/ownership.",
+            )
+        if req.require_ownership:
+            strict_res = await OwnershipVerifier.verify_repo_ownership_strict(token, repo_name)
+            if not strict_res.get("verified"):
+                raise HTTPException(status_code=403, detail=strict_res.get("message", "Авторство не подтверждено."))
+            can_create_pr = bool(strict_res.get("can_create_pr"))
+        else:
+            is_accessible, msg, can_create_pr = await OwnershipVerifier.verify_github_access(token, repo_name)
+            if not is_accessible:
+                raise HTTPException(status_code=403, detail=f"Access verification failed: {msg}")
 
     # Clone into temporary directory
     scan_id = str(uuid.uuid4())[:8]
@@ -244,9 +277,91 @@ async def trigger_sast_scan(req: SASTScanRequest):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+@api_router.post("/api/v1/verify/challenge", tags=["Authorship Verification"])
+async def create_verification_challenge(req: VerifyChallengeRequest):
+    """Issue a time-bound authorship verification challenge for a GitHub repo or domain."""
+    try:
+        return OwnershipVerifier.issue_challenge(req.target, req.target_type)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
+@api_router.post("/api/v1/verify/ownership", tags=["Authorship Verification"])
+async def verify_asset_ownership(req: VerifyOwnershipRequest):
+    """Verify repository or domain authorship via GitHub Token, Commit Challenge, or DNS TXT record."""
+    if req.method == "token":
+        token = (req.github_token or "").strip()
+        res = await OwnershipVerifier.verify_repo_ownership_strict(token, req.target)
+        proof_token = (
+            OwnershipVerifier.create_proof_token(req.target, "github_token", res.get("username") or "owner")
+            if res.get("verified")
+            else None
+        )
+        return {
+            **res,
+            "target": OwnershipVerifier.parse_github_repo(req.target) or req.target,
+            "target_type": "github",
+            "method": "token",
+            "proof_token": proof_token,
+        }
+
+    if req.method == "challenge":
+        code = (req.challenge_code or "").strip()
+        if not code:
+            raise HTTPException(status_code=400, detail="Укажите challenge_code из /api/v1/verify/challenge.")
+        ok, msg = await OwnershipVerifier.verify_commit_challenge(req.target, code)
+        repo = OwnershipVerifier.parse_github_repo(req.target) or req.target
+        proof_token = (
+            OwnershipVerifier.create_proof_token(repo, "commit_challenge", repo.split("/")[0])
+            if ok
+            else None
+        )
+        return {
+            "verified": ok,
+            "target": repo,
+            "target_type": "github",
+            "method": "challenge",
+            "username": repo.split("/")[0] if ok and "/" in repo else "",
+            "repo_owner": repo.split("/")[0] if "/" in repo else "",
+            "role": "VerifiedAuthor" if ok else "Unverified",
+            "can_create_pr": False,
+            "message": msg,
+            "proof_token": proof_token,
+        }
+
+    # method == "dns_txt"
+    code = (req.challenge_code or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Укажите challenge_code для проверки DNS TXT-записи.")
+    host = OwnershipVerifier.normalize_domain(req.target)
+    if not host:
+        raise HTTPException(status_code=400, detail=f"Неверный формат домена: '{req.target}'.")
+    ok, msg = await OwnershipVerifier.verify_domain_txt_record(host, code)
+    proof_token = OwnershipVerifier.create_proof_token(host, "dns_txt", host) if ok else None
+    return {
+        "verified": ok,
+        "target": host,
+        "target_type": "domain",
+        "method": "dns_txt",
+        "username": host if ok else "",
+        "repo_owner": host,
+        "role": "DomainOwner" if ok else "Unverified",
+        "can_create_pr": False,
+        "message": msg,
+        "proof_token": proof_token,
+    }
+
+
 @api_router.post("/api/v1/scan/dast", response_model=DASTScanResult, tags=["Scanners"])
 async def trigger_dast_scan(req: DASTScanRequest):
     """Execute dynamic security audit (Headers, CORS, Cookies) on live URL."""
+    if req.require_ownership:
+        host = OwnershipVerifier.normalize_domain(req.target_url)
+        if not host or not OwnershipVerifier.verify_proof_token(req.proof_token, host):
+            raise HTTPException(
+                status_code=403,
+                detail="Требуется подтверждение владения доменом через DNS TXT (/api/v1/verify/ownership).",
+            )
     dast = DASTScanner()
     result = await dast.scan_url(
         target_url=req.target_url,

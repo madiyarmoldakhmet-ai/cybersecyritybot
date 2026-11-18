@@ -133,7 +133,7 @@ async def handle_document(message: types.Message, bot: Bot):
     status_msg = await message.reply("Скачиваю архив...")
 
     scan_uuid = str(uuid.uuid4())
-    repo_dir = Path(f"/tmp/aegis_scans/{scan_uuid}")
+    repo_dir = settings.temp_clone_dir / f"tg_{scan_uuid}"
     zip_path = repo_dir / "upload.zip"
     extract_dir = repo_dir / "code"
 
@@ -160,6 +160,47 @@ async def handle_document(message: types.Message, bot: Bot):
         logger.info("Код удалён с сервера")
 
 
+@router.message(F.text.startswith("/verify"))
+async def handle_verify_command(message: types.Message):
+    """Issue or check commit-based repository authorship proof from Telegram."""
+    if not _is_authorized_user(message.from_user.id if message.from_user else None):
+        await message.reply("⛔ Доступ ограничен.")
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) < 2:
+        await message.reply(
+            "Использование:\n"
+            "• <code>/verify owner/repo</code> — получить код подтверждения\n"
+            "• <code>/verify owner/repo cybersec-verify-xxxx</code> — проверить авторство в коммите или <code>verify.txt</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    target = parts[1]
+    if len(parts) >= 3:
+        ok, msg = await OwnershipVerifier.verify_commit_challenge(target, parts[2])
+        badge = "✅" if ok else "⛔"
+        await message.reply(f"{badge} {html.escape(msg)}", parse_mode=ParseMode.HTML)
+        return
+
+    try:
+        ch = OwnershipVerifier.issue_challenge(target, "github")
+        code = html.escape(ch["challenge_code"])
+        repo = html.escape(ch["target"])
+        await message.reply(
+            f"🔐 <b>Код подтверждения авторства для</b> <code>{repo}</code>:\n"
+            f"<code>{code}</code>\n\n"
+            f"Выполните в репозитории:\n"
+            f"<code>git commit --allow-empty -m \"{code}\" &amp;&amp; git push</code>\n\n"
+            f"Затем проверьте командой:\n"
+            f"<code>/verify {repo} {code}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+    except ValueError as err:
+        await message.reply(f"⛔ {html.escape(str(err))}")
+
+
 @router.message(F.text)
 async def handle_repo_url(message: types.Message):
     if not _is_authorized_user(message.from_user.id if message.from_user else None):
@@ -168,7 +209,7 @@ async def handle_repo_url(message: types.Message):
 
     repo_name = OwnershipVerifier.parse_github_repo((message.text or "").strip())
     if not repo_name:
-        await message.reply("Отправьте ZIP-архив или ссылку на GitHub (например, https://github.com/owner/repo).")
+        await message.reply("Отправьте ZIP-архив, ссылку на GitHub или <code>/verify owner/repo</code> для проверки авторства.", parse_mode=ParseMode.HTML)
         return
 
     is_accessible, access_msg, _ = await OwnershipVerifier.verify_github_access(settings.github_token, repo_name)
@@ -179,7 +220,7 @@ async def handle_repo_url(message: types.Message):
     status_msg = await message.reply(f"Клонирую <code>{html.escape(repo_name)}</code> и запускаю скан...", parse_mode=ParseMode.HTML)
 
     scan_uuid = str(uuid.uuid4())
-    repo_dir = Path(f"/tmp/aegis_scans/{scan_uuid}")
+    repo_dir = settings.temp_clone_dir / f"tg_{scan_uuid}"
     repo_dir.mkdir(parents=True, exist_ok=True)
     clone_url = f"https://github.com/{repo_name}.git"
 

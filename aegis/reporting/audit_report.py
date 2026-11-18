@@ -10,9 +10,9 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from typing import Dict, List, Optional
-from xml.sax.saxutils import escape
 
 from pydantic import BaseModel, Field
 

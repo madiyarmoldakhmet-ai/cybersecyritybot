@@ -53,10 +53,25 @@ jobs:
             if curl -fsS http://localhost:8000/dashboard -o /dev/null; then break; fi
             sleep 2
           done
-          curl -fsS http://localhost:8000/dashboard | grep -q "Мониторинг безопасности"
-          curl -fsS http://localhost:8000/api/v1/dashboard/metrics | python3 -c "import json,sys; m=json.load(sys.stdin); assert m['total_scans'] == 0, m"
-          curl -fsS -X POST http://localhost:8000/api/v1/webhook/github \
-            -H "X-GitHub-Event: ping" -H "Content-Type: application/json" -d '{}' | grep -q '"status":"ok"'
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          dash = urllib.request.urlopen("http://localhost:8000/dashboard", timeout=10).read().decode("utf-8")
+          assert "Мониторинг безопасности" in dash
+
+          metrics = json.loads(urllib.request.urlopen("http://localhost:8000/api/v1/dashboard/metrics", timeout=10).read())
+          assert metrics["total_scans"] == 0, metrics
+
+          req = urllib.request.Request(
+              "http://localhost:8000/api/v1/webhook/github",
+              data=b"{}",
+              headers={"X-GitHub-Event": "ping", "Content-Type": "application/json"},
+              method="POST",
+          )
+          pong = json.loads(urllib.request.urlopen(req, timeout=10).read())
+          assert pong["status"] == "ok", pong
+          PY
 
       - name: Container logs
         if: always()

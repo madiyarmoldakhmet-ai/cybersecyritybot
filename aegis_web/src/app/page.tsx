@@ -1,12 +1,23 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react';
-import { FileText, Play, ShieldCheck, Terminal, Upload, Wrench, X } from 'lucide-react';
+import {
+  ArrowRight,
+  GitPullRequest,
+  Lock,
+  Play,
+  ShieldCheck,
+  Terminal,
+  Upload,
+  Wrench,
+  X,
+} from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { TerminalWindow, ScanEvent } from '@/components/TerminalWindow';
 import { MetricsDashboard } from '@/components/MetricsDashboard';
 import { SecurityScore } from '@/components/SecurityScore';
 import { AiCopilotChat, ChatMessage } from '@/components/AiCopilotChat';
+import { AuthorshipPanel, AuthorshipState } from '@/components/AuthorshipPanel';
 import { cn } from '@/lib/utils';
 
 type Finding = {
@@ -36,23 +47,35 @@ type RemediationResult = {
   confidence_score: number;
 };
 
-type WorkspaceView = 'studio' | 'chat' | 'audit';
-type ConsoleTab = 'terminal' | 'findings';
+type InspectorTab = 'overview' | 'authorship' | 'scanner' | 'findings';
 
 const SEVERITY_BADGE: Record<string, string> = {
-  CRITICAL: 'bg-[#e94a32]/20 text-[#ff8674] border border-[#e94a32]/50',
-  HIGH: 'bg-orange-500/15 text-orange-300 border border-orange-500/40',
-  MEDIUM: 'bg-amber-500/15 text-amber-300 border border-amber-500/40',
-  LOW: 'bg-sky-500/15 text-sky-300 border border-sky-500/40',
-  INFO: 'bg-neutral-500/20 text-neutral-300 border border-neutral-500/40',
+  CRITICAL: 'bg-[#e94a32]/15 text-[#ff735d] border border-[#e94a32]/40',
+  HIGH: 'bg-orange-500/15 text-orange-400 border border-orange-500/35',
+  MEDIUM: 'bg-amber-500/15 text-amber-400 border border-amber-500/35',
+  LOW: 'bg-sky-500/15 text-sky-400 border border-sky-500/35',
+  INFO: 'bg-neutral-500/15 text-[var(--color-muted-soft)] border border-[var(--color-line)]',
 };
 
 const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
   id: 'welcome-1',
   role: 'assistant',
   content:
-    'Commit Guardian AI на связи. Задай вопрос по безопасности кода, вставь ссылку **github.com/owner/repo**, прикрепи `.zip` скрепкой или нажми **«Демо-аудит»** — разберу каждую уязвимость и дам готовый патч.',
+    'На связи **Commit Guardian AI**. Спрашивай о безопасности кода, прикрепи `.zip` скрепкой, вставь ссылку `github.com/owner/repo` или запусти **«Демо-аудит»** — проверю уязвимости, утечки ИИН и помогу подтвердить авторство.',
   timestamp: 'Сегодня',
+};
+
+const EMPTY_AUTHORSHIP: AuthorshipState = {
+  verified: false,
+  target: '',
+  targetType: 'github',
+  method: 'challenge',
+  actor: '',
+  role: 'None',
+  canCreatePr: false,
+  message: '',
+  proofToken: '',
+  githubToken: '',
 };
 
 function formatNowTime(): string {
@@ -65,20 +88,24 @@ function formatCweShort(cwes?: string[]): string {
     const match = c.match(/CWE-\d+/i);
     return match ? match[0].toUpperCase() : c.split(':', 1)[0].trim();
   });
-  const unique = Array.from(new Set(compact));
-  return unique.slice(0, 2).join(', ');
+  return Array.from(new Set(compact)).slice(0, 2).join(', ');
 }
 
 export default function Home() {
-  const [viewMode, setViewMode] = useState<WorkspaceView>('studio');
-  const [consoleTab, setConsoleTab] = useState<ConsoleTab>('terminal');
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
   const [messages, setMessages] = useState<ChatMessage[]>([INITIAL_ASSISTANT_MESSAGE]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
 
-  // Live backend & Ollama posture from /health
+  // Live backend & Ollama posture
   const [ollamaOnline, setOllamaOnline] = useState<boolean | null>(null);
   const [ollamaModel, setOllamaModel] = useState<string>('qwen2.5-coder:14b');
+
+  // Authorship verification state
+  const [verifyTarget, setVerifyTarget] = useState('https://github.com/madiyarmoldakhmet-ai/cybersecyritybot');
+  const [authorship, setAuthorship] = useState<AuthorshipState>(EMPTY_AUTHORSHIP);
+  const [requireOwnership, setRequireOwnership] = useState(false);
+  const [repoScanUrl, setRepoScanUrl] = useState('');
 
   // Scan & audit state
   const [isScanning, setIsScanning] = useState(false);
@@ -91,18 +118,21 @@ export default function Home() {
   const [securityScore, setSecurityScore] = useState<number | null>(null);
   const [grade, setGrade] = useState<string | null>(null);
   const [auditSummary, setAuditSummary] = useState<string>('');
+  const [auditAuthorshipLabel, setAuditAuthorshipLabel] = useState<string>('—');
   const [reportPdfUrl, setReportPdfUrl] = useState<string | null>(null);
   const [reportMdUrl, setReportMdUrl] = useState<string | null>(null);
   const [activeTarget, setActiveTarget] = useState<string>('');
 
-  // Native <dialog> refs
+  // Dialogs
   const pricingDialogRef = useRef<HTMLDialogElement>(null);
   const fixDialogRef = useRef<HTMLDialogElement>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [remediation, setRemediation] = useState<RemediationResult | null>(null);
   const [isFixing, setIsFixing] = useState(false);
+  const [prStatus, setPrStatus] = useState<string>('');
+  const [creatingPr, setCreatingPr] = useState(false);
 
-  const heroZipInputId = useId();
+  const zipInputId = useId();
   const chatWsRef = useRef<WebSocket | null>(null);
   const scanWsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -152,12 +182,7 @@ export default function Home() {
             }
             return [
               ...prev,
-              {
-                id: 'streaming',
-                role: 'assistant',
-                content: data.content,
-                timestamp: formatNowTime(),
-              },
+              { id: 'streaming', role: 'assistant', content: data.content, timestamp: formatNowTime() },
             ];
           });
         } else if (data.type === 'done') {
@@ -173,20 +198,13 @@ export default function Home() {
           setIsTyping(false);
           setMessages((prev) => [
             ...prev.filter((m) => m.id !== 'streaming'),
-            {
-              id: `${Date.now()}`,
-              role: 'assistant',
-              content: `Ошибка: ${data.message}`,
-              timestamp: formatNowTime(),
-            },
+            { id: `${Date.now()}`, role: 'assistant', content: `Ошибка: ${data.message}`, timestamp: formatNowTime() },
           ]);
         }
       };
 
       ws.onclose = () => {
-        if (!unmounted) {
-          reconnectTimer = setTimeout(connectChatWs, 3000);
-        }
+        if (!unmounted) reconnectTimer = setTimeout(connectChatWs, 3000);
       };
     };
 
@@ -215,7 +233,8 @@ export default function Home() {
     setReportPdfUrl(null);
     setReportMdUrl(null);
     setActiveTarget(targetLabel);
-    setConsoleTab('terminal');
+    setAuditAuthorshipLabel(authorship.verified ? `Подтверждён (${authorship.role})` : 'Локально / Read-Only');
+    setInspectorTab('scanner');
     setIsScanning(true);
 
     if (timerRef.current) clearInterval(timerRef.current);
@@ -232,6 +251,7 @@ export default function Home() {
     security_score?: number;
     grade?: string;
     summary?: string;
+    authorship_status?: string;
     report_pdf_url?: string | null;
     report_md_url?: string | null;
     scan_result?: { duration_seconds?: number };
@@ -243,6 +263,7 @@ export default function Home() {
     if (typeof data.security_score === 'number') setSecurityScore(data.security_score);
     if (data.grade) setGrade(data.grade);
     if (data.summary) setAuditSummary(data.summary);
+    if (data.authorship_status) setAuditAuthorshipLabel(data.authorship_status);
     setReportPdfUrl(data.report_pdf_url ?? null);
     setReportMdUrl(data.report_md_url ?? null);
     if (typeof data.scan_result?.duration_seconds === 'number') {
@@ -252,7 +273,7 @@ export default function Home() {
     }
     setIsScanning(false);
     if (timerRef.current) clearInterval(timerRef.current);
-    if (list.length > 0) setConsoleTab('findings');
+    if (list.length > 0) setInspectorTab('findings');
 
     setEvents((prev) => [
       ...prev,
@@ -290,8 +311,7 @@ export default function Home() {
           {
             id: `${Date.now() + 1}`,
             role: 'assistant',
-            content:
-              'Соединение с `/ws/chat` временно закрыто. Отправьте ссылку `github.com/...`, прикрепите ZIP-архив или запустите «Демо-аудит».',
+            content: 'Соединение с `/ws/chat` перезапускается. Вставьте `github.com/...`, .zip или нажмите «Демо-аудит».',
             timestamp: now,
           },
         ]);
@@ -299,10 +319,7 @@ export default function Home() {
       }
 
       setIsTyping(true);
-      setMessages((prev) => [
-        ...prev,
-        { id: 'streaming', role: 'assistant', content: '', timestamp: now },
-      ]);
+      setMessages((prev) => [...prev, { id: 'streaming', role: 'assistant', content: '', timestamp: now }]);
 
       const payload = {
         message: userMsg,
@@ -339,18 +356,12 @@ export default function Home() {
   };
 
   const handleDemoScan = async () => {
-    if (viewMode === 'chat') setViewMode('studio');
     resetScanState('demo/kz-fintech-app');
     const now = formatNowTime();
     setMessages((prev) => [
       ...prev,
       { id: `${Date.now()}`, role: 'user', content: 'Запусти демо-аудит KZ Fintech', timestamp: now },
-      {
-        id: 'streaming',
-        role: 'assistant',
-        content: 'Запускаю локальный аудит (SAST + Taint + Secrets + .aegis.yml)...',
-        timestamp: now,
-      },
+      { id: 'streaming', role: 'assistant', content: 'Запускаю локальный аудит (SAST + Taint + Secrets)...', timestamp: now },
     ]);
     setEvents([{ event_type: 'ScanStarted', message: 'Инициализация on-premise движка Commit Guardian...' }]);
 
@@ -365,20 +376,12 @@ export default function Home() {
             {
               id: `${Date.now()}`,
               role: 'assistant',
-              content: `Демо-аудит завершён: найдено **${data.total_findings}** уязвимостей, Score **${data.security_score}/100 (${data.grade})**. Спроси меня о любой находке или нажми «Патч» справа.`,
+              content: `Демо-аудит завершён: **${data.total_findings}** находок, Score **${data.security_score}/100 (${data.grade})**. Спроси о любой уязвимости или жми «Патч» справа.`,
               timestamp: formatNowTime(),
             },
           ];
         }
-        return [
-          ...filtered,
-          {
-            id: `${Date.now()}`,
-            role: 'assistant',
-            content: `Ошибка демо-скана: ${data.error}`,
-            timestamp: formatNowTime(),
-          },
-        ];
+        return [...filtered, { id: `${Date.now()}`, role: 'assistant', content: `Ошибка демо-скана: ${data.error}`, timestamp: formatNowTime() }];
       });
       if (res.ok) {
         setScannedFiles(2);
@@ -393,42 +396,23 @@ export default function Home() {
       if (timerRef.current) clearInterval(timerRef.current);
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== 'streaming'),
-        {
-          id: `${Date.now()}`,
-          role: 'assistant',
-          content: `Ошибка сети при демо-скане: ${err}`,
-          timestamp: formatNowTime(),
-        },
+        { id: `${Date.now()}`, role: 'assistant', content: `Ошибка сети при демо-скане: ${err}`, timestamp: formatNowTime() },
       ]);
     }
   };
 
   const handleZipUpload = async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.zip')) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}`,
-          role: 'assistant',
-          content: 'Нужен архив формата `.zip`.',
-          timestamp: formatNowTime(),
-        },
-      ]);
+      setMessages((prev) => [...prev, { id: `${Date.now()}`, role: 'assistant', content: 'Нужен архив формата `.zip`.', timestamp: formatNowTime() }]);
       return;
     }
 
-    if (viewMode === 'chat') setViewMode('studio');
     resetScanState(`upload/${file.name}`);
     const now = formatNowTime();
     setMessages((prev) => [
       ...prev,
       { id: `${Date.now()}`, role: 'user', content: `Проверь архив \`${file.name}\``, timestamp: now },
-      {
-        id: 'streaming',
-        role: 'assistant',
-        content: 'Распаковка в изолированную папку и локальный анализ...',
-        timestamp: now,
-      },
+      { id: 'streaming', role: 'assistant', content: 'Распаковка и локальный анализ...', timestamp: now },
     ]);
 
     const formData = new FormData();
@@ -445,24 +429,15 @@ export default function Home() {
             {
               id: `${Date.now()}`,
               role: 'assistant',
-              content: `Аудит завершён: найдено **${data.total_findings ?? 0}** уязвимостей · Score **${data.security_score ?? '-'}/100 (${data.grade ?? '-'})**. Исходный код удалён с сервера.`,
+              content: `Аудит завершён: **${data.total_findings ?? 0}** находок · Score **${data.security_score ?? '-'}/100 (${data.grade ?? '-'})**. Исходный код удалён.`,
               timestamp: formatNowTime(),
             },
           ];
         }
-        return [
-          ...filtered,
-          {
-            id: `${Date.now()}`,
-            role: 'assistant',
-            content: `Ошибка при сканировании: ${data.error || 'Неизвестная ошибка'}`,
-            timestamp: formatNowTime(),
-          },
-        ];
+        return [...filtered, { id: `${Date.now()}`, role: 'assistant', content: `Ошибка при сканировании: ${data.error || 'Неизвестная ошибка'}`, timestamp: formatNowTime() }];
       });
-      if (res.ok) {
-        applyCompletedPayload(data);
-      } else {
+      if (res.ok) applyCompletedPayload(data);
+      else {
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
       }
@@ -471,25 +446,30 @@ export default function Home() {
       if (timerRef.current) clearInterval(timerRef.current);
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== 'streaming'),
-        {
-          id: `${Date.now()}`,
-          role: 'assistant',
-          content: `Ошибка сети при загрузке: ${err}`,
-          timestamp: formatNowTime(),
-        },
+        { id: `${Date.now()}`, role: 'assistant', content: `Ошибка сети при загрузке: ${err}`, timestamp: formatNowTime() },
       ]);
     }
   };
 
   const startScan = (repoUrl: string) => {
-    if (viewMode === 'chat') setViewMode('studio');
-    resetScanState(repoUrl);
+    const clean = repoUrl.trim();
+    if (!clean) return;
+    setRepoScanUrl(clean);
+    setVerifyTarget(clean);
+    resetScanState(clean);
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/scan`;
     const ws = new WebSocket(wsUrl);
     scanWsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ github_url: repoUrl }));
+      ws.send(
+        JSON.stringify({
+          github_url: clean,
+          github_token: authorship.githubToken || undefined,
+          proof_token: authorship.proofToken || undefined,
+          require_ownership: requireOwnership,
+        })
+      );
     };
 
     ws.onmessage = (event) => {
@@ -505,7 +485,14 @@ export default function Home() {
         setScannedFiles((prev) => prev + 1);
       } else if (data.event_type === 'VulnerabilityFound') {
         setVulnerabilities((prev) => prev + 1);
-      } else if (data.event_type === 'ScanCompleted' || data.event_type === 'SystemError') {
+      } else if (data.event_type === 'SystemError') {
+        setIsScanning(false);
+        if (timerRef.current) clearInterval(timerRef.current);
+        setMessages((prev) => [
+          ...prev,
+          { id: `${Date.now()}`, role: 'assistant', content: `⛔ ${data.message}`, timestamp: formatNowTime() },
+        ]);
+      } else if (data.event_type === 'ScanCompleted') {
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
       }
@@ -519,6 +506,7 @@ export default function Home() {
   const handleOpenRemediation = async (finding: Finding) => {
     setSelectedFinding(finding);
     setRemediation(null);
+    setPrStatus('');
     setIsFixing(true);
     fixDialogRef.current?.showModal();
 
@@ -528,139 +516,207 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ finding, code_context: finding.code_snippet || '' }),
       });
-      if (res.ok) {
-        setRemediation(await res.json());
-      }
+      if (res.ok) setRemediation(await res.json());
     } catch {
-      // Fallback UI handles null remediation cleanly
+      // Handled smoothly in modal UI
     } finally {
       setIsFixing(false);
     }
   };
 
+  const handleCreatePR = async () => {
+    if (!selectedFinding || !remediation || !authorship.githubToken || !activeTarget) return;
+    setCreatingPr(true);
+    setPrStatus('');
+    try {
+      const res = await fetch('/api/v1/pr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo_url: activeTarget,
+          github_token: authorship.githubToken,
+          file_path: selectedFinding.file_path,
+          finding: selectedFinding,
+          remediation,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.pull_request_url) {
+        setPrStatus(`PR создан: ${data.pull_request_url}`);
+      } else {
+        setPrStatus(data.detail || data.message || 'Не удалось создать PR.');
+      }
+    } catch (err) {
+      setPrStatus(`Ошибка: ${err}`);
+    } finally {
+      setCreatingPr(false);
+    }
+  };
+
+  const pipelineStage =
+    securityScore !== null
+      ? 4
+      : isScanning
+      ? 3
+      : activeTarget
+      ? 2
+      : authorship.verified
+      ? 1
+      : 1;
+
   return (
-    <div className="min-h-screen bg-[var(--color-canvas)] text-[var(--color-ink)] font-sans flex flex-col swiss-grid-bg">
-      <a href="#main-content" className="skip-link visually-hidden">
-        Перейти к AI-чату и консоли
+    <div className="min-h-screen bg-[var(--color-canvas)] text-[var(--color-ink)] font-sans flex flex-col">
+      <a href="#workspace" className="skip-link visually-hidden">
+        Перейти к рабочей области и AI-чату
       </a>
 
-      {/* Sticky 64px Top Navigation inspired by prtner.ai/font */}
-      <header className="sticky top-0 z-30 min-h-16 border-b border-[var(--color-line)] bg-[var(--color-canvas)]/88 backdrop-blur-md">
-        <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8 h-full py-2.5 flex flex-wrap md:flex-nowrap items-center justify-between gap-2 sm:gap-3">
-          {/* Brand wordmark with vermilion dot (prtner.ai nod) */}
-          <a
-            href="#main-content"
-            className="flex items-center gap-2 text-[var(--color-ink)] no-underline shrink-0"
-          >
-            <ShieldCheck className="w-5 h-5 text-[#e94a32]" aria-hidden="true" />
-            <span className="font-sans text-lg font-medium tracking-tight">
+      {/* Sticky 64px Obsidian Header modeled on prtner.ai */}
+      <header className="sticky top-0 z-30 h-16 border-b border-[var(--color-line)] bg-[var(--color-canvas)]/82 backdrop-blur-md">
+        <div className="max-w-[1160px] mx-auto px-5 h-full flex items-center justify-between gap-4">
+          <a href="#workspace" className="flex items-center gap-2.5 text-[var(--color-ink)] no-underline shrink-0">
+            <span className="grid grid-cols-2 gap-0.5 w-4 h-4 shrink-0" aria-hidden="true">
+              <span className="bg-[#e94a32]" />
+              <span className="bg-[var(--color-ink)]" />
+              <span className="bg-[var(--color-ink)]" />
+              <span className="bg-[var(--color-ink)] opacity-45" />
+            </span>
+            <span className="font-sans text-[17px] font-medium tracking-tight">
               commit<span className="text-[#e94a32]">.</span>guardian
             </span>
           </a>
 
-          {/* Segmented Architectural Mode Switcher (echoing Sans | Serif | Mono | Pixel) */}
-          <nav aria-label="Основная навигация" className="flex flex-wrap items-center gap-1">
-            {(
-              [
-                { id: 'studio', label: 'Студия' },
-                { id: 'chat', label: 'AI-Чат' },
-                { id: 'audit', label: 'Аудит' },
-              ] as const
-            ).map((tab) => {
-              const active = viewMode === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setViewMode(tab.id)}
-                  className={cn(
-                    'min-h-9 px-3.5 text-sm transition-colors cursor-pointer border',
-                    active
-                      ? 'border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-ink)] font-medium'
-                      : 'border-transparent text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
-                  )}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-            <a
-              href="/dashboard"
-              className="min-h-9 px-3.5 text-sm border border-transparent text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] inline-flex items-center transition-colors"
+          <nav aria-label="Основная навигация" className="hidden md:flex items-center gap-6 text-sm text-[var(--color-muted-soft)]">
+            <a href="#workspace" className="hover:text-[var(--color-ink)] transition-colors">
+              AI-чат
+            </a>
+            <button
+              type="button"
+              onClick={() => {
+                setInspectorTab('authorship');
+                document.getElementById('workspace')?.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="hover:text-[var(--color-ink)] transition-colors cursor-pointer"
             >
+              Авторство
+            </button>
+            <a href="/dashboard" className="hover:text-[var(--color-ink)] transition-colors">
               Мониторинг
             </a>
-          </nav>
-
-          {/* Right controls & sharp high-contrast CTA */}
-          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => pricingDialogRef.current?.showModal()}
-              className="hidden sm:inline-flex min-h-9 px-3 border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-paper)] text-xs font-mono uppercase tracking-wider items-center cursor-pointer transition-colors"
+              className="hover:text-[var(--color-ink)] transition-colors cursor-pointer"
             >
               Тарифы ₸
             </button>
+          </nav>
+
+          <div className="flex items-center gap-2 shrink-0">
             <ThemeToggle />
             <button
               type="button"
               onClick={handleDemoScan}
               disabled={isScanning}
-              className="min-h-9 px-4 bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white disabled:opacity-60 font-mono text-xs uppercase tracking-wider font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="min-h-9 px-4 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white disabled:opacity-60 text-sm font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
             >
-              <Play className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Демо-аудит</span>
+              <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           </div>
         </div>
       </header>
 
-      <main id="main-content" className="flex-1">
-        {/* Compact Topographic Editorial Hero Band */}
-        <section
-          aria-label="Обзор платформы"
-          className="border-b border-[var(--color-line)] bg-[var(--color-paper)]/60"
-        >
-          <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-            <div className="lg:col-span-8 space-y-3 min-w-0">
-              <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)]">
-                <span>01 · ON-PREM AI APPSEC</span>
-                <span aria-hidden="true">·</span>
-                <span className="inline-flex items-center gap-1.5 text-[var(--color-ink)]">
+      <main className="flex-1">
+        {/* Framed Editorial Hero matching prtner.ai/ */}
+        <section aria-label="Введение" className="border-b border-[var(--color-line)]">
+          <div className="max-w-[1160px] mx-auto border-x border-[var(--color-line)] px-6 sm:px-10 py-10 sm:py-14 relative overflow-hidden">
+            {/* Subtle dithered monochrome mountain contour fading into bottom-right */}
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 420 180"
+              className="hidden sm:block pointer-events-none select-none absolute right-0 bottom-0 w-[340px] md:w-[420px] opacity-[0.14] text-[var(--color-ink)]"
+            >
+              <defs>
+                <pattern id="dither-dots" width="6" height="6" patternUnits="userSpaceOnUse">
+                  <circle cx="1.5" cy="1.5" r="1" fill="currentColor" />
+                </pattern>
+              </defs>
+              <path
+                d="M10 180 L85 118 L135 140 L205 64 L268 112 L335 44 L420 116 L420 180 Z"
+                fill="url(#dither-dots)"
+              />
+              <path
+                d="M10 180 L85 118 L135 140 L205 64 L268 112 L335 44 L420 116"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1"
+              />
+            </svg>
+
+            <div className="max-w-3xl relative z-10 space-y-5">
+              <h1 className="font-sans font-normal text-[clamp(2rem,4.3vw,3.45rem)] leading-[1.07] tracking-[-0.03em]">
+                <span className="text-[var(--color-ink)] block">AI-агент безопасности кода,</span>
+                <span className="text-[var(--color-muted-soft)] block">который работает по вашим правилам</span>
+              </h1>
+
+              <p className="text-base sm:text-[17px] text-[var(--color-body-text)] max-w-[60ch] leading-relaxed">
+                Отвечает в чате по вашим уязвимостям, проверяет коммиты, утечки ИИН/секретов и
+                подтверждает авторство репозитория внутри контура без облака{' '}
+                <span className="font-mono text-xs px-1.5 py-0.5 rounded border border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-ink)] align-middle">
+                  on-prem
+                </span>
+                .
+              </p>
+
+              <div className="pt-1 flex flex-wrap items-center gap-3">
+                <a
+                  href="#workspace"
+                  onClick={() => setTimeout(() => document.querySelector<HTMLTextAreaElement>('#workspace textarea')?.focus(), 50)}
+                  className="min-h-10 px-5 py-2 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white text-sm font-medium inline-flex items-center gap-2 transition-colors"
+                >
+                  <span>Открыть AI-чат</span>
+                  <ArrowRight className="w-4 h-4" aria-hidden="true" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInspectorTab('authorship');
+                    document.getElementById('workspace')?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="min-h-10 px-5 py-2 rounded-full border border-[var(--color-line-strong)] hover:border-[var(--color-ink)] bg-[var(--color-panel)] text-[var(--color-ink)] text-sm font-medium inline-flex items-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Lock className="w-3.5 h-3.5 text-[#e94a32]" aria-hidden="true" />
+                  <span>Проверить авторство</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Interactive Dotted-Matrix Workspace (echoing prtner · inbound) */}
+        <section id="workspace" aria-label="Рабочая область и AI-чат" className="border-b border-[var(--color-line)]">
+          <div className="max-w-[1160px] mx-auto border-x border-[var(--color-line)] reg-frame">
+            {/* Live Workspace Top Status Bar */}
+            <div className="px-5 sm:px-8 py-3 border-b border-[var(--color-line)] bg-[var(--color-paper)] flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
+                <span className="inline-flex items-center gap-2 text-[var(--color-ink)]">
                   <span
                     className={cn(
-                      'w-1.5 h-1.5 rounded-full',
-                      ollamaOnline ? 'bg-emerald-500' : 'bg-[#e94a32]'
+                      'w-2 h-2 rounded-full',
+                      ollamaOnline ? 'bg-[#3fbf7f] animate-pulse' : 'bg-[#e8a33d]'
                     )}
                     aria-hidden="true"
                   />
-                  {ollamaOnline ? `Ollama GPU · ${ollamaModel}` : `Air-Gapped · ${ollamaModel}`}
+                  <span>commit.guardian · live</span>
+                </span>
+                <span className="text-[var(--color-muted-soft)]">
+                  {ollamaModel} · 0 bytes external
                 </span>
               </div>
 
-              <h1 className="font-sans font-light text-[clamp(2.1rem,3.8vw,3.35rem)] leading-[1.04] tracking-[-0.03em] text-[var(--color-ink)]">
-                Commit Guardian — аудит кода и AI-чат без утечки в облако
-              </h1>
-
-              <p className="text-base text-[var(--color-body-text)] max-w-[68ch] leading-relaxed">
-                Задавай вопросы локальной модели Qwen прямо в чате, проверяй GitHub-коммиты и ZIP-архивы на
-                уязвимости, утечки ИИН/БИН и секреты по политике <code className="font-mono text-xs px-1.5 py-0.5 border border-[var(--color-line)]">.aegis.yml</code> с выгрузкой PDF-отчётов.
-              </p>
-
-              <div className="pt-1 flex flex-wrap items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={handleDemoScan}
-                  disabled={isScanning}
-                  className="min-h-10 px-4 py-2 bg-[#e94a32] hover:bg-[#c83822] disabled:opacity-60 text-white font-mono text-xs uppercase tracking-wider inline-flex items-center gap-2 transition-colors cursor-pointer"
-                >
-                  <Play className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Запустить демо-аудит (KZ Fintech)</span>
-                </button>
-
+              <div className="flex items-center gap-2">
                 <input
-                  id={heroZipInputId}
+                  id={zipInputId}
                   type="file"
                   accept=".zip"
                   className="visually-hidden"
@@ -673,397 +729,378 @@ export default function Home() {
                 <button
                   type="button"
                   disabled={isScanning}
-                  onClick={() => document.getElementById(heroZipInputId)?.click()}
-                  className="min-h-10 px-4 py-2 border border-[var(--color-line-strong)] hover:border-[var(--color-ink)] bg-[var(--color-canvas)] text-[var(--color-ink)] font-mono text-xs uppercase tracking-wider inline-flex items-center gap-2 transition-colors cursor-pointer"
+                  onClick={() => document.getElementById(zipInputId)?.click()}
+                  className="min-h-8 px-3 py-1 rounded-lg border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] font-mono text-xs text-[var(--color-ink)] inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Проверить .ZIP</span>
+                  <span>Загрузить .zip</span>
                 </button>
-
-                <a
-                  href="/dashboard"
-                  className="min-h-10 px-4 py-2 border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] font-mono text-xs uppercase tracking-wider inline-flex items-center gap-2 transition-colors"
-                >
-                  <FileText className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Журнал аудитов</span>
-                </a>
               </div>
             </div>
 
-            {/* Minimal Swiss Topographic Mountain & Vermilion Sun Silhouette (subtle Medeo visual homage) */}
-            <div className="hidden lg:flex lg:col-span-4 justify-end" aria-hidden="true">
-              <div className="w-full max-w-[340px] border border-[var(--color-line)] bg-[#e9e9e6] text-[#141414] p-4 relative overflow-hidden">
-                <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-[#6b6a65] mb-2">
-                  <span>АЛАТАУ · КОНТУР ЗАЩИТЫ</span>
-                  <span>0 BYTES OUT</span>
+            {/* Dotted Matrix Frame */}
+            <div className="p-4 sm:p-8 prtner-dots space-y-5">
+              {/* 4 Pipeline Selector Pills echoing prtner Direct / Comments / Mentions / Story replies */}
+              <div className="space-y-2">
+                <div className="font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+                  IN · КОНТУР БЕЗОПАСНОСТИ · МОДУЛИ
                 </div>
-                <svg viewBox="0 0 320 130" className="w-full h-auto block">
-                  <circle cx="195" cy="48" r="32" fill="#e94a32" />
-                  <path
-                    d="M0 120 L48 76 L92 98 L148 48 L194 82 L242 36 L286 74 L320 56 L320 130 L0 130 Z"
-                    fill="#141414"
-                    fillOpacity="0.12"
-                  />
-                  <path
-                    d="M0 120 L48 76 L92 98 L148 48 L194 82 L242 36 L286 74 L320 56"
-                    fill="none"
-                    stroke="#141414"
-                    strokeWidth="1.5"
-                  />
-                  <circle cx="148" cy="48" r="3" fill="#ffffff" stroke="#141414" strokeWidth="1.5" />
-                  <circle cx="242" cy="36" r="3" fill="#ffffff" stroke="#141414" strokeWidth="1.5" />
-                </svg>
-                <div className="mt-2 flex items-baseline justify-between font-mono text-[11px] text-[#141414] border-t border-black/10 pt-2">
-                  <span className="font-serif text-base">On-Premise</span>
-                  <span>SAST · TAINT · LLM</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Main 12-Column Architectural Workbench */}
-        <section className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-          <div className="flex flex-wrap items-baseline justify-between gap-2 pb-4 mb-5 border-b border-[var(--color-line)]">
-            <div className="flex items-baseline gap-3">
-              <span className="font-mono text-xs text-[#e94a32]">02</span>
-              <h2 className="font-sans font-light text-2xl sm:text-3xl tracking-tight">
-                {viewMode === 'chat'
-                  ? 'Живой чат с локальным AI-ассистентом'
-                  : viewMode === 'audit'
-                  ? 'Результаты аудита и патчи безопасности'
-                  : 'Четыре модуля, один контур'}
-              </h2>
-            </div>
-            <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)]">
-              {activeTarget ? `Цель: ${activeTarget}` : 'Готов к проверке кода'}
-            </span>
-          </div>
-
-          <div
-            className={cn(
-              'grid grid-cols-1 gap-4 items-stretch',
-              viewMode === 'studio' ? 'lg:grid-cols-12' : 'lg:grid-cols-12'
-            )}
-          >
-            {/* Primary Interactive AI Chat Card */}
-            {viewMode !== 'audit' && (
-              <div
-                className={cn(
-                  'min-w-0 flex flex-col',
-                  viewMode === 'chat' ? 'lg:col-span-8 lg:col-start-3' : 'lg:col-span-5'
-                )}
-              >
-                <AiCopilotChat
-                  messages={messages}
-                  input={input}
-                  onInputChange={setInput}
-                  onSubmit={handleSendMessage}
-                  onQuickPrompt={(prompt) => sendChatText(prompt)}
-                  onResetChat={handleResetChat}
-                  onUploadZip={handleZipUpload}
-                  isTyping={isTyping}
-                  isScanning={isScanning}
-                  ollamaOnline={ollamaOnline}
-                  ollamaModel={ollamaModel}
-                  activeTarget={activeTarget}
-                  className="h-full"
-                />
-              </div>
-            )}
-
-            {/* Right Bento Console: Pixel Scoreboard, Paper Receipt, Telemetry Strip, Terminal/Findings */}
-            {viewMode !== 'chat' && (
-              <div
-                className={cn(
-                  'min-w-0 flex flex-col gap-4',
-                  viewMode === 'audit' ? 'lg:col-span-12' : 'lg:col-span-7'
-                )}
-              >
-                {/* Top Bento Row: Vermilion Pixel Scoreboard + Paper Compliance Receipt */}
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-                  <SecurityScore
-                    score={securityScore}
-                    grade={grade}
-                    elapsedTime={elapsedTime}
-                    vulnerabilities={vulnerabilities}
-                    isScanning={isScanning}
-                    reportPdfUrl={reportPdfUrl}
-                    reportMdUrl={reportMdUrl}
-                    className="md:col-span-5"
-                  />
-
-                  {/* Paper Specimen Audit Receipt Card modeled after Mono Receipt from prtner.ai */}
-                  <div className="md:col-span-7 bg-[#f4f4f0] text-[#141414] border border-[var(--color-line)] p-5 flex flex-col justify-between gap-4">
-                    <div className="flex items-baseline justify-between gap-2 pb-3 border-b border-[#d8d7d0]">
-                      <span className="font-mono text-2xl tracking-tight leading-none text-[#141414]">
-                        Чек
-                      </span>
-                      <span className="font-mono text-xs uppercase tracking-wider text-[#6b6a65]">
-                        Политика .aegis.yml
-                      </span>
-                    </div>
-
-                    <div className="bg-white border border-[#d8d7d0] p-4 font-mono text-xs space-y-2 tabular-nums">
-                      <div className="text-center font-medium uppercase tracking-wider text-[#141414] pb-1">
-                        COMMIT GUARDIAN AUDIT
-                      </div>
-                      <div className="border-t border-dashed border-[#c8c7bf] pt-2 space-y-1.5">
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-[#6b6a65]">SAST + Taint</span>
-                          <span className="spec-leader" aria-hidden="true" />
-                          <span>Активен</span>
-                        </div>
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-[#6b6a65]">Секреты / ИИН РК</span>
-                          <span className="spec-leader" aria-hidden="true" />
-                          <span>Фильтр включён</span>
-                        </div>
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-[#6b6a65]">Локальный ИИ</span>
-                          <span className="spec-leader" aria-hidden="true" />
-                          <span className="truncate max-w-[160px]">{ollamaModel}</span>
-                        </div>
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-[#6b6a65]">Передача в облако</span>
-                          <span className="spec-leader" aria-hidden="true" />
-                          <span>0 ₸ / 0 байт</span>
-                        </div>
-                      </div>
-                      <div className="border-t border-dashed border-[#c8c7bf] pt-2 flex items-baseline justify-between font-medium text-[#141414]">
-                        <span>Вердикт</span>
-                        <span>
-                          {securityScore === null
-                            ? 'Ожидает проверки'
-                            : `${securityScore}/100 · Grade ${grade || '-'}`}
-                        </span>
-                      </div>
-                    </div>
-
-                    <p className="text-xs text-[#3e3e3a] leading-relaxed">
-                      {auditSummary
-                        ? auditSummary
-                        : 'После запуска аудита здесь появится сводное заключение аудитора и ссылки на официальный PDF/Markdown-отчёт.'}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Sharp 4-Cell Telemetry Strip */}
-                <MetricsDashboard
-                  scannedFiles={scannedFiles}
-                  totalFiles={totalFiles}
-                  vulnerabilities={vulnerabilities}
-                  elapsedTime={elapsedTime}
-                  ollamaOnline={ollamaOnline}
-                  ollamaModel={ollamaModel}
-                  isScanning={isScanning}
-                />
-
-                {/* Terminal / Findings Panel */}
-                <div className="flex flex-col flex-1 min-h-0">
-                  <div className="flex items-center justify-between border border-b-0 border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-2">
-                    <div className="flex items-center gap-1" role="tablist" aria-label="Режим консоли">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5" role="group" aria-label="Модули рабочей области">
+                  {(
+                    [
+                      { id: 'overview', label: 'ОБЗОР И AI', count: `${messages.length}` },
+                      { id: 'authorship', label: 'АВТОРСТВО', count: authorship.verified ? 'OK' : 'CHECK' },
+                      { id: 'scanner', label: 'СКАНЕР И ЛОГИ', count: `${events.length}` },
+                      { id: 'findings', label: 'ПАТЧИ И PDF', count: `${vulnerabilities}` },
+                    ] as const
+                  ).map((pill) => {
+                    const active = inspectorTab === pill.id;
+                    return (
                       <button
+                        key={pill.id}
                         type="button"
-                        role="tab"
-                        aria-selected={consoleTab === 'terminal'}
-                        onClick={() => setConsoleTab('terminal')}
+                        aria-pressed={active}
+                        onClick={() => setInspectorTab(pill.id)}
                         className={cn(
-                          'min-h-8 px-3 font-mono text-xs uppercase tracking-wider inline-flex items-center gap-1.5 cursor-pointer border',
-                          consoleTab === 'terminal'
-                            ? 'border-[var(--color-line-strong)] bg-[var(--color-canvas)] text-[var(--color-ink)]'
-                            : 'border-transparent text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                          'min-h-10 px-3.5 py-2 rounded-xl border bg-[var(--color-paper)] flex items-center justify-between gap-2 font-mono text-xs transition-colors cursor-pointer',
+                          active
+                            ? 'border-[#e94a32] border-b-2 text-[var(--color-ink)]'
+                            : 'border-[var(--color-line)] hover:border-[var(--color-line-strong)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
                         )}
                       >
-                        <Terminal className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>Логи</span>
+                        <span className="truncate tracking-wider">{pill.label}</span>
+                        <span className="tabular-nums text-[var(--color-faint)]">{pill.count}</span>
                       </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={consoleTab === 'findings'}
-                        onClick={() => setConsoleTab('findings')}
-                        className={cn(
-                          'min-h-8 px-3 font-mono text-xs uppercase tracking-wider inline-flex items-center gap-1.5 cursor-pointer border',
-                          consoleTab === 'findings'
-                            ? 'border-[var(--color-line-strong)] bg-[var(--color-canvas)] text-[var(--color-ink)]'
-                            : 'border-transparent text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
-                        )}
-                      >
-                        <Wrench className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>Уязвимости ({findings.length})</span>
-                      </button>
-                    </div>
-                    <span className="font-mono text-[11px] text-[var(--color-muted-soft)] hidden sm:inline">
-                      {activeTarget || 'demo/kz-fintech-app ready'}
-                    </span>
-                  </div>
+                    );
+                  })}
+                </div>
+              </div>
 
-                  {consoleTab === 'findings' && findings.length > 0 ? (
-                    <div
-                      tabIndex={0}
-                      role="region"
-                      aria-labelledby="findings-caption"
-                      className="table-wrapper cg-scroll bg-[#111111] text-[#ededed] border border-[var(--color-line)] flex-1"
-                    >
-                      <table className="findings-table w-full table-fixed text-left text-xs">
-                        <caption id="findings-caption" className="visually-hidden">
-                          Обнаруженные уязвимости исходного кода
-                        </caption>
-                        <thead>
-                          <tr className="text-[#8f8f8f] border-b border-[#242424] font-mono uppercase text-[11px]">
-                            <th scope="col" className="p-3 font-medium w-[92px]">Уровень</th>
-                            <th scope="col" className="p-3 font-medium">Уязвимость и файл</th>
-                            <th scope="col" className="p-3 font-medium w-[90px]">CWE</th>
-                            <th scope="col" className="p-3 font-medium w-[112px] text-right">Патч</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#242424]">
-                          {findings.map((f, idx) => (
-                            <tr key={`${f.id}-${idx}`} className="hover:bg-[#181818] transition-colors">
-                              <td data-label="Уровень" className="p-3 whitespace-nowrap align-top">
-                                <span
-                                  className={cn(
-                                    'px-2 py-0.5 font-mono text-[11px] uppercase',
-                                    SEVERITY_BADGE[f.severity] || SEVERITY_BADGE.INFO
-                                  )}
-                                >
-                                  {f.severity}
-                                </span>
-                              </td>
-                              <th scope="row" className="p-3 font-normal align-top min-w-0">
-                                <div className="font-medium text-[#ededed] break-words">{f.title}</div>
-                                <div className="font-mono text-[11px] text-[#8f8f8f] mt-0.5 break-all">
-                                  {f.file_path}:{f.line_start || 1} · {f.scanner}
-                                </div>
-                              </th>
-                              <td
-                                data-label="CWE"
-                                title={f.cwe?.join(', ') || ''}
-                                className="p-3 font-mono text-[#8f8f8f] whitespace-nowrap align-top truncate"
-                              >
-                                {formatCweShort(f.cwe)}
-                              </td>
-                              <td data-label="Патч" className="p-3 text-right whitespace-nowrap align-top">
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenRemediation(f)}
-                                  className="min-h-8 px-2.5 py-1 bg-[#242424] hover:bg-[#e94a32] text-[#ededed] hover:text-white font-mono text-[11px] uppercase tracking-wider inline-flex items-center gap-1 transition-colors cursor-pointer"
-                                >
-                                  <Wrench className="w-3 h-3" aria-hidden="true" />
-                                  <span>Патч</span>
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <TerminalWindow
-                      events={events}
-                      targetLabel={activeTarget}
-                      className="flex-1"
+              {/* Unified Obsidian Workbench Card */}
+              <div className="bg-[var(--color-paper)] border border-[var(--color-line)] rounded-2xl overflow-hidden shadow-[0_24px_48px_-24px_rgba(0,0,0,0.45)]">
+                <div className="grid grid-cols-1 lg:grid-cols-12">
+                  {/* Left: Spacious Native Dark AI Chat */}
+                  <div className="lg:col-span-7 min-w-0">
+                    <AiCopilotChat
+                      messages={messages}
+                      input={input}
+                      onInputChange={setInput}
+                      onSubmit={handleSendMessage}
+                      onQuickPrompt={(prompt) => sendChatText(prompt)}
+                      onResetChat={handleResetChat}
+                      onUploadZip={handleZipUpload}
+                      isTyping={isTyping}
+                      isScanning={isScanning}
+                      ollamaOnline={ollamaOnline}
+                      ollamaModel={ollamaModel}
+                      activeTarget={activeTarget}
                     />
-                  )}
+                  </div>
+
+                  {/* Right: Contextual Inspector Panel */}
+                  <aside
+                    aria-label="Инспектор аудита и авторства"
+                    className="lg:col-span-5 border-t lg:border-t-0 lg:border-l border-[var(--color-line)] bg-[var(--color-paper)] p-5 flex flex-col justify-between gap-4 min-w-0"
+                  >
+                    {inspectorTab === 'authorship' ? (
+                      <AuthorshipPanel
+                        targetInput={verifyTarget}
+                        onTargetInputChange={setVerifyTarget}
+                        authorship={authorship}
+                        onAuthorshipChange={setAuthorship}
+                        requireOwnership={requireOwnership}
+                        onRequireOwnershipChange={setRequireOwnership}
+                        onAskAi={(q) => sendChatText(q)}
+                      />
+                    ) : inspectorTab === 'scanner' ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+                            АУДИТ РЕПОЗИТОРИЯ
+                          </span>
+                          <span className="font-mono text-[11px] text-[var(--color-faint)]">
+                            {auditAuthorshipLabel}
+                          </span>
+                        </div>
+
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            startScan(repoScanUrl || verifyTarget);
+                          }}
+                          className="space-y-2"
+                        >
+                          <label htmlFor="cg-repo-url" className="visually-hidden">
+                            GitHub URL для аудита
+                          </label>
+                          <input
+                            id="cg-repo-url"
+                            type="text"
+                            value={repoScanUrl}
+                            onChange={(e) => setRepoScanUrl(e.target.value)}
+                            placeholder="https://github.com/owner/repo"
+                            className="w-full min-h-9 px-3 py-1.5 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] focus:border-[#e94a32] text-xs font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              type="submit"
+                              disabled={isScanning}
+                              className="flex-1 min-h-9 px-3 py-1.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Terminal className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>{isScanning ? 'Сканирую...' : 'Сканировать URL'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDemoScan}
+                              disabled={isScanning}
+                              className="min-h-9 px-3 py-1.5 rounded-full border border-[var(--color-line-strong)] hover:border-[var(--color-ink)] font-mono text-xs transition-colors cursor-pointer"
+                            >
+                              Демо KZ
+                            </button>
+                          </div>
+                        </form>
+
+                        <TerminalWindow events={events} targetLabel={activeTarget} />
+                      </div>
+                    ) : inspectorTab === 'findings' ? (
+                      <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                        <SecurityScore
+                          score={securityScore}
+                          grade={grade}
+                          elapsedTime={elapsedTime}
+                          vulnerabilities={vulnerabilities}
+                          isScanning={isScanning}
+                          reportPdfUrl={reportPdfUrl}
+                          reportMdUrl={reportMdUrl}
+                        />
+
+                        {findings.length > 0 ? (
+                          <div
+                            tabIndex={0}
+                            role="region"
+                            aria-labelledby="findings-caption"
+                            className="table-wrapper cg-scroll border border-[var(--color-line)] rounded-xl bg-[var(--color-panel)] flex-1"
+                          >
+                            <table className="findings-table w-full table-fixed text-left text-xs">
+                              <caption id="findings-caption" className="visually-hidden">
+                                Обнаруженные уязвимости исходного кода
+                              </caption>
+                              <thead>
+                                <tr className="text-[var(--color-muted-soft)] border-b border-[var(--color-line)] font-mono text-[10.5px] uppercase">
+                                  <th scope="col" className="p-2.5 font-medium w-[78px]">Уровень</th>
+                                  <th scope="col" className="p-2.5 font-medium">Уязвимость</th>
+                                  <th scope="col" className="p-2.5 font-medium w-[72px] text-right">Патч</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[var(--color-line)]">
+                                {findings.map((f, idx) => (
+                                  <tr key={`${f.id}-${idx}`} className="hover:bg-[var(--color-raised)]/60 transition-colors">
+                                    <td data-label="Уровень" className="p-2.5 align-top whitespace-nowrap">
+                                      <span className={cn('px-1.5 py-0.5 rounded font-mono text-[10px]', SEVERITY_BADGE[f.severity] || SEVERITY_BADGE.INFO)}>
+                                        {f.severity}
+                                      </span>
+                                    </td>
+                                    <th scope="row" className="p-2.5 font-normal align-top min-w-0">
+                                      <div className="text-[var(--color-ink)] font-medium break-words leading-snug">{f.title}</div>
+                                      <div className="font-mono text-[10.5px] text-[var(--color-muted-soft)] mt-0.5 break-all">
+                                        {f.file_path}:{f.line_start || 1} · {formatCweShort(f.cwe)}
+                                      </div>
+                                    </th>
+                                    <td data-label="Патч" className="p-2.5 align-top text-right whitespace-nowrap">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenRemediation(f)}
+                                        className="min-h-7 px-2.5 py-1 rounded-full bg-[var(--color-raised)] hover:bg-[#e94a32] border border-[var(--color-line)] text-[var(--color-ink)] hover:text-white font-mono text-[10.5px] inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                      >
+                                        <Wrench className="w-3 h-3" aria-hidden="true" />
+                                        <span>Патч</span>
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 rounded-xl border border-dashed border-[var(--color-line)] text-xs font-mono text-[var(--color-muted-soft)]">
+                            <p>Уязвимости появятся здесь после сканирования GitHub, ZIP или Демо KZ Fintech.</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      /* Default Overview matching prtner drafting / routing card */
+                      <div className="space-y-4 flex-1 flex flex-col justify-between">
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+                            <span>DRAFT · TELEMETRY</span>
+                            <span className={authorship.verified ? 'text-[#3fbf7f]' : 'text-[var(--color-faint)]'}>
+                              {authorship.verified ? `OWNER @${authorship.actor}` : 'PUBLIC MODE'}
+                            </span>
+                          </div>
+
+                          <SecurityScore
+                            score={securityScore}
+                            grade={grade}
+                            elapsedTime={elapsedTime}
+                            vulnerabilities={vulnerabilities}
+                            isScanning={isScanning}
+                            reportPdfUrl={reportPdfUrl}
+                            reportMdUrl={reportMdUrl}
+                          />
+
+                          <MetricsDashboard
+                            scannedFiles={scannedFiles}
+                            totalFiles={totalFiles}
+                            vulnerabilities={vulnerabilities}
+                            elapsedTime={elapsedTime}
+                            ollamaOnline={ollamaOnline}
+                            ollamaModel={ollamaModel}
+                            isScanning={isScanning}
+                          />
+
+                          {auditSummary && (
+                            <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3.5 text-xs text-[var(--color-body-text)] leading-relaxed">
+                              <div className="font-mono text-[10.5px] uppercase tracking-wider text-[var(--color-muted-soft)] mb-1">
+                                ЗАКЛЮЧЕНИЕ АУДИТОРА
+                              </div>
+                              {auditSummary}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={handleDemoScan}
+                            disabled={isScanning}
+                            className="min-h-9 px-3 py-2 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Play className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Демо KZ</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setInspectorTab('authorship')}
+                            className="min-h-9 px-3 py-2 rounded-full border border-[var(--color-line-strong)] hover:border-[var(--color-ink)] bg-[var(--color-panel)] text-[var(--color-ink)] font-mono text-xs inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 text-[#3fbf7f]" aria-hidden="true" />
+                            <span>Авторство</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </aside>
+                </div>
+
+                {/* Bottom 4-step Segmented Pipeline Progress Bar echoing SAVED | READ | DRAFT | ROUTE */}
+                <div className="border-t border-[var(--color-line)] grid grid-cols-2 sm:grid-cols-4 font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)] bg-[var(--color-canvas)]">
+                  {[
+                    { step: 1, label: '01 АВТОРСТВО' },
+                    { step: 2, label: '02 КЛОН / ZIP' },
+                    { step: 3, label: '03 SAST + TAINT' },
+                    { step: 4, label: '04 ИИ + PDF' },
+                  ].map((s) => {
+                    const active = pipelineStage >= s.step;
+                    return (
+                      <div
+                        key={s.step}
+                        className={cn(
+                          'py-2.5 text-center border-r last:border-r-0 border-[var(--color-line)] border-b-2 transition-colors',
+                          active ? 'border-b-[#e94a32] text-[var(--color-ink)]' : 'border-b-transparent'
+                        )}
+                      >
+                        {s.label}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            )}
+            </div>
           </div>
         </section>
 
-        {/* Bottom Architectural Architecture Band (prtner.ai «Почему Medeo» rhythm) */}
-        <section
-          aria-label="Приватность и архитектура"
-          className="border-t border-[var(--color-line)] bg-[var(--color-paper)]/50"
-        >
-          <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8 py-10 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Architecture & Case Band */}
+        <section aria-label="On-premise архитектура" className="border-b border-[var(--color-line)]">
+          <div className="max-w-[1160px] mx-auto border-x border-[var(--color-line)] reg-frame px-6 sm:px-10 py-12 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             <div className="lg:col-span-6 space-y-3">
-              <span className="font-mono text-xs uppercase tracking-wider text-[#e94a32]">
-                03 · ПОЧЕМУ ON-PREMISE
-              </span>
-              <h2 className="font-serif text-3xl sm:text-4xl tracking-tight leading-tight">
-                Банкам и госсектору нельзя отправлять код в публичные облака
+              <div className="font-mono text-xs uppercase tracking-wider text-[#e94a32]">
+                ON-PREMISE · 94-V ФЗ И БАНКИ РК
+              </div>
+              <h2 className="font-sans font-normal text-2xl sm:text-3xl tracking-tight">
+                Код и персональные данные не покидают ваш сервер
               </h2>
-              <p className="text-sm sm:text-base text-[var(--color-body-text)] leading-relaxed max-w-[60ch]">
-                Любой публичный ИИ-помощник нарушает внутренние политики безопасности. Commit Guardian разворачивается
-                в закрытом контуре Docker или на выделенном GPU-сервере: код, ИИН/БИН клиентов и отчёты остаются
-                строго внутри периметра компании.
+              <p className="text-sm sm:text-base text-[var(--color-body-text)] leading-relaxed max-w-[56ch]">
+                Политика <code className="font-mono text-xs">.aegis.yml</code>, поиск утечек ИИН/БИН, проверка прав и
+                подтверждение авторства перед аудитом, локальный инференс на Qwen2.5-Coder (Ollama GPU) и выгрузка
+                PDF-отчётов в Telegram или PR.
               </p>
             </div>
 
-            <div className="lg:col-span-6 bg-[#f4f4f0] text-[#141414] border border-[var(--color-line)] p-6 space-y-3">
-              <div className="font-mono text-xs uppercase tracking-wider text-[#6b6a65]">
-                АРХИТЕКТУРА B2B ВНЕДРЕНИЯ
+            <div className="lg:col-span-6 bg-[var(--color-panel)] border border-[var(--color-line)] rounded-xl p-6 font-mono text-xs sm:text-sm space-y-2.5">
+              <div className="flex items-baseline justify-between gap-2 pb-2 border-b border-[var(--color-line)]">
+                <span className="text-[var(--color-muted-soft)]">CASE · FINTECH AUDIT</span>
+                <span className="text-[#3fbf7f]">AIR-GAPPED</span>
               </div>
-              <div className="space-y-2 font-mono text-xs sm:text-sm">
-                <div className="flex items-baseline gap-2">
-                  <span>Статический движок</span>
-                  <span className="spec-leader" aria-hidden="true" />
-                  <span>Semgrep · Bandit · Custom AST</span>
-                </div>
-                <div className="flex items-baseline gap-2">
-                  <span>ИИ-копилот и фиксы</span>
-                  <span className="spec-leader" aria-hidden="true" />
-                  <span>Ollama Qwen2.5-Coder 14B/32B</span>
-                </div>
-                <div className="flex items-baseline gap-2">
-                  <span>Алерты команде</span>
-                  <span className="spec-leader" aria-hidden="true" />
-                  <span>GitHub PR · Telegram PDF</span>
-                </div>
-                <div className="flex items-baseline gap-2">
-                  <span>Тарифы для РК</span>
-                  <span className="spec-leader" aria-hidden="true" />
-                  <span>от 0 ₸ (Pilot) до Enterprise</span>
-                </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[var(--color-muted-soft)]">Сканеры</span>
+                <span>Semgrep · Bandit · Taint AST</span>
               </div>
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={() => pricingDialogRef.current?.showModal()}
-                  className="min-h-10 px-4 py-2 bg-[#141414] hover:bg-[#e94a32] text-[#faf9f5] font-mono text-xs uppercase tracking-wider transition-colors cursor-pointer"
-                >
-                  Смотреть тарифы и SLA
-                </button>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[var(--color-muted-soft)]">Проверка авторства</span>
+                <span>Token · Commit Challenge · DNS TXT</span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[var(--color-muted-soft)]">Локальный AI</span>
+                <span>{ollamaModel}</span>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[var(--color-muted-soft)]">Облачный трафик</span>
+                <span className="text-[#3fbf7f]">0 байт</span>
               </div>
             </div>
           </div>
         </section>
       </main>
 
-      <footer className="border-t border-[var(--color-line)] bg-[var(--color-canvas)] py-5">
-        <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-3 font-mono text-xs text-[var(--color-muted-soft)]">
-          <div>
-            commit<span className="text-[#e94a32]">.</span>guardian · On-Premise DevSecOps Security
-          </div>
-          <div className="flex items-center gap-4">
-            <a href="/dashboard" className="hover:text-[var(--color-ink)] transition-colors">
-              /dashboard
-            </a>
-            <a href="/docs" className="hover:text-[var(--color-ink)] transition-colors">
-              /docs API
-            </a>
-            <span>Типографика: Medeo OFL 1.1</span>
-          </div>
+      <footer className="max-w-[1160px] w-full mx-auto border-x border-[var(--color-line)] px-6 sm:px-10 py-8 flex flex-wrap items-center justify-between gap-4 font-mono text-xs text-[var(--color-muted-soft)]">
+        <div className="flex items-center gap-2">
+          <span>commit.guardian</span>
+          <span>·</span>
+          <span>On-Premise DevSecOps</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-5">
+          <a href="/dashboard" className="hover:text-[var(--color-ink)] transition-colors">
+            /dashboard
+          </a>
+          <a href="/docs" className="hover:text-[var(--color-ink)] transition-colors">
+            /docs API
+          </a>
+          <button
+            type="button"
+            onClick={() => pricingDialogRef.current?.showModal()}
+            className="hover:text-[var(--color-ink)] transition-colors cursor-pointer"
+          >
+            Тарифы ₸
+          </button>
+          <span>Шрифт: Medeo OFL 1.1</span>
         </div>
       </footer>
 
-      {/* Native <dialog>: AI Remediation & Diff Modal */}
+      {/* Native <dialog>: AI Remediation & Optional PR */}
       <dialog
         ref={fixDialogRef}
         aria-labelledby="remediation-dialog-title"
-        className="m-auto w-[min(92vw,740px)] border border-[#242424] bg-[#111111] text-[#ededed] p-6 shadow-2xl"
+        className="m-auto w-[min(92vw,740px)] rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-ink)] p-6 shadow-2xl"
       >
-        <div className="flex items-start justify-between gap-4 mb-4 pb-3 border-b border-[#242424]">
+        <div className="flex items-start justify-between gap-4 mb-4 pb-3 border-b border-[var(--color-line)]">
           <div>
-            <h2 id="remediation-dialog-title" className="font-serif text-2xl">
+            <h2 id="remediation-dialog-title" className="font-sans text-xl font-medium">
               {selectedFinding?.title || 'Патч безопасности'}
             </h2>
             {selectedFinding && (
-              <p className="text-xs font-mono text-[#8f8f8f] mt-1">
-                {selectedFinding.file_path}:{selectedFinding.line_start || 1} ·{' '}
-                {selectedFinding.cwe?.join(', ') || 'SAST'}
+              <p className="text-xs font-mono text-[var(--color-muted-soft)] mt-1">
+                {selectedFinding.file_path}:{selectedFinding.line_start || 1} · {formatCweShort(selectedFinding.cwe)}
               </p>
             )}
           </div>
@@ -1071,7 +1108,7 @@ export default function Home() {
             <button
               type="submit"
               aria-label="Закрыть окно патча"
-              className="min-h-9 min-w-9 p-1.5 border border-[#242424] hover:border-[#e94a32] text-[#8f8f8f] hover:text-white cursor-pointer inline-flex items-center justify-center"
+              className="min-h-9 min-w-9 p-1.5 rounded-full border border-[var(--color-line)] hover:border-[#e94a32] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer inline-flex items-center justify-center"
             >
               <X className="w-4 h-4" aria-hidden="true" />
             </button>
@@ -1079,20 +1116,20 @@ export default function Home() {
         </div>
 
         {isFixing ? (
-          <div className="py-8 text-sm font-mono text-[#8f8f8f]">
+          <div className="py-8 text-sm font-mono text-[var(--color-muted-soft)]">
             Генерирую безопасный патч локальным движком...
           </div>
         ) : remediation ? (
           <div className="space-y-4 text-sm">
             <div>
-              <div className="text-xs font-mono uppercase text-[#8f8f8f] mb-1">Причина и риск</div>
-              <p className="text-[#ededed] leading-relaxed">{remediation.explanation_ru}</p>
+              <div className="text-xs font-mono uppercase text-[var(--color-muted-soft)] mb-1">Причина и риск</div>
+              <p className="text-[var(--color-ink)] leading-relaxed">{remediation.explanation_ru}</p>
               <p className="text-[#e94a32] text-xs mt-1">{remediation.impact_analysis}</p>
             </div>
             {remediation.remediation_steps.length > 0 && (
               <div>
-                <div className="text-xs font-mono uppercase text-[#8f8f8f] mb-1">Как устранить</div>
-                <ul className="list-disc pl-5 space-y-1 text-xs text-[#d6d3cd]">
+                <div className="text-xs font-mono uppercase text-[var(--color-muted-soft)] mb-1">Как устранить</div>
+                <ul className="list-disc pl-5 space-y-1 text-xs text-[var(--color-body-text)]">
                   {remediation.remediation_steps.map((step, i) => (
                     <li key={i}>{step}</li>
                   ))}
@@ -1100,31 +1137,46 @@ export default function Home() {
               </div>
             )}
             <div>
-              <div className="text-xs font-mono uppercase text-[#8f8f8f] mb-1">Безопасный код</div>
-              <pre className="p-3 bg-[#0a0a0a] border border-[#242424] font-mono text-xs overflow-x-auto text-emerald-400">
+              <div className="text-xs font-mono uppercase text-[var(--color-muted-soft)] mb-1">Безопасный код</div>
+              <pre className="p-3 rounded-lg bg-[#0a0a0a] border border-[#232323] font-mono text-xs overflow-x-auto text-[#3fbf7f]">
                 {remediation.fixed_code}
               </pre>
             </div>
+
+            {authorship.canCreatePr && authorship.githubToken && activeTarget.includes('/') && !activeTarget.startsWith('demo/') && !activeTarget.startsWith('upload/') && (
+              <div className="pt-2 border-t border-[var(--color-line)] flex flex-wrap items-center justify-between gap-3">
+                <button
+                  type="button"
+                  disabled={creatingPr}
+                  onClick={handleCreatePR}
+                  className="min-h-9 px-4 py-1.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <GitPullRequest className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{creatingPr ? 'Создаю PR...' : 'Создать Pull Request'}</span>
+                </button>
+                {prStatus && <span className="font-mono text-xs text-[#3fbf7f] break-all">{prStatus}</span>}
+              </div>
+            )}
           </div>
         ) : (
-          <p className="text-sm text-[#8f8f8f]">
+          <p className="text-sm text-[var(--color-muted-soft)]">
             {selectedFinding?.recommendation || selectedFinding?.description || 'Не удалось получить патч.'}
           </p>
         )}
       </dialog>
 
-      {/* Native <dialog>: On-Premise Architecture & KZ B2B Pricing */}
+      {/* Native <dialog>: B2B On-Premise Pricing */}
       <dialog
         ref={pricingDialogRef}
         aria-labelledby="pricing-dialog-title"
-        className="m-auto w-[min(92vw,780px)] border border-[#242424] bg-[#111111] text-[#ededed] p-6 shadow-2xl"
+        className="m-auto w-[min(92vw,780px)] rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-ink)] p-6 shadow-2xl"
       >
-        <div className="flex items-start justify-between gap-4 mb-5 pb-3 border-b border-[#242424]">
+        <div className="flex items-start justify-between gap-4 mb-5 pb-3 border-b border-[var(--color-line)]">
           <div>
-            <h2 id="pricing-dialog-title" className="font-serif text-2xl">
+            <h2 id="pricing-dialog-title" className="font-sans text-2xl font-medium">
               On-Premise архитектура и тарифы B2B
             </h2>
-            <p className="text-xs text-[#8f8f8f] mt-1">
+            <p className="text-xs text-[var(--color-muted-soft)] mt-1">
               Модель B2B-подписки внутри закрытого контура компании: исходный код и ПДн не покидают серверы заказчика.
             </p>
           </div>
@@ -1132,7 +1184,7 @@ export default function Home() {
             <button
               type="submit"
               aria-label="Закрыть тарифы"
-              className="min-h-9 min-w-9 p-1.5 border border-[#242424] hover:border-[#e94a32] text-[#8f8f8f] hover:text-white cursor-pointer inline-flex items-center justify-center"
+              className="min-h-9 min-w-9 p-1.5 rounded-full border border-[var(--color-line)] hover:border-[#e94a32] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer inline-flex items-center justify-center"
             >
               <X className="w-4 h-4" aria-hidden="true" />
             </button>
@@ -1140,25 +1192,25 @@ export default function Home() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div className="border border-[#242424] bg-[#161616] p-4">
-            <div className="font-mono text-xs text-emerald-400">PILOT</div>
+          <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
+            <div className="font-mono text-xs text-[#3fbf7f]">PILOT</div>
             <div className="text-xl font-medium font-mono mt-1 tabular-nums">0 ₸ / 14 дней</div>
-            <p className="text-xs text-[#8f8f8f] mt-2 leading-relaxed">
+            <p className="text-xs text-[var(--color-muted-soft)] mt-2 leading-relaxed">
               1–2 репозитория, Docker-развёртывание, алерты в Telegram и Compliance PDF для команды до 5 разработчиков.
             </p>
           </div>
-          <div className="border border-[#e94a32] bg-[#161616] p-4">
+          <div className="rounded-xl border border-[#e94a32] bg-[var(--color-panel)] p-4">
             <div className="font-mono text-xs text-[#e94a32]">TEAM ON-PREM</div>
             <div className="text-xl font-medium font-mono mt-1 tabular-nums">190 000 ₸ / мес</div>
-            <p className="text-xs text-[#8f8f8f] mt-2 leading-relaxed">
-              До 25 разработчиков, локальная Ollama, политики .aegis.yml (ИИН/ПДн), авто-комментарии в PR и SIEM JSON-логи.
+            <p className="text-xs text-[var(--color-muted-soft)] mt-2 leading-relaxed">
+              До 25 разработчиков, локальная Ollama, политики .aegis.yml (ИИН/ПДн), PR-фиксы и SIEM JSON-логи.
             </p>
           </div>
-          <div className="border border-[#242424] bg-[#161616] p-4">
+          <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
             <div className="font-mono text-xs text-sky-400">ENTERPRISE GOV/FIN</div>
             <div className="text-xl font-medium font-mono mt-1 tabular-nums">от 650 000 ₸ / мес</div>
-            <p className="text-xs text-[#8f8f8f] mt-2 leading-relaxed">
-              Air-gapped контур без выхода в интернет, кастомные правила комплаенса банков и госсектора, SLA и выделенный инстанс.
+            <p className="text-xs text-[var(--color-muted-soft)] mt-2 leading-relaxed">
+              Air-gapped контур без выхода в интернет, кастомные правила комплаенса банков и госсектора, SLA и выделенный GPU.
             </p>
           </div>
         </div>

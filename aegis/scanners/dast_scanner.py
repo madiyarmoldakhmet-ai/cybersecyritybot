@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 from playwright.async_api import async_playwright
 import uuid
 
+from aegis.core.config import settings
 from aegis.scanners.http_dast import HTTPSecurityScanner
 
 logger = logging.getLogger("aegis.dast_scanner")
@@ -28,8 +29,10 @@ class DASTScanner(HTTPSecurityScanner):
         Returns: (True/False, Path to screenshot if triggered)
         """
         temp_id = str(uuid.uuid4())[:8]
-        html_file = Path(f"/tmp/aegis_poc_{temp_id}.html")
-        screenshot_file = Path(f"/tmp/aegis_screenshot_{temp_id}.png")
+        poc_dir = settings.temp_clone_dir / "dast_poc"
+        poc_dir.mkdir(parents=True, exist_ok=True)
+        html_file = poc_dir / f"aegis_poc_{temp_id}.html"
+        screenshot_file = poc_dir / f"aegis_screenshot_{temp_id}.png"
 
         safe_payload_js = json.dumps(payload).replace("</", "<\\/")
         safe_snippet = code_snippet.replace("</script", "<\\/script")

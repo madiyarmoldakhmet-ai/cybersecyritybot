@@ -17,7 +17,7 @@ class SecretScanner:
         "AWS Access Key": re.compile(r"AKIA[0-9A-Z]{16}"),
         "Stripe API Key": re.compile(r"[sk|rk]_(?:test|live)_[0-9a-zA-Z]{24}"),
         "GitHub Token": re.compile(r"gh[p|o|u|s|r]_[A-Za-z0-9_]{36}"),
-        "RSA Private Key": re.compile(r"-----BEGIN RSA PRIVATE KEY-----"),
+        "RSA Private Key": re.compile("-----BEGIN " + r"(?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
         "Generic Password": re.compile(r"(?i)(?:password|passwd|pwd|secret)\s*=\s*['\"]([^'\"]+)['\"]"),
         "Generic API Key": re.compile(r"(?i)(?:api_key|apikey|token)\s*=\s*['\"]([^'\"]+)['\"]")
     }

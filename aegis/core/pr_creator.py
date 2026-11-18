@@ -84,6 +84,10 @@ class PullRequestCreator:
         if not repo_full_name:
             return False, f"Неверный идентификатор репозитория: '{repo_identifier}'", None
 
+        ownership = await OwnershipVerifier.verify_repo_ownership_strict(clean_token, repo_full_name)
+        if not ownership.get("verified") or not ownership.get("can_create_pr"):
+            return False, ownership.get("message", "Недостаточно прав для создания PR в репозитории."), None
+
         def _sync_create_pr() -> Tuple[bool, str, Optional[str]]:
             try:
                 auth = Auth.Token(clean_token)

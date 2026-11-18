@@ -1,14 +1,17 @@
-import asyncio
-import json
 import logging
+import json
+import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+import uuid
 import httpx
 
-from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
-import uuid
+from aegis.scanners.models import ScannerType, Severity, VulnerabilityFinding
 
 logger = logging.getLogger("aegis.sca_scanner")
+
+_REQ_SPEC_RE = re.compile(r"^([A-Za-z0-9._-]+)(?:\[[^\]]+\])?\s*(==|>=|<=|~=|!=|>|<)?\s*([^\s,;]+)?")
+
 
 class SCAScanner:
     """
@@ -18,25 +21,20 @@ class SCAScanner:
 
     OSV_API_URL = "https://api.osv.dev/v1/querybatch"
 
-    def __init__(self):
-        pass
-
     async def scan(self, target_dir: Path) -> List[VulnerabilityFinding]:
         findings: List[VulnerabilityFinding] = []
         target_path = Path(target_dir).resolve()
-        
+
         if not target_path.exists():
             return findings
 
         package_json_path = target_path / "package.json"
         if package_json_path.exists():
-            npm_findings = await self._scan_npm(package_json_path, target_path)
-            findings.extend(npm_findings)
+            findings.extend(await self._scan_npm(package_json_path, target_path))
 
         req_txt_path = target_path / "requirements.txt"
         if req_txt_path.exists():
-            pypi_findings = await self._scan_pypi(req_txt_path, target_path)
-            findings.extend(pypi_findings)
+            findings.extend(await self._scan_pypi(req_txt_path, target_path))
 
         return findings
 
@@ -47,100 +45,105 @@ class SCAScanner:
             data = json.loads(content)
             deps = data.get("dependencies", {})
             dev_deps = data.get("devDependencies", {})
-            
             all_deps = {**deps, **dev_deps}
-            
             if not all_deps:
                 return findings
-            
-            clean_deps = {}
-            for name, version in all_deps.items():
-                clean_v = version.lstrip('^~><=')
-                if clean_v and '*' not in clean_v:
-                    clean_deps[name] = clean_v
 
-            findings = await self._query_osv_batch(clean_deps, "npm", file_path.relative_to(target_dir).as_posix())
-            
+            clean_deps: Dict[str, Tuple[str, int]] = {}
+            for name, version in all_deps.items():
+                clean_v = str(version).lstrip("^~><=")
+                if clean_v and "*" not in clean_v and clean_v[0].isdigit():
+                    clean_deps[name] = (clean_v, 1)
+
+            findings = await self._query_osv_batch(
+                clean_deps, "npm", file_path.relative_to(target_dir).as_posix()
+            )
         except Exception as e:
             logger.error(f"Failed to scan package.json: {e}")
-            
         return findings
 
     async def _scan_pypi(self, file_path: Path, target_dir: Path) -> List[VulnerabilityFinding]:
         findings = []
         try:
             content = file_path.read_text(encoding="utf-8")
-            deps = {}
-            for line in content.splitlines():
-                line = line.strip()
-                if not line or line.startswith('#'):
+            deps: Dict[str, Tuple[str, int]] = {}
+            for line_num, raw_line in enumerate(content.splitlines(), start=1):
+                line = raw_line.split("#", 1)[0].split(";", 1)[0].strip()
+                if not line or line.startswith("-"):
                     continue
-                if '==' in line:
-                    parts = line.split('==')
-                    deps[parts[0].strip()] = parts[1].strip()
-                elif '>=' in line:
-                    parts = line.split('>=')
-                    deps[parts[0].strip()] = parts[1].strip()
-                    
+                match = _REQ_SPEC_RE.match(line)
+                if not match:
+                    continue
+                pkg_name, op, raw_ver = match.group(1), match.group(2), match.group(3)
+                if op in ("==", ">=", "~=") and raw_ver:
+                    version = raw_ver.split(",", 1)[0].strip()
+                    if version and version[0].isdigit():
+                        deps[pkg_name] = (version, line_num)
+
             if deps:
-                findings = await self._query_osv_batch(deps, "PyPI", file_path.relative_to(target_dir).as_posix())
-                
+                findings = await self._query_osv_batch(
+                    deps, "PyPI", file_path.relative_to(target_dir).as_posix()
+                )
         except Exception as e:
             logger.error(f"Failed to scan requirements.txt: {e}")
-            
         return findings
 
-    async def _query_osv_batch(self, packages: Dict[str, str], ecosystem: str, file_rel_path: str) -> List[VulnerabilityFinding]:
+    async def _query_osv_batch(
+        self,
+        packages: Dict[str, Tuple[str, int]],
+        ecosystem: str,
+        file_rel_path: str,
+    ) -> List[VulnerabilityFinding]:
         findings: List[VulnerabilityFinding] = []
-        
         queries = []
-        for name, version in packages.items():
-            queries.append({
-                "package": {"name": name, "ecosystem": ecosystem},
-                "version": version
-            })
-            
+        line_map: List[int] = []
+        for name, (version, line_num) in packages.items():
+            queries.append({"package": {"name": name, "ecosystem": ecosystem}, "version": version})
+            line_map.append(line_num)
+
         if not queries:
             return findings
 
         batch_size = 1000
         for i in range(0, len(queries), batch_size):
-            batch = queries[i:i+batch_size]
+            batch = queries[i : i + batch_size]
+            batch_lines = line_map[i : i + batch_size]
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.post(
-                        self.OSV_API_URL, 
-                        json={"queries": batch}
-                    )
-                    
+                    resp = await client.post(self.OSV_API_URL, json={"queries": batch})
                     if resp.status_code == 200:
                         results = resp.json().get("results", [])
                         for idx, result in enumerate(results):
                             if "vulns" in result:
                                 pkg = batch[idx]["package"]["name"]
                                 ver = batch[idx]["version"]
+                                line_num = batch_lines[idx]
                                 for vuln in result["vulns"]:
-                                    finding = self._parse_osv_vuln(vuln, pkg, ver, file_rel_path)
+                                    finding = self._parse_osv_vuln(vuln, pkg, ver, file_rel_path, line_num)
                                     if finding:
                                         findings.append(finding)
                     else:
                         logger.error(f"OSV API error: {resp.status_code} - {resp.text}")
             except Exception as e:
                 logger.error(f"Failed to query OSV API: {e}")
-                
+
         unique_findings = {f.id: f for f in findings}
         return list(unique_findings.values())
 
-    def _parse_osv_vuln(self, vuln: Dict, pkg_name: str, pkg_version: str, file_path: str) -> Optional[VulnerabilityFinding]:
+    def _parse_osv_vuln(
+        self,
+        vuln: Dict,
+        pkg_name: str,
+        pkg_version: str,
+        file_path: str,
+        line_start: int = 1,
+    ) -> Optional[VulnerabilityFinding]:
         vuln_id = vuln.get("id", str(uuid.uuid4()))
         summary = vuln.get("summary", f"Vulnerability in {pkg_name}")
         details = vuln.get("details", "No details provided by OSV.")
-        
         aliases = vuln.get("aliases", [])
         cves = [a for a in aliases if a.startswith("CVE-")]
-        
         severity = Severity.HIGH if cves else Severity.MEDIUM
-            
         code_snippet = f'"{pkg_name}": "{pkg_version}"'
 
         return VulnerabilityFinding(
@@ -150,9 +153,9 @@ class SCAScanner:
             description=f"Package `{pkg_name}` (v{pkg_version}) is vulnerable.\n\n{details}",
             severity=severity,
             file_path=file_path,
-            line_start=1,
+            line_start=line_start,
             code_snippet=code_snippet,
             cve=cves,
             recommendation="Update the package to a non-vulnerable version.",
-            raw_metadata={"osv_id": vuln_id}
+            raw_metadata={"osv_id": vuln_id},
         )
