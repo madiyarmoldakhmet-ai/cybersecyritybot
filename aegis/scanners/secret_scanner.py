@@ -22,7 +22,7 @@ class SecretScanner:
         "Generic API Key": re.compile(r"(?i)(?:api_key|apikey|token)\s*=\s*['\"]([^'\"]+)['\"]")
     }
 
-    IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build"}
+    IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build", "out", ".next", ".pytest_cache", "temp_scans"}
     IGNORE_EXTENSIONS = {
         ".jpg", ".png", ".gif", ".pdf", ".zip", ".tar", ".gz", ".mp3", ".mp4", ".pyc", ".o", ".so", ".dll", ".exe"
     }

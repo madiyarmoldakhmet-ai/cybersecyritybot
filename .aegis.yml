@@ -1,0 +1,5 @@
+ignore_paths:
+  - "demo_targets/**"
+  - "tests/**"
+severity_threshold: LOW
+ai_filter: false

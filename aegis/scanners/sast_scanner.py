@@ -16,11 +16,12 @@ import os
 import re
 import shutil
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Pattern, Tuple, Union, Set
 
 from aegis.core.config import settings
 from aegis.core.event_bus import ScanEventBus, ScanStarted, FileScanning, CodeAnalyzing, VulnerabilityFound
+from aegis.core.project_config import ProjectConfig, load_config
 from aegis.scanners.ai_filter import AIFalsePositiveFilter
 from aegis.scanners.mobile_scanner import MobileSecurityScanner
 from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
@@ -37,6 +38,8 @@ IGNORED_DIRS = {
     "env",
     "build",
     "dist",
+    "out",
+    ".next",
     ".dart_tool",
     ".idea",
     "__pycache__",
@@ -924,6 +927,100 @@ class SASTScanner:
 
         return await asyncio.to_thread(_run)
 
+    def _apply_project_config(
+        self, findings: List[VulnerabilityFinding], project_cfg: ProjectConfig
+    ) -> List[VulnerabilityFinding]:
+        """Filter findings by .aegis.yml ignore_paths, ignore_rules, and severity_threshold."""
+        sev_rank = {
+            Severity.CRITICAL: 0,
+            Severity.HIGH: 1,
+            Severity.MEDIUM: 2,
+            Severity.LOW: 3,
+            Severity.INFO: 4,
+        }
+        threshold_sev = Severity[project_cfg.severity_threshold.upper()] if project_cfg.severity_threshold.upper() in Severity.__members__ else Severity.LOW
+        max_rank = sev_rank[threshold_sev]
+        ignored_rules = set(project_cfg.ignore_rules or [])
+
+        filtered: List[VulnerabilityFinding] = []
+        for f in findings:
+            if f.id in ignored_rules:
+                continue
+            if sev_rank.get(f.severity, 4) > max_rank:
+                continue
+            rel = f.file_path.replace("\\", "/").lstrip("./")
+            if self._matches_ignore_pattern(rel, project_cfg.ignore_paths):
+                continue
+            filtered.append(f)
+        return filtered
+
+    @staticmethod
+    def _matches_ignore_pattern(rel_path: str, patterns: List[str]) -> bool:
+        if not patterns:
+            return False
+        posix = PurePosixPath(rel_path)
+        for pat in patterns:
+            norm_pat = pat.replace("\\", "/").lstrip("./")
+            if not norm_pat:
+                continue
+            if posix.match(norm_pat):
+                return True
+            if norm_pat.endswith("/**") and (rel_path.startswith(norm_pat[:-2]) or rel_path == norm_pat[:-3]):
+                return True
+        return False
+
+    def _run_custom_rules(self, target_path: Path, project_cfg: ProjectConfig) -> List[VulnerabilityFinding]:
+        """Evaluate repository-level .aegis.yml regex rules cleanly without duplicating file traversal."""
+        if not project_cfg.custom_rules:
+            return []
+
+        compiled_rules = []
+        for rule in project_cfg.custom_rules:
+            try:
+                sev = Severity[rule.severity.upper()] if rule.severity.upper() in Severity.__members__ else Severity.MEDIUM
+                compiled_rules.append((rule, re.compile(rule.pattern), sev))
+            except re.error as exc:
+                logger.warning(f"Skipping invalid custom rule '{rule.id}': {exc}")
+
+        if not compiled_rules:
+            return []
+
+        findings: List[VulnerabilityFinding] = []
+        for root, dirs, files in os.walk(target_path):
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
+            for file in files:
+                file_path = Path(root) / file
+                if file_path.suffix.lower() not in TARGET_EXTENSIONS and not file.startswith(".env"):
+                    continue
+                rel = file_path.relative_to(target_path).as_posix()
+                if self._matches_ignore_pattern(rel, project_cfg.ignore_paths):
+                    continue
+                try:
+                    lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                except Exception:
+                    continue
+                for line_idx, line in enumerate(lines, 1):
+                    for rule, pattern, sev in compiled_rules:
+                        if pattern.search(line):
+                            first_line = max(1, line_idx - 5)
+                            last_line = min(len(lines), line_idx + 5)
+                            findings.append(
+                                VulnerabilityFinding(
+                                    id=rule.id,
+                                    scanner=ScannerType.CUSTOM,
+                                    title=rule.title,
+                                    description=f"Matched project policy rule '{rule.id}' from .aegis.yml.",
+                                    severity=sev,
+                                    file_path=rel,
+                                    line_start=line_idx,
+                                    line_end=line_idx,
+                                    code_snippet="\n".join(lines[first_line - 1 : last_line]),
+                                    cwe=list(rule.cwe),
+                                    recommendation="Remediate according to repository security policy (.aegis.yml).",
+                                )
+                            )
+        return findings
+
     async def scan(self, target_path: Union[str, Path]) -> SASTScanResult:
         """Run multi-language SAST, Mobile DevSecOps rules, Taint Engine, and dependency vulnerability scanners concurrently with zero-noise sanitization."""
         start_time = time.time()
@@ -932,6 +1029,7 @@ class SASTScanner:
         if not path.exists():
             raise FileNotFoundError(f"Target path does not exist: {path}")
 
+        project_cfg = load_config(str(path))
         logger.info(f"Starting multi-language SAST & Mobile security audit for: {path}")
 
         # Emit ScanStarted
@@ -968,9 +1066,10 @@ class SASTScanner:
         
         # Flutter scan runs asynchronously now
         flutter_findings = await flutter_scanner.scan(path)
+        custom_findings = self._run_custom_rules(path, project_cfg)
 
         raw_findings: List[VulnerabilityFinding] = (
-            mobile_findings + bandit_findings + semgrep_findings + ml_findings + taint_findings + sca_findings + (pip_findings or []) + secret_findings + flutter_findings
+            mobile_findings + bandit_findings + semgrep_findings + ml_findings + taint_findings + sca_findings + (pip_findings or []) + secret_findings + flutter_findings + custom_findings
         )
 
         # Normalize paths relative to target_path for consistent deduplication and reports
@@ -981,10 +1080,11 @@ class SASTScanner:
 
         # Apply Zero-Noise False-Positive Sanitizer (Shannon Entropy & Test Filter)
         clean_findings = self.sanitizer.sanitize_findings(raw_findings)
+        clean_findings = self._apply_project_config(clean_findings, project_cfg)
 
-        # Apply AI-Assisted Smart Filter to drop semantic false positives
+        # Apply AI-Assisted Smart Filter to drop semantic false positives when enabled by policy
         ai_filter = AIFalsePositiveFilter()
-        if ai_filter.enabled:
+        if project_cfg.ai_filter and ai_filter.enabled:
             logger.info("Running AI-Assisted Smart Filter on findings...")
             clean_findings = await ai_filter.filter_findings(clean_findings)
 

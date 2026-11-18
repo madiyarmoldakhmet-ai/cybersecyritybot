@@ -1,0 +1,8 @@
+severity_threshold: LOW
+ai_filter: false
+custom_rules:
+  - id: unmasked-kz-iin-log
+    pattern: "logger\\.(info|debug|warning)\\([^)]*\\biin\\b"
+    title: "Unmasked Kazakhstan IIN in application logs"
+    severity: HIGH
+    cwe: ["CWE-532"]
