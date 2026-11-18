@@ -71,7 +71,7 @@ export function TerminalWindow({ events, className }: TerminalWindowProps) {
           <div className="w-3 h-3 rounded-full bg-yellow-500" />
           <div className="w-3 h-3 rounded-full bg-green-500" />
         </div>
-        <span className="text-xs text-slate-400 font-mono tracking-wider">AEGIS.OS // SCANNER_TERMINAL</span>
+        <span className="text-xs text-slate-400 font-mono tracking-wider">COMMIT-GUARDIAN // ON-PREM_SCANNER</span>
       </div>
 
       {/* Terminal Content */}
@@ -99,7 +99,7 @@ export function TerminalWindow({ events, className }: TerminalWindowProps) {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-slate-500 text-xs">
-                      [{new Date(event.timestamp || Date.now()).toLocaleTimeString()}]
+                      [{event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : 'LIVE'}]
                     </span>
                     <span className={cn(
                       "font-semibold uppercase tracking-wider text-xs",

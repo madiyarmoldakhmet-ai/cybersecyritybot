@@ -6,74 +6,71 @@ import { ShieldAlert, ShieldCheck } from 'lucide-react';
 
 interface SecurityScoreProps {
   score: number;
+  grade?: string;
   className?: string;
 }
 
-export function SecurityScore({ score, className }: SecurityScoreProps) {
-  // Score is 0-100 (100 = perfect)
+export function SecurityScore({ score, grade, className }: SecurityScoreProps) {
   const isPerfect = score === 100;
   const isGood = score >= 80;
   const isWarning = score >= 50 && score < 80;
-  const isDanger = score < 50;
 
-  const colorClass = isPerfect || isGood 
-    ? 'text-emerald-400 stroke-emerald-400' 
-    : isWarning 
-    ? 'text-yellow-400 stroke-yellow-400' 
-    : 'text-red-500 stroke-red-500';
+  const colorClass =
+    isPerfect || isGood
+      ? 'text-emerald-400 stroke-emerald-400'
+      : isWarning
+      ? 'text-amber-400 stroke-amber-400'
+      : 'text-red-400 stroke-red-400';
 
-  const circumference = 2 * Math.PI * 45; // r=45
-  const strokeDashoffset = circumference - (score / 100) * circumference;
+  const circumference = 2 * Math.PI * 42;
+  const strokeDashoffset = circumference - (Math.max(0, Math.min(100, score)) / 100) * circumference;
+
+  const label = grade
+    ? `Grade ${grade} · ${isPerfect || isGood ? 'Безопасно' : isWarning ? 'Нужен фикс' : 'Критичный риск'}`
+    : isPerfect
+    ? 'Отлично'
+    : isGood
+    ? 'Хорошо'
+    : isWarning
+    ? 'Средний риск'
+    : 'Критичный риск';
 
   return (
-    <div className={cn("bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col items-center justify-center relative", className)}>
-      <div className="absolute top-4 left-4 text-slate-400 text-sm font-medium">Security Score</div>
-      
-      <div className="relative w-40 h-40 mt-4 flex items-center justify-center">
-        {/* Background Circle */}
-        <svg className="absolute w-full h-full -rotate-90" viewBox="0 0 100 100">
-          <circle
-            cx="50"
-            cy="50"
-            r="45"
-            fill="none"
-            strokeWidth="8"
-            className="stroke-slate-800"
-          />
-          {/* Progress Circle */}
+    <div className={cn('bg-[#1f1e1b] border border-[#2b2926] rounded-xl p-4 flex items-center gap-5', className)}>
+      <div className="relative w-24 h-24 shrink-0 flex items-center justify-center">
+        <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="42" fill="none" strokeWidth="8" className="stroke-[#2b2926]" />
           <motion.circle
             cx="50"
             cy="50"
-            r="45"
+            r="42"
             fill="none"
             strokeWidth="8"
             className={colorClass}
             strokeLinecap="round"
             initial={{ strokeDashoffset: circumference }}
             animate={{ strokeDashoffset }}
-            transition={{ duration: 1, ease: "easeOut" }}
-            style={{
-              strokeDasharray: circumference,
-            }}
+            transition={{ duration: 0.7, ease: 'easeOut' }}
+            style={{ strokeDasharray: circumference }}
           />
         </svg>
-
-        <div className="absolute flex flex-col items-center justify-center">
-          <div className={cn("text-4xl font-bold font-mono", colorClass.split(' ')[0])}>
+        <div className="absolute flex flex-col items-center">
+          <span className={cn('text-2xl font-bold font-mono leading-none', colorClass.split(' ')[0])}>
             {score}
-          </div>
+          </span>
+          <span className="text-[10px] text-[#8e8b82] font-mono mt-0.5">/ 100</span>
         </div>
       </div>
 
-      <div className="mt-6 flex items-center gap-2">
-        {isPerfect || isGood ? (
-          <ShieldCheck className="w-5 h-5 text-emerald-400" />
-        ) : (
-          <ShieldAlert className={cn("w-5 h-5", colorClass.split(' ')[0])} />
-        )}
-        <span className={cn("font-medium", colorClass.split(' ')[0])}>
-          {isPerfect ? "Perfect" : isGood ? "Good" : isWarning ? "Warning" : "Critical Risk"}
-        </span>
+      <div className="min-w-0">
+        <div className="text-xs font-mono uppercase tracking-wider text-[#a09d96]">Security Score</div>
+        <div className={cn('flex items-center gap-1.5 font-semibold text-base mt-1', colorClass.split(' ')[0])}>
+          {isGood ? <ShieldCheck className="w-4 h-4 shrink-0" /> : <ShieldAlert className="w-4 h-4 shrink-0" />}
+          <span className="truncate">{label}</span>
+        </div>
+        <p className="text-xs text-[#a09d96] mt-1">
+          Оценка на основе критичности находок SAST, Taint и Secret сканеров.
+        </p>
       </div>
     </div>
   );

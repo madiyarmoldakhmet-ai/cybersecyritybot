@@ -6,23 +6,24 @@
   --color-primary-active: #a9583e;
   --color-ink: var(--fg-ink);
   --color-body-text: var(--fg-body);
-  
+
   --color-surface-dark: #181715;
   --color-surface-dark-soft: #1f1e1b;
   --color-surface-card: var(--bg-surface-card);
   --color-surface-cream-strong: var(--bg-surface-cream-strong);
   --color-surface-input: var(--bg-surface-input);
-  
+
   --color-on-dark: #faf9f5;
   --color-on-dark-soft: #a09d96;
   --color-muted-soft: var(--fg-muted-soft);
-  
+
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-serif: "EB Garamond", Georgia, "Times New Roman", serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 :root {
+  color-scheme: light dark;
   --bg-canvas: #faf9f5;
   --fg-ink: #141413;
   --fg-body: #3d3d3a;
@@ -32,17 +33,116 @@
   --fg-muted-soft: #8e8b82;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --bg-canvas: #141413;
+    --fg-ink: #faf9f5;
+    --fg-body: #a09d96;
+    --bg-surface-card: #1f1e1b;
+    --bg-surface-cream-strong: #252320;
+    --bg-surface-input: #181715;
+    --fg-muted-soft: #8e8b82;
+  }
+}
+
 .dark {
+  color-scheme: dark;
   --bg-canvas: #141413;
   --fg-ink: #faf9f5;
   --fg-body: #a09d96;
   --bg-surface-card: #1f1e1b;
   --bg-surface-cream-strong: #252320;
   --bg-surface-input: #181715;
-  --fg-muted-soft: #6c6a64;
+  --fg-muted-soft: #8e8b82;
+}
+
+.light {
+  color-scheme: light;
 }
 
 body {
   background: var(--bg-canvas);
   color: var(--fg-ink);
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+[tabindex="0"]:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Native top-layer modal scroll containment (see dialog guide) */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  background: rgba(15, 14, 13, 0.72);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+/* Semantic current-page marker (color + underline border for WCAG 1.4.1) */
+.nav-link[aria-current="page"] {
+  color: var(--color-primary);
+  border-bottom: 2px solid var(--color-primary);
+  padding-bottom: 2px;
+}
+
+/* Responsive findings table with sticky header & container-query stacked cards */
+.table-wrapper {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: min(440px, 65dvh);
+  container-type: inline-size;
+}
+
+.findings-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.findings-table thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  background: #181715;
+}
+
+@container (width < 580px) {
+  .findings-table,
+  .findings-table thead,
+  .findings-table tbody,
+  .findings-table tr,
+  .findings-table th,
+  .findings-table td {
+    display: block;
+  }
+
+  .findings-table thead {
+    display: none;
+  }
+
+  .findings-table tbody tr {
+    margin-block-end: 0.75rem;
+    border: 1px solid #2b2926;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    background: #181715;
+  }
+
+  .findings-table td {
+    padding: 0.25rem 0;
+    border: 0;
+  }
+
+  .findings-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: #8e8b82;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+  }
 }
