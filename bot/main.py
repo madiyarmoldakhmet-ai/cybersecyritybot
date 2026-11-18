@@ -12,17 +12,19 @@ from pathlib import Path
 from typing import Optional
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from aegis.core.archive_utils import safe_extract_zip
+from aegis.core.audit_pipeline import finalize_scan_audit
 from aegis.core.config import settings
 from aegis.core.logging_config import setup_logging
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.models import SASTScanResult, Severity
 from aegis.scanners.sast_scanner import SASTScanner
+from aegis.scanners.security_score import calculate_score, get_grade
 from aegis.core.event_bus import ScanEventBus
 
 setup_logging()
@@ -44,9 +46,12 @@ def _format_scan_summary(result: SASTScanResult) -> str:
     high = result.findings_by_severity.get(Severity.HIGH, 0)
     med = result.findings_by_severity.get(Severity.MEDIUM, 0)
     low = result.findings_by_severity.get(Severity.LOW, 0)
+    score = calculate_score(result.findings)
+    grade, _, _ = get_grade(score)
 
     lines = [
-        f"✅ <b>Сканирование завершено</b> ({result.duration_seconds:.2f} с)",
+        f"✅ <b>[Commit Guardian] Сканирование завершено</b> ({result.duration_seconds:.2f} с)",
+        f"🏅 <b>Security Score:</b> <code>{score}/100 ({html.escape(grade)})</code>",
         f"Найдено уязвимостей: <b>{result.total_findings}</b> "
         f"(🔴 {crit} · 🟠 {high} · 🟡 {med} · 🔵 {low})",
     ]
@@ -63,6 +68,34 @@ def _format_scan_summary(result: SASTScanResult) -> str:
     return "\n".join(lines)
 
 
+async def _deliver_scan_result(
+    message: types.Message,
+    status_msg: types.Message,
+    result: SASTScanResult,
+    repo_name: str,
+    commit_sha: str,
+) -> None:
+    """Persist audit report, update Telegram status message, and attach Compliance PDF."""
+    author = message.from_user.username or str(message.from_user.id) if message.from_user else "telegram-user"
+    artifacts = await finalize_scan_audit(
+        result,
+        repo_name=repo_name,
+        commit_sha=commit_sha,
+        branch="main",
+        author=author,
+    )
+    summary_html = _format_scan_summary(result)
+    if artifacts.summary and artifacts.summary.text:
+        summary_html += f"\n\n🧠 <b>Заключение:</b>\n{html.escape(artifacts.summary.text[:800])}"
+    await status_msg.edit_text(summary_html, parse_mode=ParseMode.HTML)
+
+    if artifacts.report_pdf_path and Path(artifacts.report_pdf_path).is_file():
+        await message.reply_document(
+            FSInputFile(artifacts.report_pdf_path),
+            caption=f"📄 Compliance-отчёт Commit Guardian · Score {artifacts.score}/100 ({artifacts.grade})",
+        )
+
+
 @router.message(CommandStart())
 async def send_welcome(message: types.Message):
     """Handler for the /start command. Sends a welcome message."""
@@ -71,9 +104,16 @@ async def send_welcome(message: types.Message):
         return
 
     welcome_text = (
-        "Aegis — сканер уязвимостей. Отправьте ZIP-архив с кодом или ссылку на публичный GitHub-репозиторий."
+        "🔒 <b>Commit Guardian</b> — локальный DevSecOps-аудит без утечки кода в облако.\n\n"
+        "Отправьте <b>ZIP-архив</b> или ссылку на публичный <b>GitHub-репозиторий</b> — "
+        "я проверю код на уязвимости, посчитаю Security Score и пришлю официальный <b>PDF-отчёт</b>."
     )
-    await message.answer(welcome_text, parse_mode=ParseMode.HTML)
+    kb = None
+    if settings.web_app_url.startswith("https://"):
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🖥 Открыть консоль", web_app=WebAppInfo(url=settings.web_app_url))]]
+        )
+    await message.answer(welcome_text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
 @router.message(F.document)
@@ -110,7 +150,8 @@ async def handle_document(message: types.Message, bot: Bot):
         scanner = SASTScanner(event_bus=event_bus)
 
         result = await scanner.scan(extract_dir)
-        await status_msg.edit_text(_format_scan_summary(result), parse_mode=ParseMode.HTML)
+        zip_label = Path(message.document.file_name).stem or "archive"
+        await _deliver_scan_result(message, status_msg, result, f"telegram/{zip_label}", scan_uuid[:12])
     except Exception as e:
         logger.error(f"Error processing zip: {e}")
         await status_msg.edit_text(f"Ошибка при сканировании: {html.escape(str(e)[:300])}", parse_mode=ParseMode.HTML)
@@ -156,7 +197,7 @@ async def handle_repo_url(message: types.Message):
 
         scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
         result = await scanner.scan(repo_dir)
-        await status_msg.edit_text(_format_scan_summary(result), parse_mode=ParseMode.HTML)
+        await _deliver_scan_result(message, status_msg, result, repo_name, scan_uuid[:12])
     except Exception as e:
         logger.error(f"Error scanning repository {repo_name}: {e}")
         await status_msg.edit_text(f"Ошибка при сканировании: {html.escape(str(e)[:300])}", parse_mode=ParseMode.HTML)
@@ -176,7 +217,7 @@ async def run_bot() -> None:
 
     bot = Bot(
         token=token,
-        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)

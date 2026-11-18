@@ -19,14 +19,17 @@ from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+import httpx
 
-from aegis.ai.audit_summarizer import AuditSummarizer, AuditSummary
+from aegis.ai.audit_summarizer import AuditSummarizer
+from aegis.core.audit_pipeline import finalize_scan_audit
 from aegis.core.config import settings
 from aegis.core.metrics_store import get_metrics_store
 from aegis.core.queue_manager import task_queue
-from aegis.reporting import AuditReport, AuditReportWriter
+from aegis.reporting import AuditReportWriter
 from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
 from aegis.scanners.sast_scanner import SASTScanner
+from aegis.scanners.security_score import calculate_score, get_grade
 
 logger = logging.getLogger("aegis.webhook")
 router = APIRouter(prefix="/api/v1", tags=["Commit Guardian Webhooks"])
@@ -72,6 +75,8 @@ async def send_telegram_alert(
         crit_count = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)
         high_count = scan_result.findings_by_severity.get(Severity.HIGH, 0)
         med_count = scan_result.findings_by_severity.get(Severity.MEDIUM, 0)
+        score = calculate_score(scan_result.findings)
+        grade, _, _ = get_grade(score)
 
         e = html.escape
         alert_lines = [
@@ -79,7 +84,8 @@ async def send_telegram_alert(
             f"📦 <b>Репозиторий:</b> <code>{e(repo_name)}</code>",
             f"🌿 <b>Ветка:</b> <code>{e(branch)}</code>",
             f"👤 <b>Автор коммита:</b> <code>{e(author)}</code>",
-            f"🔖 <b>Коммит:</b> <code>{e(commit_sha[:8])}</code>\n",
+            f"🔖 <b>Коммит:</b> <code>{e(commit_sha[:8])}</code>",
+            f"🏅 <b>Security Score:</b> <code>{score}/100 ({e(grade)})</code>\n",
             "📊 <b>Результаты сканирования (SAST &amp; Mobile):</b>",
             f"• 🔴 Critical: <code>{crit_count}</code>",
             f"• 🟠 High: <code>{high_count}</code>",
@@ -124,13 +130,70 @@ async def send_telegram_alert(
         await bot.session.close()
 
 
+async def post_github_pr_comment(
+    repo_name: str,
+    pr_number: int,
+    commit_sha: str,
+    scan_result: SASTScanResult,
+    score: int,
+    grade: str,
+    summary_text: str,
+) -> bool:
+    """Post automated Commit Guardian audit summary on a GitHub Pull Request."""
+    token = (settings.github_token or "").strip()
+    if not token or token.startswith("ghp_your"):
+        return False
+
+    crit = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)
+    high = scan_result.findings_by_severity.get(Severity.HIGH, 0)
+    med = scan_result.findings_by_severity.get(Severity.MEDIUM, 0)
+    top_rows = ""
+    for f in scan_result.findings[:5]:
+        cwe = ", ".join(f.cwe) or "—"
+        top_rows += f"| **{f.severity.value}** | {f.title} | `{f.file_path}:{f.line_start or 1}` | `{cwe}` |\n"
+
+    table_block = (
+        "| Severity | Issue | Location | CWE |\n|---|---|---|---|\n" + top_rows
+        if top_rows
+        else "_Критических и заметных уязвимостей не обнаружено._\n"
+    )
+    body = (
+        f"## 🔒 Commit Guardian — On-Premise Audit (`{commit_sha[:8]}`)\n\n"
+        f"- **Security Score:** `{score}/100 ({grade})`\n"
+        f"- **Findings:** Critical `{crit}` · High `{high}` · Medium `{med}` · Total `{scan_result.total_findings}`\n"
+        f"- **Privacy:** Проанализировано локально (без передачи кода во внешние облака)\n\n"
+        f"### Заключение\n{summary_text}\n\n"
+        f"### Детали находок\n{table_block}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"https://api.github.com/repos/{repo_name}/issues/{pr_number}/comments",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "Commit-Guardian",
+                },
+                json={"body": body},
+            )
+        if resp.status_code in (200, 201):
+            logger.info(f"Posted PR audit comment on {repo_name}#{pr_number}")
+            return True
+        logger.warning(f"GitHub PR comment returned HTTP {resp.status_code} for {repo_name}#{pr_number}")
+    except Exception as exc:
+        logger.warning(f"Failed to post PR comment on {repo_name}#{pr_number}: {exc}")
+    return False
+
+
 async def process_guardian_audit(
     repo_name: str,
     clone_url: str,
     commit_sha: str,
     author: str,
     branch: str,
-    commit_url: Optional[str] = None
+    commit_url: Optional[str] = None,
+    pr_number: Optional[int] = None,
 ) -> SASTScanResult:
     """Clone pushed commit and run multi-language SAST & Mobile security audit."""
     scan_id = str(uuid.uuid4())[:8]
@@ -198,40 +261,29 @@ async def process_guardian_audit(
             errors=aegis_res.errors + sast_res.errors,
         )
 
-        # 3. Local AI summary + compliance report (every commit gets a record, clean ones included)
-        report_name: Optional[str] = None
-        summary: Optional[AuditSummary] = None
-        try:
-            summary = await AuditSummarizer().summarize(scan_result, repo_name=repo_name, commit_sha=commit_sha)
-            report = AuditReport.from_scan(
-                scan_result,
-                summary,
-                repo_name=repo_name,
-                commit_sha=commit_sha,
-                branch=branch,
-                author=author,
-                commit_url=commit_url,
-            )
-            report_paths = AuditReportWriter().write(report)
-            report_name = (report_paths.pdf or report_paths.markdown).name
-        except Exception as e:
-            logger.exception(f"Failed to generate audit report for {repo_name}@{commit_sha[:8]}: {e}")
+        # 3. Local AI summary + compliance report + observability metrics
+        artifacts = await finalize_scan_audit(
+            scan_result,
+            repo_name=repo_name,
+            commit_sha=commit_sha,
+            branch=branch,
+            author=author,
+            commit_url=commit_url,
+            summarizer_cls=AuditSummarizer,
+            writer_cls=AuditReportWriter,
+        )
+        report_name = artifacts.report_name
 
-        # 4. Observability metrics for the /dashboard page
-        try:
-            get_metrics_store().record_audit(
+        if pr_number is not None:
+            await post_github_pr_comment(
                 repo_name=repo_name,
+                pr_number=pr_number,
                 commit_sha=commit_sha,
-                branch=branch,
-                severity_counts={sev.value: count for sev, count in scan_result.findings_by_severity.items()},
-                total_findings=scan_result.total_findings,
-                scan_seconds=scan_result.duration_seconds,
-                ai_seconds=summary.duration_seconds if summary else 0.0,
-                ai_generated=bool(summary and summary.ai_generated),
-                report_name=report_name,
+                scan_result=scan_result,
+                score=artifacts.score,
+                grade=artifacts.grade,
+                summary_text=artifacts.summary.text if artifacts.summary else "",
             )
-        except Exception as e:
-            logger.exception(f"Failed to record audit metrics for {repo_name}@{commit_sha[:8]}: {e}")
 
         crit_count = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)
         high_count = scan_result.findings_by_severity.get(Severity.HIGH, 0)
@@ -353,7 +405,8 @@ async def github_webhook_handler(
             commit_sha=commit_sha,
             author=author,
             branch=branch,
-            commit_url=pr_url
+            commit_url=pr_url,
+            pr_number=payload.get("number"),
         )
 
         return {
