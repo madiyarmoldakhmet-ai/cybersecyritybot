@@ -167,7 +167,7 @@ export function AiCopilotChat({
               )}
               aria-hidden="true"
             />
-            {ollamaOnline ? `online · ${ollamaModel}` : `standby · ${ollamaModel}`}
+            {ollamaOnline ? `online · ${ollamaModel}` : `appsec-engine · standby`}
           </span>
         </div>
 

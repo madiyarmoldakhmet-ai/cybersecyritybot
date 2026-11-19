@@ -15,6 +15,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 
+from aegis.ai.offline_chat import (
+    build_offline_appsec_reply,
+    format_scan_context_note,
+    parse_chat_payload,
+)
 from aegis.core.archive_utils import safe_extract_zip
 from aegis.core.audit_pipeline import AuditArtifacts, finalize_scan_audit
 from aegis.core.event_bus import ScanEventBus
@@ -368,69 +373,100 @@ async def websocket_scan(websocket: WebSocket):
 
 def _parse_chat_payload(raw_data: str) -> tuple[bool, str, str]:
     """Parse plain text or structured JSON chat payload with optional active scan context."""
-    stripped = raw_data.strip()
-    if not stripped.startswith("{"):
-        return False, stripped, ""
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        return False, stripped, ""
-    if not isinstance(payload, dict):
-        return False, stripped, ""
-    if payload.get("reset"):
-        return True, "", ""
+    should_reset, user_text, summary_note, _ = parse_chat_payload(raw_data)
+    return should_reset, user_text, summary_note
 
-    user_text = str(payload.get("message") or "").strip()
-    ctx = payload.get("scan_context")
-    if not isinstance(ctx, dict) or not ctx.get("repo_name"):
-        return False, user_text, ""
 
-    findings = ctx.get("findings") or []
-    top_lines = []
-    for item in findings[:8]:
-        if isinstance(item, dict):
-            sev = item.get("severity", "INFO")
-            title = item.get("title", "Vulnerability")
-            loc = f"{item.get('file_path', '?')}:{item.get('line_start') or 1}"
-            cwe = ", ".join(item.get("cwe") or [])
-            top_lines.append(f"- [{sev}] {title} ({loc}" + (f", {cwe}" if cwe else "") + ")")
-
-    summary_note = (
-        f"[Контекст текущего аудита в консоли] Репозиторий: {ctx.get('repo_name')}; "
-        f"Score: {ctx.get('security_score', '-')}/100 ({ctx.get('grade', '-')}); "
-        f"Всего находок: {ctx.get('total_findings', len(findings))}."
+def _build_chat_client() -> tuple[AsyncOpenAI, str]:
+    """Build the configured AsyncOpenAI client and model name."""
+    if not settings.air_gapped and settings.llm_provider == LLMProvider.OPENROUTER and settings.openrouter_api_key:
+        return (
+            AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=settings.openrouter_api_key, timeout=20.0),
+            settings.openrouter_model,
+        )
+    if not settings.air_gapped and settings.llm_provider == LLMProvider.GEMINI and settings.gemini_api_key:
+        return (
+            AsyncOpenAI(
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                api_key=settings.gemini_api_key,
+                timeout=20.0,
+            ),
+            settings.gemini_model,
+        )
+    return (
+        AsyncOpenAI(base_url=settings.ollama_base_url.rstrip("/") + "/v1", api_key="ollama", timeout=20.0),
+        settings.ollama_model,
     )
-    if top_lines:
-        summary_note += "\nКлючевые уязвимости:\n" + "\n".join(top_lines)
-    return False, user_text, summary_note
+
+
+class ChatHttpRequest(BaseModel):
+    message: str
+    scan_context: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/chat")
+async def http_chat(req: ChatHttpRequest):
+    """HTTP fallback for AI AppSec chat when WebSocket transport is unavailable."""
+    data = req.message.strip()
+    if not data:
+        return {"reply": "", "ai_generated": False}
+
+    if "github.com/" in data:
+        url = next((word for word in data.split() if "github.com/" in word), data)
+        return {
+            "action": "SCAN",
+            "github_url": url,
+            "reply": f"Запустил аудит репозитория {url}. Результаты и отчёт появятся в консоли справа.",
+            "ai_generated": False,
+        }
+
+    ctx_dict = req.scan_context if isinstance(req.scan_context, dict) and req.scan_context.get("repo_name") else None
+    scan_context_note = format_scan_context_note(ctx_dict)
+    user_content = f"{scan_context_note}\n\nВопрос пользователя: {data}" if scan_context_note else data
+    client, model = _build_chat_client()
+
+    system_prompt = (
+        "You are Commit Guardian, an on-premise AI AppSec assistant. Help developers analyze GitHub repositories, "
+        "explain vulnerabilities concisely with safe fixes, and verify on-premise privacy (no code leaves the server). "
+        "Reply clearly in Russian."
+    )
+    try:
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        reply = (completion.choices[0].message.content or "").strip() if completion.choices else ""
+        if reply:
+            return {"reply": reply, "ai_generated": True}
+    except Exception as llm_err:
+        logger.debug(f"HTTP chat LLM unavailable, serving deterministic AppSec reply: {llm_err}")
+
+    return {
+        "reply": build_offline_appsec_reply(data, ctx_dict, settings.ollama_model),
+        "ai_generated": False,
+    }
 
 
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
-    
-    # Enforce local-LLM policy consistently with settings.enforce_local_llm_policy()
-    if not settings.air_gapped and settings.llm_provider == LLMProvider.OPENROUTER and settings.openrouter_api_key:
-        client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=settings.openrouter_api_key)
-        model = settings.openrouter_model
-    elif not settings.air_gapped and settings.llm_provider == LLMProvider.GEMINI and settings.gemini_api_key:
-        client = AsyncOpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=settings.gemini_api_key)
-        model = settings.gemini_model
-    else:
-        client = AsyncOpenAI(base_url=settings.ollama_base_url.rstrip("/") + "/v1", api_key="ollama")
-        model = settings.ollama_model
-    
+
+    client, model = _build_chat_client()
+
     system_prompt = (
         "You are Commit Guardian, an on-premise AI AppSec assistant. Help developers analyze GitHub repositories, "
         "explain vulnerabilities concisely with safe fixes, and verify on-premise privacy (no code leaves the server). "
         "Reply clearly in Russian."
     )
     chat_history = [{"role": "system", "content": system_prompt}]
-    
+
     try:
         while True:
             raw_data = await websocket.receive_text()
-            should_reset, data, scan_context_note = _parse_chat_payload(raw_data)
+            should_reset, data, scan_context_note, ctx_dict = parse_chat_payload(raw_data)
             if should_reset:
                 chat_history = [{"role": "system", "content": system_prompt}]
                 await websocket.send_json({"type": "done"})
@@ -468,21 +504,12 @@ async def websocket_chat(websocket: WebSocket):
                         content = chunk.choices[0].delta.content
                         full_response += content
                         await websocket.send_json({"type": "chunk", "content": content})
+                if not full_response.strip():
+                    full_response = build_offline_appsec_reply(data, ctx_dict, settings.ollama_model)
+                    await websocket.send_json({"type": "chunk", "content": full_response})
             except Exception as llm_err:
-                logger.warning(f"Local LLM chat unavailable, serving offline fallback: {llm_err}")
-                if scan_context_note:
-                    full_response = (
-                        f"Локальная модель Ollama ({settings.ollama_model}) на этом хосте сейчас не запущена, "
-                        "поэтому отвечаю по детерминированным результатам текущего скана:\n\n"
-                        f"{scan_context_note}\n\n"
-                        "Нажми **«Патч»** напротив любой строки в таблице справа — офлайн-движок сформирует готовое исправление кода."
-                    )
-                else:
-                    full_response = (
-                        f"Локальная модель Ollama ({settings.ollama_model}) на этом хосте сейчас не запущена — "
-                        "и это нормально для демо-режима: весь статический движок (SAST, Taint, Secrets, PDF-отчёты и AI-фиксы) "
-                        "работает полностью автономно без интернета. Отправьте ссылку на GitHub, перетащите ZIP-архив или нажмите «Демо-аудит»."
-                    )
+                logger.warning(f"Local LLM chat unavailable, serving AppSec fallback: {llm_err}")
+                full_response = build_offline_appsec_reply(data, ctx_dict, settings.ollama_model)
                 await websocket.send_json({"type": "chunk", "content": full_response})
 
             await websocket.send_json({"type": "done"})

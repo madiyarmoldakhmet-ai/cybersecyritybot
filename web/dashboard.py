@@ -7,8 +7,9 @@ works in air-gapped networks) plus the JSON metrics endpoint that refreshes it.
 import html
 import logging
 import secrets
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
+import httpx
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
@@ -26,7 +27,10 @@ REFRESH_SECONDS = 10
 async def dashboard_metrics() -> Dict[str, Any]:
     """Aggregated audit metrics backing the dashboard."""
     data = get_metrics_store().summary().to_dict()
-    data["llm_mode"] = _llm_mode()
+    llm_mode, llm_online, llm_hint = await _probe_ai_status()
+    data["llm_mode"] = llm_mode
+    data["llm_online"] = llm_online
+    data["llm_hint"] = llm_hint
     return data
 
 
@@ -34,15 +38,35 @@ async def dashboard_metrics() -> Dict[str, Any]:
 async def dashboard() -> HTMLResponse:
     """Render the observability dashboard."""
     metrics = get_metrics_store().summary()
+    llm_mode, llm_online, llm_hint = await _probe_ai_status()
     nonce = secrets.token_urlsafe(16)
     csp = (
         "default-src 'none'; style-src 'unsafe-inline'; "
         f"script-src 'nonce-{nonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
     )
     return HTMLResponse(
-        _render(metrics, nonce),
+        _render(metrics, nonce, llm_mode=llm_mode, llm_online=llm_online, llm_hint=llm_hint),
         headers={"Content-Security-Policy": csp, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
     )
+
+
+async def _probe_ai_status() -> Tuple[str, bool, str]:
+    """Return honest live AI engine label, online flag, and posture hint."""
+    if not settings.air_gapped:
+        model = settings.openrouter_model if settings.llm_provider.value == "openrouter" else settings.gemini_model
+        return f"{settings.llm_provider.value} · {model}", True, "облачный провайдер (ALLOW_CLOUD_LLM=true)"
+
+    ollama_online = False
+    try:
+        async with httpx.AsyncClient(timeout=0.4) as client:
+            resp = await client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
+            ollama_online = resp.status_code == 200
+    except Exception:
+        ollama_online = False
+
+    if ollama_online:
+        return f"Ollama · {settings.ollama_model} (online)", True, "локальная модель, без облака"
+    return f"Ollama · {settings.ollama_model} (standby)", False, "rule-based AppSec движок, без облака"
 
 
 def _llm_mode() -> str:
@@ -90,8 +114,16 @@ def _row(audit: Dict[str, Any]) -> str:
     )
 
 
-def _render(m: DashboardMetrics, nonce: str) -> str:
+def _render(
+    m: DashboardMetrics,
+    nonce: str,
+    llm_mode: Optional[str] = None,
+    llm_online: bool = False,
+    llm_hint: str = "локальная модель, без облака",
+) -> str:
     e = html.escape
+    effective_mode = llm_mode or _llm_mode()
+    dot_cls = "dot" if llm_online else "dot dot-standby"
     rows = "".join(_row(a) for a in m.recent) or (
         '<tr><td colspan="10" class="empty">Пока нет проверок. Отправьте push в подключённый репозиторий или запустите демо.</td></tr>'
     )
@@ -118,6 +150,7 @@ def _render(m: DashboardMetrics, nonce: str) -> str:
   .chip {{ font: 13px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; }}
   .chip b {{ color: var(--text); font-weight: 500; }}
   .dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 8px; box-shadow: 0 0 10px var(--accent); }}
+  .dot-standby {{ background: var(--high); box-shadow: 0 0 8px var(--high); }}
   .kpis {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }}
   .kpi {{ background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }}
   .kpi .label {{ color: var(--muted); font-size: 14px; }}
@@ -168,7 +201,7 @@ def _render(m: DashboardMetrics, nonce: str) -> str:
     </div>
     <div class="status">
       <a class="chip nav-link" href="/">← Консоль сканера</a>
-      <span class="chip"><span class="dot"></span>AI: <b>{e(_llm_mode())}</b></span>
+      <span class="chip"><span class="{dot_cls}" id="ai_chip_dot"></span>AI: <b id="ai_chip_label">{e(effective_mode)}</b></span>
       <span class="chip">данные не покидают сервер</span>
     </div>
   </header>
@@ -187,7 +220,7 @@ def _render(m: DashboardMetrics, nonce: str) -> str:
     <div class="kpi ai">
       <div class="label">Среднее время AI-анализа</div>
       <div class="value" id="avg_ai_seconds">{e(_fmt_seconds(m.avg_ai_seconds))}</div>
-      <div class="hint">локальная модель, без облака</div>
+      <div class="hint" id="ai_kpi_hint">{e(llm_hint)}</div>
     </div>
   </section>
 
@@ -257,6 +290,10 @@ def _render(m: DashboardMetrics, nonce: str) -> str:
           .forEach(function (k) {{ document.getElementById(k).textContent = m[k]; }});
         document.getElementById("avg_ai_seconds").textContent = secs(m.avg_ai_seconds);
         document.getElementById("avg_scan_seconds").textContent = secs(m.avg_scan_seconds);
+        if (m.llm_mode) {{ document.getElementById("ai_chip_label").textContent = m.llm_mode; }}
+        if (m.llm_hint) {{ document.getElementById("ai_kpi_hint").textContent = m.llm_hint; }}
+        var dot = document.getElementById("ai_chip_dot");
+        if (dot) {{ dot.className = m.llm_online ? "dot" : "dot dot-standby"; }}
         if (m.recent.length) {{
           var body = document.getElementById("recent");
           body.replaceChildren.apply(body, m.recent.map(row));

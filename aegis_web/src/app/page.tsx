@@ -293,48 +293,78 @@ export default function Home() {
   };
 
   const sendChatText = useCallback(
-    (rawPrompt: string) => {
+    async (rawPrompt: string) => {
       const userMsg = rawPrompt.trim();
       if (!userMsg) return;
 
       const now = formatNowTime();
       setMessages((prev) => [...prev, { id: `${Date.now()}`, role: 'user', content: userMsg, timestamp: now }]);
 
+      const scanContext =
+        findings.length > 0 || activeTarget
+          ? {
+              repo_name: activeTarget || 'workspace',
+              security_score: securityScore,
+              grade,
+              total_findings: vulnerabilities,
+              findings: findings.slice(0, 8),
+            }
+          : undefined;
+
       if (!chatWsRef.current || chatWsRef.current.readyState !== WebSocket.OPEN) {
         if (userMsg.includes('github.com/')) {
           const match = userMsg.split(/\s+/).find((w) => w.includes('github.com/'));
-          if (match) startScanRef.current(match);
-          return;
+          if (match) {
+            startScanRef.current(match);
+            return;
+          }
         }
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `${Date.now() + 1}`,
-            role: 'assistant',
-            content: 'Соединение с `/ws/chat` перезапускается. Вставьте `github.com/...`, .zip или нажмите «Демо-аудит».',
-            timestamp: now,
-          },
-        ]);
+        setIsTyping(true);
+        setMessages((prev) => [...prev, { id: 'streaming', role: 'assistant', content: '', timestamp: now }]);
+        try {
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: userMsg, scan_context: scanContext }),
+          });
+          const data = await res.json();
+          setIsTyping(false);
+          if (data.action === 'SCAN' && data.github_url) {
+            startScanRef.current(data.github_url);
+          }
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== 'streaming'),
+            {
+              id: `${Date.now() + 1}`,
+              role: 'assistant',
+              content: data.reply || 'Запрос обработан.',
+              timestamp: formatNowTime(),
+            },
+          ]);
+        } catch {
+          setIsTyping(false);
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== 'streaming'),
+            {
+              id: `${Date.now() + 1}`,
+              role: 'assistant',
+              content: 'Не удалось доставить сообщение. Повторите запрос или запустите «Демо-аудит».',
+              timestamp: formatNowTime(),
+            },
+          ]);
+        }
         return;
       }
 
       setIsTyping(true);
       setMessages((prev) => [...prev, { id: 'streaming', role: 'assistant', content: '', timestamp: now }]);
 
-      const payload = {
-        message: userMsg,
-        scan_context:
-          findings.length > 0 || activeTarget
-            ? {
-                repo_name: activeTarget || 'workspace',
-                security_score: securityScore,
-                grade,
-                total_findings: vulnerabilities,
-                findings: findings.slice(0, 8),
-              }
-            : undefined,
-      };
-      chatWsRef.current.send(JSON.stringify(payload));
+      chatWsRef.current.send(
+        JSON.stringify({
+          message: userMsg,
+          scan_context: scanContext,
+        })
+      );
     },
     [activeTarget, findings, grade, securityScore, vulnerabilities]
   );
@@ -710,7 +740,7 @@ export default function Home() {
                   <span>commit.guardian · live</span>
                 </span>
                 <span className="text-[var(--color-muted-soft)]">
-                  {ollamaModel} · 0 bytes external
+                  {ollamaOnline ? `${ollamaModel} · 0 bytes external` : `appsec-engine · ${ollamaModel} standby`}
                 </span>
               </div>
 

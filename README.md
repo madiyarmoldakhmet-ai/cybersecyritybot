@@ -35,7 +35,9 @@ flowchart LR
 - **Multi-engine SAST & Policy engine** — Semgrep, Bandit, pip-audit, secret entropy detection, Python AST + cross-file `TaintEngine`, mobile/Flutter rules, and repository-level `.aegis.yml` rules (`ignore_paths`, `ignore_rules`, `severity_threshold`, `custom_rules` e.g. unmasked PII/IIN logging).
 - **Local AI analysis & offline fallback** — false-positive filtering, executive summary in Russian, and CWE-aware remediation patches via Ollama with deterministic rule-based fallback when Ollama is offline.
 - **Compliance reports & downloads** — `reports/<owner>__<repo>/<timestamp>_<commit>.md` and `.pdf` (Cyrillic-ready), downloadable directly from `/dashboard` or `/api/v1/reports/...` and delivered via Telegram.
-- **Interactive web console & 1-click Demo** — `/` (`aegis_web` Next.js static export) with 1-click vulnerable fintech demo audit (`POST /api/scan/demo`), live WebSocket terminal, `Security Score (0–100 / A+..F)`, AI Patch diff modal, and ZIP upload.
+- **Interactive web console & context-aware AI chat** — `/` (`aegis_web` Next.js obsidian console) with 1-click vulnerable fintech demo audit (`POST /api/scan/demo`), live WebSocket terminal, `Security Score (0–100 / A+..F)`, `/ws/chat` + `POST /api/chat` AppSec copilot with deterministic CWE/patch engine when Ollama is in standby, AI Patch diff modal, Auto-PR creation, and ZIP upload.
+- **Strict Authorship Verification (`Проверка авторства`)** — `/api/v1/verify/challenge` & `/api/v1/verify/ownership` verify real GitHub write access (`push`/`admin`/`maintain` PAT check), signed challenge commits or `.well-known/aegis-verify.txt`, and DNS TXT `_aegis-challenge.<domain>` before unlocking private scans, DAST probes, or automated PRs via signed HMAC `proof_token`.
+- **Google Colab GPU + 5 TB Google Drive runner** — [`notebooks/commit_guardian_colab_gpu.ipynb`](notebooks/commit_guardian_colab_gpu.ipynb) launches `qwen2.5-coder:32b`/`14b` on Colab GPU with Drive weight caching and exposes the live console over HTTPS.
 - **Observability dashboard** — `GET /dashboard`: total scans, critical vulnerabilities found, average AI processing time, recent audits with PDF/MD links; auto-refreshes every 10 s without external CDN assets.
 - **Telegram bot** — scan public GitHub repos or ZIP archives directly in Telegram and receive Security Score + attached Compliance PDF report.
 - **DAST & GitHub Action** — HTTP security headers, CORS, cookie flags, Playwright XSS PoC, and SARIF upload to the GitHub Security tab (`action.yml`).
@@ -124,6 +126,8 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | `GET` | `/api/v1/reports/{repo_slug}/{filename}` | Download persisted PDF / Markdown compliance report |
 | `GET` | `/api/v1/metrics` | Queue and Ollama concurrency metrics |
 | `GET` | `/health` | Health, Ollama connectivity, air-gap status |
+| `POST` | `/api/chat` | HTTP AppSec chat fallback (context-aware offline & LLM) |
+| `POST` | `/api/v1/verify/challenge` · `/api/v1/verify/ownership` | Strict GitHub/domain authorship challenges & HMAC proof tokens |
 | `POST` | `/api/v1/scan/sast` · `/api/v1/scan/dast` · `/api/v1/remediate` | On-demand scans & remediation patches |
 
 Interactive docs: `/docs`.

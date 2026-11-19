@@ -320,3 +320,69 @@ async def test_sca_scanner_strips_extras_comments_and_tracks_lines(tmp_path: Pat
     assert findings == []
     assert [q["package"]["name"] for q in captured_batches] == ["uvicorn", "fastapi"]
     assert [q["version"] for q in captured_batches] == ["0.30.0", "0.111.0"]
+
+
+def test_offline_appsec_chat_covers_findings_patches_policy_and_authorship():
+    from aegis.ai.offline_chat import build_offline_appsec_reply
+
+    scan_ctx = {
+        "repo_name": "demo/kz-fintech-app",
+        "security_score": 0,
+        "grade": "F",
+        "total_findings": 2,
+        "findings": [
+            {
+                "severity": "CRITICAL",
+                "title": "SQL Injection in query",
+                "file_path": "db.py",
+                "line_start": 42,
+                "cwe": ["CWE-89"],
+            },
+            {
+                "severity": "HIGH",
+                "title": "subprocess with shell=True",
+                "file_path": "runner.py",
+                "line_start": 11,
+                "cwe": ["CWE-78"],
+            },
+        ],
+    }
+
+    crit_reply = build_offline_appsec_reply("Объясни критичные баги", scan_ctx, "qwen2.5-coder:14b")
+    assert "demo/kz-fintech-app" in crit_reply and "db.py:42" in crit_reply and "CWE-89" in crit_reply
+
+    sql_reply = build_offline_appsec_reply("Патч от SQL-инъекции", scan_ctx, "qwen2.5-coder:14b")
+    assert "db.py:42" in sql_reply and "cursor.execute" in sql_reply
+
+    policy_reply = build_offline_appsec_reply("Политика .aegis.yml и ИИН", scan_ctx, "qwen2.5-coder:14b")
+    assert "kz-iin-in-logs" in policy_reply and "severity_threshold" in policy_reply
+
+    auth_reply = build_offline_appsec_reply("Как работает проверка авторства?", scan_ctx, "qwen2.5-coder:14b")
+    assert "proof_token" in auth_reply and "DNS TXT" in auth_reply
+
+
+@pytest.mark.asyncio
+async def test_http_chat_fallback_and_dashboard_honest_ai_posture(monkeypatch):
+    from aegis_server.main import app
+
+    monkeypatch.setattr(settings, "ollama_base_url", "http://127.0.0.1:9")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        chat_resp = await client.post(
+            "/api/chat",
+            json={
+                "message": "Как работает проверка авторства?",
+                "scan_context": {"repo_name": "demo/kz", "security_score": 40, "grade": "F", "total_findings": 0},
+            },
+        )
+        assert chat_resp.status_code == 200
+        assert "proof_token" in chat_resp.json()["reply"]
+
+        scan_resp = await client.post("/api/chat", json={"message": "https://github.com/vercel/next.js"})
+        assert scan_resp.status_code == 200 and scan_resp.json()["action"] == "SCAN"
+
+        metrics_resp = await client.get("/api/v1/dashboard/metrics")
+        assert metrics_resp.status_code == 200
+        mdata = metrics_resp.json()
+        assert mdata["llm_mode"].startswith("Ollama")
+        assert mdata["llm_online"] is False
+        assert "standby" in mdata["llm_mode"]
