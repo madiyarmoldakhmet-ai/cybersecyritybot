@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import httpx
 
+from aegis.ai.offline_chat import probe_ai_status
 from aegis.ai.remediation_engine import RemediationEngine, RemediationResult
 from aegis.core.config import settings
 from aegis.core.logging_config import setup_logging
@@ -142,13 +143,8 @@ async def get_system_metrics():
 @api_router.get("/health", response_model=HealthResponse, tags=["General"])
 async def health_check():
     """Verify system health, LLM connectivity, and configuration."""
-    ollama_online = False
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
-            ollama_online = (resp.status_code == 200)
-    except Exception:
-        ollama_online = False
+    _, ai_online, _ = await probe_ai_status(timeout_seconds=1.5)
+    ollama_online = ai_online if settings.air_gapped else False
 
     return HealthResponse(
         status="healthy",

@@ -7,6 +7,53 @@ guidance, and authorship-verification help when local Ollama or cloud LLMs are o
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
+
+from aegis.core.config import settings
+
+
+def is_configured_model_available(tags_payload: Any, target_model: str) -> bool:
+    """Return True only when the configured Ollama model is actually present in /api/tags."""
+    if not isinstance(tags_payload, dict):
+        return False
+    models = tags_payload.get("models")
+    if not isinstance(models, list):
+        return False
+    wanted = (target_model or "").strip().lower()
+    if not wanted:
+        return len(models) > 0
+    wanted_variants = {wanted}
+    if ":" not in wanted:
+        wanted_variants.add(f"{wanted}:latest")
+    for entry in models:
+        if not isinstance(entry, dict):
+            continue
+        for key in ("name", "model"):
+            candidate = str(entry.get(key) or "").strip().lower()
+            if candidate in wanted_variants:
+                return True
+    return False
+
+
+async def probe_ai_status(timeout_seconds: float = 0.8) -> Tuple[str, bool, str]:
+    """Probe effective AI runtime status (mode label, online flag, and UI hint)."""
+    if not settings.air_gapped:
+        model = settings.openrouter_model if settings.llm_provider.value == "openrouter" else settings.gemini_model
+        return f"{settings.llm_provider.value} · {model}", True, "облачный провайдер (ALLOW_CLOUD_LLM=true)"
+
+    ollama_online = False
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            resp = await client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
+            if resp.status_code == 200:
+                ollama_online = is_configured_model_available(resp.json(), settings.ollama_model)
+    except Exception:
+        ollama_online = False
+
+    if ollama_online:
+        return f"Ollama · {settings.ollama_model} (online)", True, "локальная модель, без облака"
+    return f"Ollama · {settings.ollama_model} (standby)", False, "rule-based AppSec движок, без облака"
+
 
 def format_scan_context_note(ctx: Optional[Dict[str, Any]]) -> str:
     """Format an active scan context dictionary into a concise summary block."""

@@ -386,3 +386,11 @@ async def test_http_chat_fallback_and_dashboard_honest_ai_posture(monkeypatch):
         assert mdata["llm_mode"].startswith("Ollama")
         assert mdata["llm_online"] is False
         assert "standby" in mdata["llm_mode"]
+
+
+def test_configured_ollama_model_presence_check():
+    from aegis.ai.offline_chat import is_configured_model_available
+
+    assert is_configured_model_available({"models": [{"name": "qwen:latest"}]}, "qwen2.5-coder:14b") is False
+    assert is_configured_model_available({"models": [{"name": "qwen2.5-coder:14b"}]}, "qwen2.5-coder:14b") is True
+    assert is_configured_model_available({"models": []}, "qwen2.5-coder:14b") is False

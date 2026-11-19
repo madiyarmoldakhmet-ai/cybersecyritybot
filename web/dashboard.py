@@ -7,12 +7,12 @@ works in air-gapped networks) plus the JSON metrics endpoint that refreshes it.
 import html
 import logging
 import secrets
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-import httpx
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
+from aegis.ai.offline_chat import probe_ai_status
 from aegis.core.audit_pipeline import report_urls_for
 from aegis.core.config import settings
 from aegis.core.metrics_store import DashboardMetrics, get_metrics_store
@@ -27,7 +27,7 @@ REFRESH_SECONDS = 10
 async def dashboard_metrics() -> Dict[str, Any]:
     """Aggregated audit metrics backing the dashboard."""
     data = get_metrics_store().summary().to_dict()
-    llm_mode, llm_online, llm_hint = await _probe_ai_status()
+    llm_mode, llm_online, llm_hint = await probe_ai_status(timeout_seconds=0.4)
     data["llm_mode"] = llm_mode
     data["llm_online"] = llm_online
     data["llm_hint"] = llm_hint
@@ -38,7 +38,7 @@ async def dashboard_metrics() -> Dict[str, Any]:
 async def dashboard() -> HTMLResponse:
     """Render the observability dashboard."""
     metrics = get_metrics_store().summary()
-    llm_mode, llm_online, llm_hint = await _probe_ai_status()
+    llm_mode, llm_online, llm_hint = await probe_ai_status(timeout_seconds=0.4)
     nonce = secrets.token_urlsafe(16)
     csp = (
         "default-src 'none'; style-src 'unsafe-inline'; "
@@ -48,25 +48,6 @@ async def dashboard() -> HTMLResponse:
         _render(metrics, nonce, llm_mode=llm_mode, llm_online=llm_online, llm_hint=llm_hint),
         headers={"Content-Security-Policy": csp, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
     )
-
-
-async def _probe_ai_status() -> Tuple[str, bool, str]:
-    """Return honest live AI engine label, online flag, and posture hint."""
-    if not settings.air_gapped:
-        model = settings.openrouter_model if settings.llm_provider.value == "openrouter" else settings.gemini_model
-        return f"{settings.llm_provider.value} · {model}", True, "облачный провайдер (ALLOW_CLOUD_LLM=true)"
-
-    ollama_online = False
-    try:
-        async with httpx.AsyncClient(timeout=0.4) as client:
-            resp = await client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
-            ollama_online = resp.status_code == 200
-    except Exception:
-        ollama_online = False
-
-    if ollama_online:
-        return f"Ollama · {settings.ollama_model} (online)", True, "локальная модель, без облака"
-    return f"Ollama · {settings.ollama_model} (standby)", False, "rule-based AppSec движок, без облака"
 
 
 def _llm_mode() -> str:
