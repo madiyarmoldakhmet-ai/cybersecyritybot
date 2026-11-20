@@ -1,13 +1,17 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
+  CheckCircle2,
+  Flag,
   GitPullRequest,
+  HeartPulse,
   Lock,
   Play,
   ShieldCheck,
   Terminal,
+  Undo2,
   Upload,
   Wrench,
   X,
@@ -18,6 +22,15 @@ import { MetricsDashboard } from '@/components/MetricsDashboard';
 import { SecurityScore } from '@/components/SecurityScore';
 import { AiCopilotChat, ChatMessage } from '@/components/AiCopilotChat';
 import { AuthorshipPanel, AuthorshipState } from '@/components/AuthorshipPanel';
+import {
+  FinancialRisk,
+  GhostSecret,
+  GhostSecretsCard,
+  HealPanel,
+  HealingReport,
+  RiskCard,
+  formatKzt,
+} from '@/components/GuardianInsights';
 import { cn } from '@/lib/utils';
 
 type Finding = {
@@ -33,6 +46,7 @@ type Finding = {
   cwe: string[];
   cve: string[];
   recommendation?: string | null;
+  raw_metadata?: Record<string, unknown>;
 };
 
 type RemediationResult = {
@@ -45,7 +59,39 @@ type RemediationResult = {
   fixed_code: string;
   diff_patch?: string | null;
   confidence_score: number;
+  syntax_validated?: boolean;
+  validation_note?: string | null;
 };
+
+type AppealRecord = {
+  appealId?: number;
+  reason: string;
+};
+
+const WORKSPACE_STORAGE_KEY = 'commit_guardian_workspace_v1';
+
+const SEVERITY_PENALTY: Record<string, number> = {
+  CRITICAL: 25,
+  HIGH: 10,
+  MEDIUM: 3,
+  LOW: 1,
+  INFO: 0,
+};
+
+function makeFindingKey(f: Finding): string {
+  return `${f.id}::${f.file_path}::${f.line_start || 1}`;
+}
+
+function computeLocalScore(activeFindings: Finding[]): { score: number; grade: string } {
+  let score = 100;
+  for (const f of activeFindings) {
+    score -= SEVERITY_PENALTY[f.severity?.toUpperCase()] ?? 0;
+  }
+  const clamped = Math.max(0, Math.min(100, score));
+  const grade =
+    clamped >= 90 ? 'A+' : clamped >= 80 ? 'A' : clamped >= 70 ? 'B' : clamped >= 60 ? 'C' : clamped >= 40 ? 'D' : 'F';
+  return { score: clamped, grade };
+}
 
 type InspectorTab = 'overview' | 'authorship' | 'scanner' | 'findings';
 
@@ -122,6 +168,28 @@ export default function Home() {
   const [reportPdfUrl, setReportPdfUrl] = useState<string | null>(null);
   const [reportMdUrl, setReportMdUrl] = useState<string | null>(null);
   const [activeTarget, setActiveTarget] = useState<string>('');
+  const [financialRisk, setFinancialRisk] = useState<FinancialRisk | null>(null);
+  const [healReport, setHealReport] = useState<HealingReport | null>(null);
+  const [isHealing, setIsHealing] = useState(false);
+  const [appealedMap, setAppealedMap] = useState<Record<string, AppealRecord>>({});
+  const [hydrated, setHydrated] = useState(false);
+
+  const ghostSecrets = useMemo<GhostSecret[]>(() => {
+    const out: GhostSecret[] = [];
+    for (const f of findings) {
+      const gh = f.raw_metadata?.git_history as GhostSecret | undefined;
+      if (gh && gh.introduced && gh.masked_value) {
+        out.push(gh);
+      }
+    }
+    return out;
+  }, [findings]);
+
+  const activeFindingsCount = useMemo(
+    () => findings.filter((f) => !appealedMap[makeFindingKey(f)]).length,
+    [findings, appealedMap]
+  );
+  const appealedCount = Object.keys(appealedMap).length;
 
   // Dialogs
   const pricingDialogRef = useRef<HTMLDialogElement>(null);
@@ -220,6 +288,81 @@ export default function Home() {
     };
   }, []);
 
+  // Persist & restore audit session across F5 browser refreshes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (saved && typeof saved === 'object') {
+          if (typeof saved.activeTarget === 'string') setActiveTarget(saved.activeTarget);
+          if (Array.isArray(saved.findings)) setFindings(saved.findings);
+          if (typeof saved.securityScore === 'number') setSecurityScore(saved.securityScore);
+          if (typeof saved.grade === 'string') setGrade(saved.grade);
+          if (typeof saved.auditSummary === 'string') setAuditSummary(saved.auditSummary);
+          if (typeof saved.elapsedTime === 'number') setElapsedTime(saved.elapsedTime);
+          if (typeof saved.vulnerabilities === 'number') setVulnerabilities(saved.vulnerabilities);
+          if (typeof saved.scannedFiles === 'number') setScannedFiles(saved.scannedFiles);
+          if (typeof saved.totalFiles === 'number') setTotalFiles(saved.totalFiles);
+          if (saved.reportPdfUrl) setReportPdfUrl(saved.reportPdfUrl);
+          if (saved.reportMdUrl) setReportMdUrl(saved.reportMdUrl);
+          if (saved.financialRisk) setFinancialRisk(saved.financialRisk);
+          if (saved.healReport) setHealReport(saved.healReport);
+          if (saved.appealedMap && typeof saved.appealedMap === 'object') setAppealedMap(saved.appealedMap);
+          if (Array.isArray(saved.findings) && saved.findings.length > 0) setInspectorTab('findings');
+        }
+      }
+    } catch {
+      // Ignore malformed localStorage payload
+    } finally {
+      setHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated || typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        WORKSPACE_STORAGE_KEY,
+        JSON.stringify({
+          activeTarget,
+          findings,
+          securityScore,
+          grade,
+          auditSummary,
+          elapsedTime,
+          vulnerabilities,
+          scannedFiles,
+          totalFiles,
+          reportPdfUrl,
+          reportMdUrl,
+          financialRisk,
+          healReport,
+          appealedMap,
+        })
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [
+    hydrated,
+    activeTarget,
+    findings,
+    securityScore,
+    grade,
+    auditSummary,
+    elapsedTime,
+    vulnerabilities,
+    scannedFiles,
+    totalFiles,
+    reportPdfUrl,
+    reportMdUrl,
+    financialRisk,
+    healReport,
+    appealedMap,
+  ]);
+
   const resetScanState = (targetLabel: string) => {
     setEvents([]);
     setFindings([]);
@@ -232,6 +375,9 @@ export default function Home() {
     setAuditSummary('');
     setReportPdfUrl(null);
     setReportMdUrl(null);
+    setFinancialRisk(null);
+    setHealReport(null);
+    setAppealedMap({});
     setActiveTarget(targetLabel);
     setAuditAuthorshipLabel(authorship.verified ? `Подтверждён (${authorship.role})` : 'Локально / Read-Only');
     setInspectorTab('scanner');
@@ -254,6 +400,7 @@ export default function Home() {
     authorship_status?: string;
     report_pdf_url?: string | null;
     report_md_url?: string | null;
+    financial_risk?: FinancialRisk | null;
     scan_result?: { duration_seconds?: number };
     duration_seconds?: number;
   }) => {
@@ -266,6 +413,9 @@ export default function Home() {
     if (data.authorship_status) setAuditAuthorshipLabel(data.authorship_status);
     setReportPdfUrl(data.report_pdf_url ?? null);
     setReportMdUrl(data.report_md_url ?? null);
+    setFinancialRisk(data.financial_risk ?? null);
+    setHealReport(null);
+    setAppealedMap({});
     if (typeof data.scan_result?.duration_seconds === 'number') {
       setElapsedTime(data.scan_result.duration_seconds);
     } else if (typeof data.duration_seconds === 'number') {
@@ -306,8 +456,9 @@ export default function Home() {
               repo_name: activeTarget || 'workspace',
               security_score: securityScore,
               grade,
-              total_findings: vulnerabilities,
-              findings: findings.slice(0, 8),
+              total_findings: activeFindingsCount,
+              financial_risk: financialRisk,
+              findings: findings.filter((f) => !appealedMap[makeFindingKey(f)]).slice(0, 8),
             }
           : undefined;
 
@@ -366,7 +517,7 @@ export default function Home() {
         })
       );
     },
-    [activeTarget, findings, grade, securityScore, vulnerabilities]
+    [activeTarget, findings, grade, securityScore, activeFindingsCount, financialRisk, appealedMap]
   );
 
   const handleSendMessage = (e: FormEvent) => {
@@ -532,6 +683,118 @@ export default function Home() {
   useEffect(() => {
     startScanRef.current = startScan;
   });
+
+  const handleDemoHeal = async () => {
+    if (isHealing) return;
+    setIsHealing(true);
+    const now = formatNowTime();
+    setMessages((prev) => [
+      ...prev,
+      { id: `${Date.now()}`, role: 'user', content: 'Запусти самоисцеление с доказательством (Self-Heal)', timestamp: now },
+      { id: 'streaming', role: 'assistant', content: 'Патчу копию кода через AST → ast.parse() → пересканирую песочницу...', timestamp: now },
+    ]);
+    try {
+      const res = await fetch('/api/scan/demo/heal', { method: 'POST' });
+      const data = await res.json();
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== 'streaming');
+        if (res.ok) {
+          return [
+            ...filtered,
+            {
+              id: `${Date.now()}`,
+              role: 'assistant',
+              content:
+                `Самоисцеление подтверждено пересканированием: Score **${data.before_score} (${data.before_grade}) → ${data.after_score} (${data.after_grade})**, ` +
+                `находки **${data.before_findings} → ${data.after_findings}**, риск **${formatKzt(data.before_risk_kzt)} → ${formatKzt(data.after_risk_kzt)}**. ` +
+                `Проверенные unified diffs — в карточке ниже.`,
+              timestamp: formatNowTime(),
+            },
+          ];
+        }
+        return [
+          ...filtered,
+          { id: `${Date.now()}`, role: 'assistant', content: `Ошибка самоисцеления: ${data.error || 'unknown'}`, timestamp: formatNowTime() },
+        ];
+      });
+      if (res.ok) {
+        setHealReport(data);
+        setTimeout(() => document.getElementById('guardian-insights')?.scrollIntoView({ behavior: 'smooth' }), 120);
+      }
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== 'streaming'),
+        { id: `${Date.now()}`, role: 'assistant', content: `Ошибка сети при самоисцелении: ${err}`, timestamp: formatNowTime() },
+      ]);
+    } finally {
+      setIsHealing(false);
+    }
+  };
+
+  const handleToggleAppeal = async (finding: Finding) => {
+    const key = makeFindingKey(finding);
+    const existing = appealedMap[key];
+
+    if (existing) {
+      const nextMap = { ...appealedMap };
+      delete nextMap[key];
+      setAppealedMap(nextMap);
+      const active = findings.filter((f) => !nextMap[makeFindingKey(f)]);
+      const next = computeLocalScore(active);
+      setSecurityScore(next.score);
+      setGrade(next.grade);
+      setVulnerabilities(active.length);
+      if (existing.appealId) {
+        try {
+          await fetch(`/api/v1/findings/appeal/${existing.appealId}`, { method: 'DELETE' });
+        } catch {
+          // Local state already reverted cleanly
+        }
+      }
+      return;
+    }
+
+    const nextMap: Record<string, AppealRecord> = {
+      ...appealedMap,
+      [key]: { reason: 'Оспорено разработчиком как False Positive' },
+    };
+    const active = findings.filter((f) => !nextMap[makeFindingKey(f)]);
+    const localNext = computeLocalScore(active);
+    setAppealedMap(nextMap);
+    setSecurityScore(localNext.score);
+    setGrade(localNext.grade);
+    setVulnerabilities(active.length);
+
+    try {
+      const res = await fetch('/api/v1/findings/appeal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo_name: activeTarget || 'workspace',
+          finding_key: key,
+          finding_title: finding.title,
+          severity: finding.severity,
+          status: 'false_positive',
+          reason: 'Оспорено разработчиком в веб-консоли (Human-in-the-Loop)',
+          reviewer: authorship.actor || 'developer',
+          remaining_severities: active.map((f) => f.severity),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data.adjusted_score === 'number') setSecurityScore(data.adjusted_score);
+        if (data.adjusted_grade) setGrade(data.adjusted_grade);
+        if (data.appeal?.id) {
+          setAppealedMap((prev) => ({
+            ...prev,
+            [key]: { appealId: data.appeal.id, reason: data.appeal.reason || 'False Positive' },
+          }));
+        }
+      }
+    } catch {
+      // Optimistic local calculation remains active
+    }
+  };
 
   const handleOpenRemediation = async (finding: Finding) => {
     setSelectedFinding(finding);
@@ -918,37 +1181,88 @@ export default function Home() {
                               </caption>
                               <thead>
                                 <tr className="text-[var(--color-muted-soft)] border-b border-[var(--color-line)] font-mono text-[10.5px] uppercase">
-                                  <th scope="col" className="p-2.5 font-medium w-[78px]">Уровень</th>
-                                  <th scope="col" className="p-2.5 font-medium">Уязвимость</th>
-                                  <th scope="col" className="p-2.5 font-medium w-[72px] text-right">Патч</th>
+                                  <th scope="col" className="p-2.5 font-medium w-[74px]">Уровень</th>
+                                  <th scope="col" className="p-2.5 font-medium">
+                                    Уязвимость
+                                    {appealedCount > 0 && (
+                                      <span className="ml-1.5 text-[#3fbf7f] normal-case">
+                                        ({activeFindingsCount} акт. · {appealedCount} FP)
+                                      </span>
+                                    )}
+                                  </th>
+                                  <th scope="col" className="p-2.5 font-medium w-[116px] text-right">Действия</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-[var(--color-line)]">
-                                {findings.map((f, idx) => (
-                                  <tr key={`${f.id}-${idx}`} className="hover:bg-[var(--color-raised)]/60 transition-colors">
-                                    <td data-label="Уровень" className="p-2.5 align-top whitespace-nowrap">
-                                      <span className={cn('px-1.5 py-0.5 rounded font-mono text-[10px]', SEVERITY_BADGE[f.severity] || SEVERITY_BADGE.INFO)}>
-                                        {f.severity}
-                                      </span>
-                                    </td>
-                                    <th scope="row" className="p-2.5 font-normal align-top min-w-0">
-                                      <div className="text-[var(--color-ink)] font-medium break-words leading-snug">{f.title}</div>
-                                      <div className="font-mono text-[10.5px] text-[var(--color-muted-soft)] mt-0.5 break-all">
-                                        {f.file_path}:{f.line_start || 1} · {formatCweShort(f.cwe)}
-                                      </div>
-                                    </th>
-                                    <td data-label="Патч" className="p-2.5 align-top text-right whitespace-nowrap">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenRemediation(f)}
-                                        className="min-h-7 px-2.5 py-1 rounded-full bg-[var(--color-raised)] hover:bg-[#e94a32] border border-[var(--color-line)] text-[var(--color-ink)] hover:text-white font-mono text-[10.5px] inline-flex items-center gap-1 transition-colors cursor-pointer"
-                                      >
-                                        <Wrench className="w-3 h-3" aria-hidden="true" />
-                                        <span>Патч</span>
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
+                                {findings.map((f, idx) => {
+                                  const fKey = makeFindingKey(f);
+                                  const isAppealed = Boolean(appealedMap[fKey]);
+                                  return (
+                                    <tr
+                                      key={`${f.id}-${idx}`}
+                                      className={cn(
+                                        'hover:bg-[var(--color-raised)]/60 transition-colors',
+                                        isAppealed && 'opacity-55'
+                                      )}
+                                    >
+                                      <td data-label="Уровень" className="p-2.5 align-top whitespace-nowrap">
+                                        <span
+                                          className={cn(
+                                            'px-1.5 py-0.5 rounded font-mono text-[10px]',
+                                            isAppealed
+                                              ? 'bg-[#3fbf7f]/15 text-[#3fbf7f] border border-[#3fbf7f]/35'
+                                              : SEVERITY_BADGE[f.severity] || SEVERITY_BADGE.INFO
+                                          )}
+                                        >
+                                          {isAppealed ? 'FP' : f.severity}
+                                        </span>
+                                      </td>
+                                      <th scope="row" className="p-2.5 font-normal align-top min-w-0">
+                                        <div
+                                          className={cn(
+                                            'text-[var(--color-ink)] font-medium break-words leading-snug',
+                                            isAppealed && 'line-through text-[var(--color-muted-soft)]'
+                                          )}
+                                        >
+                                          {f.title}
+                                        </div>
+                                        <div className="font-mono text-[10.5px] text-[var(--color-muted-soft)] mt-0.5 break-all">
+                                          {f.file_path}:{f.line_start || 1} · {formatCweShort(f.cwe)}
+                                        </div>
+                                      </th>
+                                      <td data-label="Действия" className="p-2.5 align-top text-right whitespace-nowrap">
+                                        <div className="inline-flex items-center justify-end gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenRemediation(f)}
+                                            className="min-h-7 px-2 py-1 rounded-full bg-[var(--color-raised)] hover:bg-[#e94a32] border border-[var(--color-line)] text-[var(--color-ink)] hover:text-white font-mono text-[10px] inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                          >
+                                            <Wrench className="w-3 h-3" aria-hidden="true" />
+                                            <span>Патч</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            title={isAppealed ? 'Вернуть находку в активные' : 'Оспорить как ложное срабатывание (FP)'}
+                                            onClick={() => handleToggleAppeal(f)}
+                                            className={cn(
+                                              'min-h-7 px-2 py-1 rounded-full border font-mono text-[10px] inline-flex items-center gap-1 transition-colors cursor-pointer',
+                                              isAppealed
+                                                ? 'border-[#3fbf7f]/50 text-[#3fbf7f] bg-[#3fbf7f]/10 hover:bg-[#3fbf7f]/20'
+                                                : 'border-[var(--color-line)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] hover:border-[var(--color-line-strong)] bg-[var(--color-paper)]'
+                                            )}
+                                          >
+                                            {isAppealed ? (
+                                              <Undo2 className="w-3 h-3" aria-hidden="true" />
+                                            ) : (
+                                              <Flag className="w-3 h-3" aria-hidden="true" />
+                                            )}
+                                            <span>{isAppealed ? 'Верн.' : 'FP'}</span>
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -1046,6 +1360,43 @@ export default function Home() {
                   })}
                 </div>
               </div>
+
+              {/* Financial Risk (CoAP RK) + Git Time Machine + Self-Healing With Proof */}
+              {(financialRisk || ghostSecrets.length > 0 || healReport) && (
+                <div id="guardian-insights" className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+                      OUT · ФИНАНСОВЫЙ РИСК (КОАП РК) · МАШИНА ВРЕМЕНИ GIT · САМОИСЦЕЛЕНИЕ
+                    </div>
+                    {activeTarget === 'demo/kz-fintech-app' && (
+                      <button
+                        type="button"
+                        disabled={isHealing || isScanning}
+                        onClick={handleDemoHeal}
+                        className="min-h-9 px-4 py-1.5 rounded-full bg-[#3fbf7f] hover:bg-[#34a96e] text-[#09120d] disabled:opacity-60 font-mono text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <HeartPulse className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>{isHealing ? 'Исцеляю и пересканирую...' : 'Исцелить автоматически (Self-Heal)'}</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className={cn('grid grid-cols-1 gap-4', ghostSecrets.length > 0 && financialRisk && 'lg:grid-cols-12')}>
+                    {financialRisk && (
+                      <div className={ghostSecrets.length > 0 ? 'lg:col-span-7' : ''}>
+                        <RiskCard risk={financialRisk} />
+                      </div>
+                    )}
+                    {ghostSecrets.length > 0 && (
+                      <div className={financialRisk ? 'lg:col-span-5' : ''}>
+                        <GhostSecretsCard ghosts={ghostSecrets} />
+                      </div>
+                    )}
+                  </div>
+
+                  {healReport && <HealPanel report={healReport} />}
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -1167,7 +1518,20 @@ export default function Home() {
               </div>
             )}
             <div>
-              <div className="text-xs font-mono uppercase text-[var(--color-muted-soft)] mb-1">Безопасный код</div>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                <div className="text-xs font-mono uppercase text-[var(--color-muted-soft)]">Безопасный код</div>
+                {remediation.syntax_validated !== false && (
+                  <span className="inline-flex items-center gap-1 font-mono text-[10.5px] px-2 py-0.5 rounded-full bg-[#3fbf7f]/15 text-[#3fbf7f] border border-[#3fbf7f]/35">
+                    <CheckCircle2 className="w-3 h-3" aria-hidden="true" />
+                    <span>AST ✓ Синтаксис проверен</span>
+                  </span>
+                )}
+              </div>
+              {remediation.validation_note && (
+                <p className="text-[11px] font-mono text-[var(--color-muted-soft)] mb-1.5">
+                  {remediation.validation_note}
+                </p>
+              )}
               <pre className="p-3 rounded-lg bg-[#0a0a0a] border border-[#232323] font-mono text-xs overflow-x-auto text-[#3fbf7f]">
                 {remediation.fixed_code}
               </pre>

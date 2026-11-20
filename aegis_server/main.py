@@ -22,7 +22,9 @@ from aegis.ai.offline_chat import (
 )
 from aegis.core.archive_utils import safe_extract_zip
 from aegis.core.audit_pipeline import AuditArtifacts, finalize_scan_audit
+from aegis.core.demo_history import materialize_demo_repo
 from aegis.core.event_bus import ScanEventBus
+from aegis.core.self_heal import SelfHealer
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.models import SASTScanResult
 from aegis.scanners.sast_scanner import SASTScanner
@@ -81,6 +83,9 @@ def _build_scan_payload(result: SASTScanResult, repo_name: str, artifacts: Audit
         "summary_ai_generated": bool(artifacts.summary and artifacts.summary.ai_generated),
         "report_pdf_url": artifacts.report_pdf_url,
         "report_md_url": artifacts.report_md_url,
+        "financial_risk": (
+            {**artifacts.risk.model_dump(), "headline": artifacts.risk.headline} if artifacts.risk else None
+        ),
         "vulnerabilities": [f.model_dump() for f in result.findings],
         "scan_result": result.model_dump(),
     }
@@ -147,22 +152,46 @@ async def clone_repo(repo_url: str, dest_dir: Path, token: Optional[str] = None)
 
 @app.post("/api/scan/demo")
 async def scan_demo():
-    """Run a 1-click live demo audit against the built-in fintech/GovTech target."""
+    """Run a 1-click live demo audit against the built-in fintech/GovTech target with real git history."""
     if not DEMO_TARGET_DIR.is_dir():
         return JSONResponse(status_code=404, content={"error": "Demo target directory is missing."})
 
     scan_uuid = uuid.uuid4().hex[:12]
-    scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
-    result = await scanner.scan(DEMO_TARGET_DIR)
-    repo_name = "demo/kz-fintech-app"
-    artifacts = await finalize_scan_audit(
-        result,
-        repo_name=repo_name,
-        commit_sha=scan_uuid,
-        branch="demo",
-        author="stage-demo",
-    )
-    return _build_scan_payload(result, repo_name, artifacts)
+    work_dir = SCANS_DIR / f"demo_{scan_uuid}"
+    try:
+        target = await asyncio.to_thread(materialize_demo_repo, DEMO_TARGET_DIR, work_dir / "kz-fintech-app")
+        scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
+        result = await scanner.scan(target)
+        repo_name = "demo/kz-fintech-app"
+        artifacts = await finalize_scan_audit(
+            result,
+            repo_name=repo_name,
+            commit_sha=scan_uuid,
+            branch="demo",
+            author="stage-demo",
+        )
+        return _build_scan_payload(result, repo_name, artifacts)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+@app.post("/api/scan/demo/heal")
+async def heal_demo():
+    """Self-Healing demo: patch the demo app in a sandbox, re-scan, and return verified diffs + before/after."""
+    if not DEMO_TARGET_DIR.is_dir():
+        return JSONResponse(status_code=404, content={"error": "Demo target directory is missing."})
+    work_dir = SCANS_DIR / f"heal_{uuid.uuid4().hex[:12]}"
+    try:
+        target = await asyncio.to_thread(materialize_demo_repo, DEMO_TARGET_DIR, work_dir / "kz-fintech-app")
+        report = await SelfHealer().heal(target)
+        return {
+            "status": "success",
+            "repo_name": "demo/kz-fintech-app",
+            "fixed_count": report.fixed_count,
+            **report.model_dump(),
+        }
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @app.post("/api/scan/upload")
@@ -344,6 +373,9 @@ async def websocket_scan(websocket: WebSocket):
             "summary_ai_generated": bool(artifacts.summary and artifacts.summary.ai_generated),
             "report_pdf_url": artifacts.report_pdf_url,
             "report_md_url": artifacts.report_md_url,
+            "financial_risk": (
+                {**artifacts.risk.model_dump(), "headline": artifacts.risk.headline} if artifacts.risk else None
+            ),
             "authorship_verified": auth_verified,
             "authorship_status": auth_status,
             "authorship_actor": auth_actor,

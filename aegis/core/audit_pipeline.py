@@ -12,6 +12,8 @@ from aegis.ai.audit_summarizer import AuditSummarizer, AuditSummary
 from aegis.core.metrics_store import get_metrics_store
 from aegis.reporting.audit_report import AuditReport, AuditReportWriter, _safe_component
 from aegis.scanners.models import SASTScanResult
+from aegis.core.project_config import load_config
+from aegis.scanners.risk_model import RiskAssessment, assess_risk
 from aegis.scanners.security_score import calculate_score, get_grade
 
 logger = logging.getLogger("aegis.audit_pipeline")
@@ -31,6 +33,7 @@ class AuditArtifacts:
     report_md_path: Optional[str] = None
     report_pdf_url: Optional[str] = None
     report_md_url: Optional[str] = None
+    risk: Optional[RiskAssessment] = None
 
 
 def report_urls_for(repo_name: str, report_name: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -58,6 +61,12 @@ async def finalize_scan_audit(
     grade, _, recommendation = get_grade(score)
     repo_slug = _safe_component(repo_name.replace("/", "__"), "unknown-repo")
 
+    risk: Optional[RiskAssessment] = None
+    try:
+        risk = assess_risk(scan_result.findings, load_config(scan_result.target_path).risk)
+    except Exception as e:
+        logger.warning(f"Financial risk assessment skipped for {repo_name}: {e}")
+
     report_name: Optional[str] = None
     report_pdf_path: Optional[str] = None
     report_md_path: Optional[str] = None
@@ -77,6 +86,7 @@ async def finalize_scan_audit(
             branch=branch,
             author=author,
             commit_url=commit_url,
+            risk=risk,
         )
         paths = writer_cls().write(report)
         primary = paths.pdf or paths.markdown
@@ -115,4 +125,5 @@ async def finalize_scan_audit(
         report_md_path=report_md_path,
         report_pdf_url=report_pdf_url,
         report_md_url=report_md_url,
+        risk=risk,
     )

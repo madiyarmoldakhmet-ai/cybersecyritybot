@@ -95,6 +95,21 @@ def _row(audit: Dict[str, Any]) -> str:
     )
 
 
+def _appeal_row(item: Dict[str, Any]) -> str:
+    e = html.escape
+    badge = "FP" if item.get("status") == "false_positive" else "ACCEPTED"
+    return (
+        "<tr>"
+        f'<td class="mono muted">{e(_fmt_time(item["created_at"]))}</td>'
+        f'<td class="mono">{e(item["repo_name"])}</td>'
+        f'<td>{e(item["finding_title"])}<div class="mono muted small">{e(item["finding_key"])}</div></td>'
+        f'<td class="mono">{e(item["severity"])}</td>'
+        f'<td><span class="pill pill-ok">{badge}</span></td>'
+        f'<td class="small muted">{e(item["reason"] or "—")}</td>'
+        "</tr>"
+    )
+
+
 def _render(
     m: DashboardMetrics,
     nonce: str,
@@ -107,6 +122,9 @@ def _render(
     dot_cls = "dot" if llm_online else "dot dot-standby"
     rows = "".join(_row(a) for a in m.recent) or (
         '<tr><td colspan="10" class="empty">Пока нет проверок. Отправьте push в подключённый репозиторий или запустите демо.</td></tr>'
+    )
+    appeal_rows = "".join(_appeal_row(a) for a in m.recent_appeals) or (
+        '<tr><td colspan="6" class="empty">Оспоренных находок (False Positive) пока нет.</td></tr>'
     )
     return f"""<!doctype html>
 <html lang="ru">
@@ -139,7 +157,7 @@ def _render(
   .kpi .hint {{ color: var(--muted); font: 12px var(--mono); margin-top: 8px; }}
   .kpi.crit .value {{ color: var(--crit); }}
   .kpi.ai .value {{ color: var(--accent); }}
-  .secondary {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 16px 0 32px; }}
+  .secondary {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin: 16px 0 32px; }}
   .stat {{ border-top: 1px solid var(--line); padding-top: 12px; }}
   .stat .label {{ color: var(--muted); font-size: 13px; }}
   .stat .value {{ font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }}
@@ -210,6 +228,7 @@ def _render(
     <div class="stat"><div class="label">Всего находок</div><div class="value" id="total_findings">{m.total_findings}</div></div>
     <div class="stat"><div class="label">Репозиториев</div><div class="value" id="repos_monitored">{m.repos_monitored}</div></div>
     <div class="stat"><div class="label">Среднее время сканирования</div><div class="value" id="avg_scan_seconds">{e(_fmt_seconds(m.avg_scan_seconds))}</div></div>
+    <div class="stat"><div class="label">Оспорено (FP)</div><div class="value" id="appeals_count">{m.appeals_count}</div></div>
   </section>
 
   <h2>Последние проверки</h2>
@@ -221,6 +240,16 @@ def _render(
         <th class="num">AI</th><th>Статус</th><th>Отчёт</th>
       </tr></thead>
       <tbody id="recent">{rows}</tbody>
+    </table>
+  </div>
+
+  <h2 style="margin-top:28px;">Журнал апелляций (Human-in-the-Loop)</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Время (UTC)</th><th>Репозиторий</th><th>Находка</th><th>Уровень</th><th>Статус</th><th>Комментарий</th>
+      </tr></thead>
+      <tbody id="recent_appeals">{appeal_rows}</tbody>
     </table>
   </div>
   <footer>Обновляется каждые {REFRESH_SECONDS} с · неудачных проверок: <span id="failed_scans">{m.failed_scans}</span></footer>
@@ -262,22 +291,40 @@ def _render(
     tr.appendChild(repCell);
     return tr;
   }}
+  function appealRow(a) {{
+    var tr = document.createElement("tr");
+    tr.appendChild(cell(a.created_at.replace("T", " ").slice(0, 16), "mono muted"));
+    tr.appendChild(cell(a.repo_name, "mono"));
+    var titleCell = cell(a.finding_title);
+    var keyDiv = document.createElement("div"); keyDiv.className = "mono muted small"; keyDiv.textContent = a.finding_key;
+    titleCell.appendChild(keyDiv); tr.appendChild(titleCell);
+    tr.appendChild(cell(a.severity, "mono"));
+    var st = document.createElement("td"), pill = document.createElement("span");
+    pill.className = "pill pill-ok"; pill.textContent = a.status === "false_positive" ? "FP" : "ACCEPTED";
+    st.appendChild(pill); tr.appendChild(st);
+    tr.appendChild(cell(a.reason || "—", "small muted"));
+    return tr;
+  }}
   function refresh() {{
     fetch("/api/v1/dashboard/metrics", {{ cache: "no-store" }})
       .then(function (r) {{ return r.ok ? r.json() : null; }})
       .then(function (m) {{
         if (!m) return;
-        ["total_scans", "critical_found", "high_found", "total_findings", "repos_monitored", "failed_scans"]
-          .forEach(function (k) {{ document.getElementById(k).textContent = m[k]; }});
+        ["total_scans", "critical_found", "high_found", "total_findings", "repos_monitored", "failed_scans", "appeals_count"]
+          .forEach(function (k) {{ var el = document.getElementById(k); if (el && m[k] !== undefined) el.textContent = m[k]; }});
         document.getElementById("avg_ai_seconds").textContent = secs(m.avg_ai_seconds);
         document.getElementById("avg_scan_seconds").textContent = secs(m.avg_scan_seconds);
         if (m.llm_mode) {{ document.getElementById("ai_chip_label").textContent = m.llm_mode; }}
         if (m.llm_hint) {{ document.getElementById("ai_kpi_hint").textContent = m.llm_hint; }}
         var dot = document.getElementById("ai_chip_dot");
         if (dot) {{ dot.className = m.llm_online ? "dot" : "dot dot-standby"; }}
-        if (m.recent.length) {{
+        if (m.recent && m.recent.length) {{
           var body = document.getElementById("recent");
           body.replaceChildren.apply(body, m.recent.map(row));
+        }}
+        if (m.recent_appeals && m.recent_appeals.length) {{
+          var abody = document.getElementById("recent_appeals");
+          if (abody) abody.replaceChildren.apply(abody, m.recent_appeals.map(appealRow));
         }}
       }})
       .catch(function () {{}});

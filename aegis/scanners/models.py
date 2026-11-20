@@ -27,6 +27,7 @@ class ScannerType(str, Enum):
     MOBILE = "mobile"
     FLUTTER = "flutter"
     CUSTOM = "custom"
+    GIT_HISTORY = "git-history"
 
 
 class VulnerabilityFinding(BaseModel):

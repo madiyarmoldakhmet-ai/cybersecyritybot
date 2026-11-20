@@ -68,8 +68,8 @@ class FalsePositiveSanitizer:
         if PLACEHOLDER_REGEX.search(text):
             return True
 
-        # Check for angle bracket placeholders like <YOUR_KEY> or {API_KEY}
-        if re.search(r"<[A-Z0-9_ -]{3,}>|\{[A-Z0-9_ -]{3,}\}", text):
+        # Check for angle bracket / template placeholders like <YOUR_KEY>, {API_KEY}, or ${ENV_VAR:-}
+        if re.search(r"<[A-Z0-9_ -]{3,}>|\{[A-Z0-9_ -]{3,}\}|\$\{[A-Z0-9_]+(?::[-?+=][^}]*)?\}", text):
             return True
 
         return False

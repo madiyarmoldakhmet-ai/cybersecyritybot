@@ -29,14 +29,47 @@ interface AiCopilotChatProps {
 
 const QUICK_PROMPTS = [
   'Объясни критичные баги',
-  'Патч от SQL-инъекции',
-  'Политика .aegis.yml и ИИН',
+  'Оцени риск в тенге (КоАП РК)',
+  'Самоисцеление и Git-секреты',
   'Как работает проверка авторства?',
 ];
 
+function renderCodeSpans(text: string, keyPrefix: string): ReactNode[] {
+  const parts = text.split(/(`[^`]+`)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+      return (
+        <code
+          key={`${keyPrefix}-c-${idx}`}
+          className="font-mono text-[0.86em] px-1.5 py-0.5 rounded bg-[var(--color-canvas)] border border-[var(--color-line)] text-[var(--color-ink)] break-words"
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return <span key={`${keyPrefix}-t-${idx}`}>{part}</span>;
+  });
+}
+
 function renderInlineFormatting(line: string, keyPrefix: string): ReactNode[] {
-  const tokens = line.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+  const headingMatch = line.match(/^#{1,3}\s+(.+)$/);
+  if (headingMatch) {
+    return [
+      <strong key={`${keyPrefix}-h`} className="font-semibold text-[var(--color-ink)] block">
+        {renderInlineFormatting(headingMatch[1], `${keyPrefix}-hi`)}
+      </strong>,
+    ];
+  }
+
+  const tokens = line.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g);
   return tokens.map((token, idx) => {
+    if (token.startsWith('**') && token.endsWith('**') && token.length >= 4) {
+      return (
+        <strong key={`${keyPrefix}-${idx}`} className="font-semibold text-[var(--color-ink)]">
+          {renderCodeSpans(token.slice(2, -2), `${keyPrefix}-b-${idx}`)}
+        </strong>
+      );
+    }
     if (token.startsWith('`') && token.endsWith('`') && token.length >= 2) {
       return (
         <code
@@ -47,11 +80,11 @@ function renderInlineFormatting(line: string, keyPrefix: string): ReactNode[] {
         </code>
       );
     }
-    if (token.startsWith('**') && token.endsWith('**') && token.length >= 4) {
+    if (token.startsWith('*') && token.endsWith('*') && token.length >= 3 && !token.startsWith('**')) {
       return (
-        <strong key={`${keyPrefix}-${idx}`} className="font-semibold text-[var(--color-ink)]">
-          {token.slice(2, -2)}
-        </strong>
+        <em key={`${keyPrefix}-${idx}`} className="italic text-[var(--color-ink)]">
+          {renderCodeSpans(token.slice(1, -1), `${keyPrefix}-em-${idx}`)}
+        </em>
       );
     }
     return <span key={`${keyPrefix}-${idx}`}>{token}</span>;

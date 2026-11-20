@@ -269,6 +269,36 @@ def _reply_findings_breakdown(scan_context: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _reply_financial_risk(scan_context: Optional[Dict[str, Any]]) -> str:
+    risk = (scan_context or {}).get("financial_risk") or {}
+    total_kzt = risk.get("total_kzt")
+    reg_kzt = risk.get("regulatory_kzt")
+    inc_kzt = risk.get("incident_kzt")
+    if total_kzt:
+        fmt = lambda n: f"{int(n):,}".replace(",", " ") + " ₸"
+        extra = f" + инцидент `{fmt(inc_kzt)}`" if inc_kzt else ""
+        return (
+            f"### Финансовый риск по ст. 79 КоАП РК: до **{fmt(total_kzt)}**\n\n"
+            f"- **Расчёт:** штраф регулятора `{fmt(reg_kzt)}` (до 2 000 МРП × 4 325 ₸){extra}.\n"
+            "- **Экономика (ROI):** тариф `Team On-Prem` стоит **190 000 ₸/мес** против **800 000+ ₸/мес** за штатного AppSec-инженера (~4.2× экономии).\n"
+            "- Нажми **«Исцелить автоматически»** справа — система перепишет уязвимый код в песочнице, пересканирует и докажет снижение риска в тенге."
+        )
+    return (
+        "### Финансовый риск и экономика (ст. 79 КоАП РК)\n\n"
+        "- За утечку персональных данных (ИИН/ПДн) ст. 79 КоАП РК предусматривает штраф до **2 000 МРП (8 650 000 ₸)**, плюс внутреннюю стоимость инцидента из `.aegis.yml` (`records_at_risk × cost_per_record_kzt`).\n"
+        "- Запусти **«Демо-аудит»**, чтобы увидеть расчёт по каждой строке кода и интерактивный ROI-калькулятор для твоей команды."
+    )
+
+
+def _reply_git_history_and_heal() -> str:
+    return (
+        "### Машина времени Git и Самоисцеление с доказательством\n\n"
+        "1. **Машина времени Git (`git-history`)** — проигрывает историю коммитов и находит *ghost secrets* (токены и ключи, которые удалили из `HEAD`, но любой может восстановить через `git log -p`), с автором и окном утечки в днях.\n"
+        "2. **Самоисцеление (`POST /api/scan/demo/heal` · `aegis heal`)** — правит копию кода через AST, проверяет синтаксис (`ast.parse`), **пересканирует** и оставляет только подтверждённые фиксы (плохие патчи откатываются автоматически).\n"
+        "3. **Human-in-the-Loop апелляции** — любую ложную находку можно оспорить кнопкой **«FP»** с моментальным пересчётом `Security Score` и записью в аудит-лог `/dashboard`."
+    )
+
+
 def build_offline_appsec_reply(
     question: str,
     scan_context: Optional[Dict[str, Any]],
@@ -276,6 +306,12 @@ def build_offline_appsec_reply(
 ) -> str:
     """Return a context-aware deterministic AppSec response when live LLM streaming is unavailable."""
     q = (question or "").strip().lower()
+
+    if any(k in q for k in ("тенге", "коап", "штраф", "roi", "деньг", "эконом", "финанс", "мрп")):
+        return _reply_financial_risk(scan_context)
+
+    if any(k in q for k in ("машина времени", "истор", "ghost", "самоисцел", "heal", "апелляц", "оспор", "false positive")):
+        return _reply_git_history_and_heal()
 
     if any(k in q for k in ("aegis.yml", "иин", "iin", "pii", "персонал", "политик", "правил")):
         return _reply_policy_and_iin(scan_context)

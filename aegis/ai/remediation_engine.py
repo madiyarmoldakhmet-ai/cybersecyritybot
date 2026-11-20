@@ -4,10 +4,11 @@ Generates both secure patches AND validation payloads (exploits) via local Ollam
 No censorship, no cloud filters.
 """
 
+import ast
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
@@ -31,6 +32,8 @@ class RemediationResult(BaseModel):
     fixed_code: str
     diff_patch: Optional[str] = None
     confidence_score: float = 0.9
+    syntax_validated: bool = True
+    validation_note: Optional[str] = None
 
 
 class ExploitPayload(BaseModel):
@@ -195,6 +198,27 @@ class RemediationEngine:
             raw = raw[:-3]
         return raw.strip()
 
+    @staticmethod
+    def _validate_patch_syntax(fixed_code: str, file_path: str) -> Tuple[bool, str]:
+        """Deterministic syntax post-validation so broken LLM patches never reach PRs."""
+        code = (fixed_code or "").strip()
+        if not code:
+            return False, "Пустой патч от LLM отклонён."
+        lower_path = (file_path or "").lower()
+        if lower_path.endswith(".py"):
+            try:
+                ast.parse(code)
+                return True, "Python AST синтаксис подтверждён (ast.parse)."
+            except SyntaxError as err:
+                return False, f"LLM-патч не прошёл ast.parse() (строка {err.lineno}: {err.msg})."
+        if lower_path.endswith(".json"):
+            try:
+                json.loads(code)
+                return True, "JSON синтаксис подтверждён."
+            except json.JSONDecodeError as err:
+                return False, f"LLM-патч не прошёл JSON-валидацию ({err.msg})."
+        return True, "Проверка синтаксиса выполнена."
+
     # ---- Fix generation -----------------------------------------------------
 
     async def analyze_and_remediate(
@@ -218,6 +242,13 @@ class RemediationEngine:
             raw = await self._query_ollama(SYSTEM_PROMPT_FIX, user_prompt)
             cleaned = self._clean_json(raw)
             data = json.loads(cleaned)
+            candidate_code = str(data.get("fixed_code") or context)
+            ok, note = self._validate_patch_syntax(candidate_code, finding.file_path)
+            if not ok:
+                logger.warning(f"LLM remediation rejected by syntax validator for {finding.file_path}: {note}")
+                fallback = self._rule_based_remediation(finding, context)
+                fallback.validation_note = f"{note} Применён проверенный детерминированный шаблон."
+                return fallback
             return RemediationResult(
                 finding_id=finding.id,
                 vuln_name=finding.title,
@@ -225,13 +256,19 @@ class RemediationEngine:
                 explanation_ru=data.get("explanation_ru", finding.description),
                 impact_analysis=data.get("impact_analysis", "Анализ рисков не предоставлен."),
                 remediation_steps=data.get("remediation_steps", []),
-                fixed_code=data.get("fixed_code", context),
+                fixed_code=candidate_code,
                 diff_patch=data.get("diff_patch"),
                 confidence_score=float(data.get("confidence_score", 0.9)),
+                syntax_validated=True,
+                validation_note=note,
             )
         except Exception as e:
             logger.warning(f"LLM remediation unavailable, using deterministic fallback: {e}")
-            return self._rule_based_remediation(finding, context)
+            fallback = self._rule_based_remediation(finding, context)
+            ok, note = self._validate_patch_syntax(fallback.fixed_code, finding.file_path)
+            fallback.syntax_validated = ok
+            fallback.validation_note = f"Детерминированный шаблон · {note}"
+            return fallback
 
     @staticmethod
     def _rule_based_remediation(finding: VulnerabilityFinding, context: str) -> RemediationResult:

@@ -1,17 +1,26 @@
 # Commit Guardian 🔒
 
-**AI-powered code security audits for government IT projects — fully on-premise.**
+**Air-gapped on-premise AI AppSec platform for KZ Fintech & GovTech — 0 bytes sent to external clouds.**
 
-Commit Guardian checks every commit the moment it is pushed: a signed GitHub webhook triggers SAST scanning, a **local** LLM (Ollama) separates real vulnerabilities from noise, and the team gets a Telegram alert plus a formal audit report. Source code never leaves your servers.
+Commit Guardian audits every commit, Pull Request, or ZIP upload within seconds: signed GitHub webhooks trigger multi-engine SAST + variable-level cross-file Taint tracking + **Git Time Machine** (deleted secrets still alive in commit history), deterministic **Art. 79 CoAP RK financial risk in tenge (`₸`)**, **Self-Healing with proof** (`AST patch → ast.parse → sandbox re-scan → rollback if unsafe`), Human-in-the-Loop FP appeals, and Compliance PDF/Markdown reports. Source code never leaves your servers.
+
+| Verified Metric | Result |
+|---|---|
+| External Cloud Egress (`ALLOW_CLOUD_LLM=false`) | **0 bytes** (cloud keys stripped at startup) |
+| Self-Scan Hygiene (`SASTScanner` on own repo) | **0 findings** across all severities |
+| Automated Test Suite (`pytest tests/`) | **100+ unit & adversarial stress tests** |
+| Stage Demo Audit (`demo/kz-fintech-app`) | **~4–5 s** (Semgrep + Bandit + AST Taint + Secrets + Git History + KZ IIN) |
+| Verified Self-Healing Proof (`POST /api/scan/demo/heal`) | **Score F (0) → B/C (70)** · **17 → 4 findings** · **83.65M → 8.65M ₸** |
+| Deployment | **1 command:** `docker compose up --build` (configurable `PORT`, `/health` check) |
 
 ```mermaid
 flowchart LR
-    A[git push / PR] -->|webhook| B[HMAC SHA-256<br/>signature check]
-    B --> C[SAST: Semgrep · Bandit · pip-audit<br/>+ Aegis deep scan]
-    C --> D[Local LLM<br/>Ollama]
-    D --> E[Compliance report<br/>Markdown + PDF]
-    D --> F[Telegram alert]
-    E --> G[/dashboard metrics/]
+    A[git push / PR / ZIP] -->|HMAC SHA-256| B[Strict Ownership &<br/>Webhook Gate]
+    B --> C[SAST · Taint AST · Secrets<br/>Git Time Machine · KZ IIN]
+    C --> D[Python Risk Math<br/>Art. 79 CoAP RK ₸]
+    C --> E[Self-Healing Sandbox<br/>AST → ast.parse → Re-scan]
+    D --> F[Compliance PDF / MD<br/>Telegram · PR · /dashboard]
+    E --> F
 ```
 
 ---
@@ -32,8 +41,12 @@ flowchart LR
 ## ✨ Features
 
 - **Commit Guardian webhook** — `push` and `pull_request` events, HMAC-verified, processed in a background queue, with automated Pull Request security comments when `GITHUB_TOKEN` is set.
-- **Multi-engine SAST & Policy engine** — Semgrep, Bandit, pip-audit, secret entropy detection, Python AST + cross-file `TaintEngine`, mobile/Flutter rules, and repository-level `.aegis.yml` rules (`ignore_paths`, `ignore_rules`, `severity_threshold`, `custom_rules` e.g. unmasked PII/IIN logging).
-- **Local AI analysis & offline fallback** — false-positive filtering, executive summary in Russian, and CWE-aware remediation patches via Ollama with deterministic rule-based fallback when Ollama is offline.
+- **Multi-engine SAST, Taint AST & Policy engine** — Semgrep, Bandit, pip-audit, entropy-checked secret masking, variable-level inter-procedural `TaintEngine`, mobile/Flutter rules, and `.aegis.yml` rules (`ignore_paths`, `severity_threshold`, `custom_rules` for 12-digit KZ IIN leaks, and `risk:` incident assumptions).
+- **Git Time Machine (`git-history`)** — replays commit history (`git log -p`) to catch *ghost secrets* removed from `HEAD` but still recoverable, showing author, commit, and leak window in days.
+- **Deterministic Financial Risk & ROI (`₸`)** — transparent Python model translating CWE/severity into Art. 79 CoAP RK regulatory fines (30–2,000 MRP, up to `8 650 000 ₸`) + incident exposure (`records_at_risk × cost_per_record_kzt`), plus an interactive team-size ROI calculator (`POST /api/v1/risk/roi`).
+- **Self-Healing with proof (`POST /api/scan/demo/heal` · `aegis heal`)** — patches code in an isolated sandbox via AST fixers, validates syntax with `ast.parse()`, **re-scans** the patched copy, keeps only verified risk-reducing diffs, and rolls back any unsafe patch automatically.
+- **Human-in-the-Loop Appeals & `F5` Persistence** — dispute false positives (`POST /api/v1/findings/appeal`) with instant deterministic `Security Score` recalculation, persistent SQLite audit log on `/dashboard`, and `localStorage` session recovery across browser refreshes.
+- **Local AI analysis & strict `ast.parse()` post-validation** — false-positive filtering, executive summary in Russian, and CWE-aware remediation patches via local Ollama; any syntactically broken Python LLM patch is rejected automatically and replaced with a verified deterministic template.
 - **Compliance reports & downloads** — `reports/<owner>__<repo>/<timestamp>_<commit>.md` and `.pdf` (Cyrillic-ready), downloadable directly from `/dashboard` or `/api/v1/reports/...` and delivered via Telegram.
 - **Interactive web console & context-aware AI chat** — `/` (`aegis_web` Next.js obsidian console) with 1-click vulnerable fintech demo audit (`POST /api/scan/demo`), live WebSocket terminal, `Security Score (0–100 / A+..F)`, `/ws/chat` + `POST /api/chat` AppSec copilot with deterministic CWE/patch engine when Ollama is in standby, AI Patch diff modal, Auto-PR creation, and ZIP upload.
 - **Strict Authorship Verification (`Проверка авторства`)** — `/api/v1/verify/challenge` & `/api/v1/verify/ownership` verify real GitHub write access (`push`/`admin`/`maintain` PAT check), signed challenge commits or `.well-known/aegis-verify.txt`, and DNS TXT `_aegis-challenge.<domain>` before unlocking private scans, DAST probes, or automated PRs via signed HMAC `proof_token`.
@@ -81,15 +94,16 @@ In the GitHub repository: **Settings → Webhooks → Add webhook**
 | Secret | the value of `GITHUB_WEBHOOK_SECRET` |
 | Events | *Pushes* and *Pull requests* |
 
-### Docker
+### Docker (1-Command Monolith)
 
 ```bash
-docker build -t commit-guardian .
-docker run -p 8000:8000 --env-file .env \
-  -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
-  -v "$PWD/reports:/app/reports" -v "$PWD/data:/app/data" \
-  commit-guardian
+cp .env.example .env
+docker compose up --build          # PORT=8080 docker compose up --build for custom port
+# Optional bundled Ollama sidecar:
+docker compose --profile ollama up --build
 ```
+
+Helper shortcuts via `Makefile`: `make run`, `make test`, `make self-scan`, `make web-build`, `make seed`, `make docker`.
 
 The image bundles the frontend, API, Telegram bot, `git` and a Cyrillic font for PDF reports. Mount `reports/` and `data/` to keep audit reports and metrics across container restarts. See [DEPLOY.md](DEPLOY.md) for Railway / Render.
 
@@ -119,8 +133,11 @@ All settings are environment variables (see [`.env.example`](.env.example)). The
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/webhook/github` | GitHub webhook receiver (push, pull_request, ping) |
-| `POST` | `/api/scan/demo` | 1-click stage demo audit against built-in KZ fintech fixture |
+| `POST` | `/api/scan/demo` | 1-click stage demo audit (with real Git Time Machine history + CoAP risk) |
+| `POST` | `/api/scan/demo/heal` | Self-Healing sandbox: AST patch → `ast.parse` → re-scan → verified diffs |
 | `POST` | `/api/scan/upload` | ZIP archive local scan + Compliance PDF generation |
+| `POST` / `GET` / `DELETE` | `/api/v1/findings/appeal` | Human-in-the-Loop FP appeals with live Security Score recalculation |
+| `POST` | `/api/v1/risk/roi` | Deterministic KZ ROI calculator vs in-house AppSec FTE |
 | `GET` | `/dashboard` | Observability dashboard |
 | `GET` | `/api/v1/dashboard/metrics` | Dashboard metrics as JSON |
 | `GET` | `/api/v1/reports/{repo_slug}/{filename}` | Download persisted PDF / Markdown compliance report |

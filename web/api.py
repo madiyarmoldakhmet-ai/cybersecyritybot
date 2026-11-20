@@ -21,12 +21,15 @@ from aegis.ai.offline_chat import probe_ai_status
 from aegis.ai.remediation_engine import RemediationEngine, RemediationResult
 from aegis.core.config import settings
 from aegis.core.logging_config import setup_logging
+from aegis.core.metrics_store import get_metrics_store
 from aegis.core.pr_creator import PullRequestCreator
 from aegis.core.queue_manager import ollama_limiter, task_queue
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.dast_scanner import DASTScanner
-from aegis.scanners.models import DASTScanResult, SASTScanResult, ScannerType, VulnerabilityFinding
+from aegis.scanners.models import DASTScanResult, SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+from aegis.scanners.risk_model import ROIEstimate, estimate_roi
 from aegis.scanners.sast_scanner import SASTScanner
+from aegis.scanners.security_score import calculate_score, get_grade
 from web.dashboard import router as dashboard_router
 from web.webhook import router as webhook_router
 
@@ -110,6 +113,25 @@ class PRCreateRequest(BaseModel):
     file_path: str = Field(..., description="Relative path of file to patch")
     finding: VulnerabilityFinding
     remediation: RemediationResult
+
+
+class AppealFindingRequest(BaseModel):
+    repo_name: str = Field(..., min_length=1, max_length=200)
+    finding_key: str = Field(..., min_length=1, max_length=200)
+    finding_title: str = Field(..., min_length=1, max_length=300)
+    severity: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"] = "MEDIUM"
+    status: Literal["false_positive", "accepted_risk"] = "false_positive"
+    reason: str = Field(default="False positive verified by developer", max_length=500)
+    reviewer: str = Field(default="security-engineer", max_length=100)
+    remaining_severities: Optional[List[str]] = Field(
+        default=None,
+        description="Severities of remaining active (non-appealed) findings for deterministic score recalculation.",
+    )
+
+
+class ROICalculatorRequest(BaseModel):
+    team_size: int = Field(default=15, ge=1, le=500)
+    prevented_risk_kzt: int = Field(default=0, ge=0)
 
 
 # --- Routes ---
@@ -421,6 +443,65 @@ async def download_audit_report(repo_slug: str, filename: str):
 
     media_type = "application/pdf" if ext == ".pdf" else "text/markdown; charset=utf-8"
     return FileResponse(path=target, media_type=media_type, filename=target.name)
+
+
+@api_router.post("/api/v1/findings/appeal", tags=["Human-in-the-Loop Appeals"])
+async def appeal_finding(req: AppealFindingRequest):
+    """Record a false-positive / accepted-risk appeal in SQLite and recalculate Security Score."""
+    record = get_metrics_store().record_appeal(
+        repo_name=req.repo_name.strip(),
+        finding_key=req.finding_key.strip(),
+        finding_title=req.finding_title.strip(),
+        severity=req.severity,
+        status=req.status,
+        reason=req.reason.strip(),
+        reviewer=req.reviewer.strip() or "security-engineer",
+    )
+    adjusted_score: Optional[int] = None
+    adjusted_grade: Optional[str] = None
+    if req.remaining_severities is not None:
+        synthetic = [
+            VulnerabilityFinding(
+                id=f"rem-{idx}",
+                scanner=ScannerType.CUSTOM,
+                title="active",
+                description="active",
+                severity=Severity[s.upper()] if s.upper() in Severity.__members__ else Severity.INFO,
+                file_path="remaining",
+            )
+            for idx, s in enumerate(req.remaining_severities)
+        ]
+        adjusted_score = calculate_score(synthetic)
+        adjusted_grade = get_grade(adjusted_score)[0]
+
+    return {
+        "status": "recorded",
+        "appeal": record,
+        "adjusted_score": adjusted_score,
+        "adjusted_grade": adjusted_grade,
+    }
+
+
+@api_router.get("/api/v1/findings/appeals", tags=["Human-in-the-Loop Appeals"])
+async def list_finding_appeals(repo_name: Optional[str] = None):
+    """List persisted human-in-the-loop finding appeals."""
+    appeals = get_metrics_store().list_appeals(repo_name=repo_name)
+    return {"count": len(appeals), "appeals": appeals}
+
+
+@api_router.delete("/api/v1/findings/appeal/{appeal_id}", tags=["Human-in-the-Loop Appeals"])
+async def delete_finding_appeal(appeal_id: int):
+    """Revert a recorded finding appeal."""
+    deleted = get_metrics_store().delete_appeal(appeal_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Appeal not found.")
+    return {"status": "deleted", "id": appeal_id}
+
+
+@api_router.post("/api/v1/risk/roi", response_model=ROIEstimate, tags=["Risk & ROI"])
+async def calculate_roi_endpoint(req: ROICalculatorRequest):
+    """Compute deterministic KZ unit-economics savings vs in-house AppSec FTE."""
+    return estimate_roi(team_size=req.team_size, prevented_risk_kzt=req.prevented_risk_kzt)
 
 
 app.include_router(webhook_router)

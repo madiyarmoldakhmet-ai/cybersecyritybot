@@ -220,5 +220,56 @@ def scan(
         else:
             console.print("[bold red]Failed to generate PDF report.[/]")
 
+
+@app.command()
+def heal(
+    path: str = typer.Argument(".", help="Repository / directory to heal"),
+    apply: bool = typer.Option(False, "--apply", help="Write verified fixes back to the directory"),
+    run_tests: bool = typer.Option(True, "--tests/--no-tests", help="Run the project's pytest suite on the healed copy"),
+    show_diff: bool = typer.Option(True, "--diff/--no-diff", help="Print unified diffs"),
+):
+    """Self-Healing: patch → re-scan → keep only fixes that verifiably remove findings."""
+    from aegis.core.self_heal import SelfHealer
+    from aegis.scanners.risk_model import format_kzt
+
+    target = Path(path).resolve()
+    if not target.exists():
+        console.print(f"[red]Path not found:[/] {target}")
+        raise typer.Exit(code=1)
+
+    print_banner()
+    with console.status("🩹 Healing in a sandbox copy and re-scanning..."):
+        report = asyncio.run(SelfHealer(run_tests=run_tests).heal(target, apply_to=target if apply else None))
+
+    table = Table(title="Self-Healing — before / after", show_lines=False)
+    table.add_column("")
+    table.add_column("Before", justify="right")
+    table.add_column("After", justify="right", style="green")
+    table.add_row("Security Score", f"{report.before_score} ({report.before_grade})", f"{report.after_score} ({report.after_grade})")
+    table.add_row("Findings", str(report.before_findings), str(report.after_findings))
+    table.add_row("Risk", format_kzt(report.before_risk_kzt), format_kzt(report.after_risk_kzt))
+    console.print(table)
+
+    for fix in report.fixes:
+        mark = "[green]✔ verified[/]" if fix.verified else "[yellow]• no effect[/]"
+        console.print(f"\n{mark} [bold]{fix.file_path}[/] — {', '.join(fix.fixers)}")
+        for title in fix.fixed_findings:
+            console.print(f"   [green]−[/] {title}")
+        if show_diff:
+            console.print(Syntax(fix.diff, "diff", theme="monokai"))
+    for rel in report.reverted_files:
+        console.print(f"[yellow]↩ reverted {rel}: the patch did not lower risk[/]")
+    if report.tests_passed is not None:
+        console.print("🧪 Tests: " + ("[green]passed[/]" if report.tests_passed else "[red]FAILED — fixes were not applied[/]"))
+    if report.manual_actions:
+        console.print("\n[bold]Needs a human:[/]")
+        for m in report.manual_actions:
+            console.print(f"  [{m.severity}] {m.title} ({m.location}) → {m.action}")
+    if apply and report.tests_passed is not False:
+        console.print(f"\n✅ Applied {sum(f.verified for f in report.fixes)} verified file fix(es) to {target}")
+    elif not apply:
+        console.print("\nDry run. Re-run with [bold]--apply[/] to write verified fixes.")
+
+
 if __name__ == "__main__":
     app()

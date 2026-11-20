@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS audits (
     error            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_audits_created_at ON audits (created_at);
+
+CREATE TABLE IF NOT EXISTS finding_appeals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT    NOT NULL,
+    repo_name     TEXT    NOT NULL,
+    finding_key   TEXT    NOT NULL,
+    finding_title TEXT    NOT NULL,
+    severity      TEXT    NOT NULL DEFAULT 'MEDIUM',
+    status        TEXT    NOT NULL DEFAULT 'false_positive',
+    reason        TEXT    NOT NULL DEFAULT '',
+    reviewer      TEXT    NOT NULL DEFAULT 'security-engineer'
+);
+CREATE INDEX IF NOT EXISTS idx_appeals_repo ON finding_appeals (repo_name);
 """
 
 
@@ -49,7 +62,9 @@ class DashboardMetrics:
     repos_monitored: int = 0
     avg_ai_seconds: Optional[float] = None
     avg_scan_seconds: Optional[float] = None
+    appeals_count: int = 0
     recent: List[Dict[str, Any]] = field(default_factory=list)
+    recent_appeals: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -61,7 +76,9 @@ class DashboardMetrics:
             "repos_monitored": self.repos_monitored,
             "avg_ai_seconds": self.avg_ai_seconds,
             "avg_scan_seconds": self.avg_scan_seconds,
+            "appeals_count": self.appeals_count,
             "recent": self.recent,
+            "recent_appeals": self.recent_appeals,
         }
 
 
@@ -117,6 +134,70 @@ class MetricsStore:
                 (self._now(), repo_name, commit_sha, branch, error[:500]),
             )
 
+    def record_appeal(
+        self,
+        repo_name: str,
+        finding_key: str,
+        finding_title: str,
+        severity: str = "MEDIUM",
+        status: str = "false_positive",
+        reason: str = "",
+        reviewer: str = "security-engineer",
+    ) -> Dict[str, Any]:
+        """Persist a human-in-the-loop false-positive or accepted-risk appeal."""
+        created_at = self._now()
+        clean_status = status if status in {"false_positive", "accepted_risk", "open"} else "false_positive"
+        clean_sev = severity.upper()[:16] if severity else "MEDIUM"
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO finding_appeals
+                       (created_at, repo_name, finding_key, finding_title, severity, status, reason, reviewer)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    created_at,
+                    repo_name[:200],
+                    finding_key[:200],
+                    finding_title[:300],
+                    clean_sev,
+                    clean_status,
+                    reason[:500],
+                    reviewer[:100],
+                ),
+            )
+            appeal_id = int(cur.lastrowid)
+        return {
+            "id": appeal_id,
+            "created_at": created_at,
+            "repo_name": repo_name[:200],
+            "finding_key": finding_key[:200],
+            "finding_title": finding_title[:300],
+            "severity": clean_sev,
+            "status": clean_status,
+            "reason": reason[:500],
+            "reviewer": reviewer[:100],
+        }
+
+    def list_appeals(self, repo_name: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            if repo_name:
+                rows = conn.execute(
+                    """SELECT id, created_at, repo_name, finding_key, finding_title, severity, status, reason, reviewer
+                       FROM finding_appeals WHERE repo_name = ? ORDER BY id DESC LIMIT ?""",
+                    (repo_name, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT id, created_at, repo_name, finding_key, finding_title, severity, status, reason, reviewer
+                       FROM finding_appeals ORDER BY id DESC LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_appeal(self, appeal_id: int) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM finding_appeals WHERE id = ?", (int(appeal_id),))
+            return cur.rowcount > 0
+
     def summary(self, recent_limit: int = 10) -> DashboardMetrics:
         with self._lock, self._connect() as conn:
             row = conn.execute(
@@ -137,6 +218,11 @@ class MetricsStore:
                    FROM audits ORDER BY id DESC LIMIT ?""",
                 (recent_limit,),
             ).fetchall()
+            appeals_count = conn.execute("SELECT COUNT(*) FROM finding_appeals").fetchone()[0]
+            recent_appeals = conn.execute(
+                """SELECT id, created_at, repo_name, finding_key, finding_title, severity, status, reason, reviewer
+                   FROM finding_appeals ORDER BY id DESC LIMIT 10"""
+            ).fetchall()
 
         def rounded(value: Optional[float]) -> Optional[float]:
             return round(value, 2) if value is not None else None
@@ -150,7 +236,9 @@ class MetricsStore:
             repos_monitored=row["repos_monitored"],
             avg_ai_seconds=rounded(row["avg_ai_seconds"]),
             avg_scan_seconds=rounded(row["avg_scan_seconds"]),
+            appeals_count=int(appeals_count),
             recent=[dict(r) for r in recent],
+            recent_appeals=[dict(r) for r in recent_appeals],
         )
 
 

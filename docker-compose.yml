@@ -1,0 +1,47 @@
+services:
+  commit-guardian:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: commit-guardian
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      ENVIRONMENT: "${ENVIRONMENT:-production}"
+      ALLOW_CLOUD_LLM: "${ALLOW_CLOUD_LLM:-false}"
+      LLM_PROVIDER: "ollama"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen2.5-coder:14b}"
+      WEB_APP_URL: "${WEB_APP_URL:-http://localhost:8000}"
+      CORS_ALLOW_ORIGINS: "${CORS_ALLOW_ORIGINS:-http://localhost:8000}"
+      GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET:-}"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_ADMIN_CHAT_ID: "${TELEGRAM_ADMIN_CHAT_ID:-}"
+      REPORT_FONT_PATH: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+      GIT_HISTORY_SCAN_ENABLED: "${GIT_HISTORY_SCAN_ENABLED:-true}"
+      GIT_HISTORY_MAX_COMMITS: "${GIT_HISTORY_MAX_COMMITS:-500}"
+      WEBHOOK_CLONE_DEPTH: "${WEBHOOK_CLONE_DEPTH:-50}"
+    volumes:
+      - ./reports:/app/reports
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Optional air-gapped local LLM sidecar: run with `docker compose --profile ollama up --build`
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+volumes:
+  ollama_models:

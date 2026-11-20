@@ -23,6 +23,7 @@ import httpx
 
 from aegis.ai.audit_summarizer import AuditSummarizer
 from aegis.core.audit_pipeline import finalize_scan_audit
+from aegis.scanners.risk_model import RiskAssessment
 from aegis.core.config import settings
 from aegis.core.metrics_store import get_metrics_store
 from aegis.core.queue_manager import task_queue
@@ -63,7 +64,8 @@ async def send_telegram_alert(
     branch: str,
     scan_result: SASTScanResult,
     commit_url: Optional[str] = None,
-    report_name: Optional[str] = None
+    report_name: Optional[str] = None,
+    risk: Optional[RiskAssessment] = None,
 ) -> None:
     """Dispatch rich Commit Guardian security alert via Telegram Bot."""
     if not settings.telegram_bot_token:
@@ -85,7 +87,8 @@ async def send_telegram_alert(
             f"🌿 <b>Ветка:</b> <code>{e(branch)}</code>",
             f"👤 <b>Автор коммита:</b> <code>{e(author)}</code>",
             f"🔖 <b>Коммит:</b> <code>{e(commit_sha[:8])}</code>",
-            f"🏅 <b>Security Score:</b> <code>{score}/100 ({e(grade)})</code>\n",
+            f"🏅 <b>Security Score:</b> <code>{score}/100 ({e(grade)})</code>",
+            (f"💸 <b>{e(risk.headline)}</b> <i>(ст. 79 КоАП РК)</i>\n" if risk and risk.total_kzt else ""),
             "📊 <b>Результаты сканирования (SAST &amp; Mobile):</b>",
             f"• 🔴 Critical: <code>{crit_count}</code>",
             f"• 🟠 High: <code>{high_count}</code>",
@@ -138,6 +141,7 @@ async def post_github_pr_comment(
     score: int,
     grade: str,
     summary_text: str,
+    risk: Optional[RiskAssessment] = None,
 ) -> bool:
     """Post automated Commit Guardian audit summary on a GitHub Pull Request."""
     token = (settings.github_token or "").strip()
@@ -161,7 +165,8 @@ async def post_github_pr_comment(
         f"## 🔒 Commit Guardian — On-Premise Audit (`{commit_sha[:8]}`)\n\n"
         f"- **Security Score:** `{score}/100 ({grade})`\n"
         f"- **Findings:** Critical `{crit}` · High `{high}` · Medium `{med}` · Total `{scan_result.total_findings}`\n"
-        f"- **Privacy:** Проанализировано локально (без передачи кода во внешние облака)\n\n"
+        + (f"- **💸 {risk.headline}** — {risk.legal_basis}\n" if risk and risk.total_kzt else "")
+        + f"- **Privacy:** Проанализировано локально (без передачи кода во внешние облака)\n\n"
         f"### Заключение\n{summary_text}\n\n"
         f"### Детали находок\n{table_block}"
     )
@@ -210,9 +215,10 @@ async def process_guardian_audit(
             auth_clone_url = f"https://x-access-token:{settings.github_token}@github.com/{repo_name}.git"
 
     try:
-        # Clone single branch depth 1
+        # Clone a single branch with bounded history so the Git Time Machine can find "deleted" secrets
+        clone_depth = str(max(1, settings.webhook_clone_depth))
         proc = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", "1", "--branch", branch, "--", auth_clone_url, str(temp_dir),
+            "git", "clone", "--depth", clone_depth, "--single-branch", "--branch", branch, "--", auth_clone_url, str(temp_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -283,6 +289,7 @@ async def process_guardian_audit(
                 score=artifacts.score,
                 grade=artifacts.grade,
                 summary_text=artifacts.summary.text if artifacts.summary else "",
+                risk=artifacts.risk,
             )
 
         crit_count = scan_result.findings_by_severity.get(Severity.CRITICAL, 0)
@@ -303,7 +310,8 @@ async def process_guardian_audit(
                     branch=branch,
                     scan_result=scan_result,
                     commit_url=commit_url,
-                    report_name=report_name
+                    report_name=report_name,
+                    risk=artifacts.risk,
                 )
 
         return scan_result

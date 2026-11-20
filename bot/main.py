@@ -85,6 +85,8 @@ async def _deliver_scan_result(
         author=author,
     )
     summary_html = _format_scan_summary(result)
+    if artifacts.risk and artifacts.risk.total_kzt:
+        summary_html += f"\n\n💸 <b>{html.escape(artifacts.risk.headline)}</b> <i>(ст. 79 КоАП РК)</i>"
     if artifacts.summary and artifacts.summary.text:
         summary_html += f"\n\n🧠 <b>Заключение:</b>\n{html.escape(artifacts.summary.text[:800])}"
     await status_msg.edit_text(summary_html, parse_mode=ParseMode.HTML)

@@ -6,3 +6,7 @@ custom_rules:
     title: "Unmasked Kazakhstan IIN in application logs"
     severity: HIGH
     cwe: ["CWE-532"]
+# Financial risk model (ст. 79 КоАП РК). Demo assumptions — replace with your own figures.
+risk:
+  records_at_risk: 50000      # wallets with IIN in the ledger table
+  cost_per_record_kzt: 1500   # internal estimate: notification, support, reissue per customer

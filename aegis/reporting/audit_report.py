@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from aegis.ai.audit_summarizer import SEVERITY_ORDER, AuditSummary, sort_findings
 from aegis.core.config import settings
 from aegis.scanners.models import SASTScanResult
+from aegis.scanners.risk_model import RiskAssessment, format_kzt
 
 logger = logging.getLogger("aegis.audit_report")
 
@@ -64,6 +65,7 @@ class AuditReport(BaseModel):
     ai_generated: bool
     ai_duration_seconds: float
     scan_errors: List[str] = Field(default_factory=list)
+    risk: Optional[RiskAssessment] = None
 
     @classmethod
     def from_scan(
@@ -75,6 +77,7 @@ class AuditReport(BaseModel):
         branch: str,
         author: str,
         commit_url: Optional[str] = None,
+        risk: Optional[RiskAssessment] = None,
     ) -> "AuditReport":
         rules = [
             TriggeredRule(
@@ -105,6 +108,7 @@ class AuditReport(BaseModel):
             ai_generated=summary.ai_generated,
             ai_duration_seconds=summary.duration_seconds,
             scan_errors=list(scan_result.errors),
+            risk=risk,
         )
 
     @property
@@ -134,6 +138,29 @@ def _safe_component(value: str, fallback: str) -> str:
     """Reduce untrusted webhook input to a filesystem-safe name (no separators, no '..')."""
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._")
     return cleaned[:100] or fallback
+
+
+def _risk_markdown(risk: Optional[RiskAssessment]) -> List[str]:
+    if risk is None:
+        return []
+    lines = ["## Финансовый риск (₸)", "", f"**{risk.headline}**", ""]
+    if risk.total_kzt:
+        lines += [
+            "| Составляющая | Сумма |",
+            "|---|---:|",
+            f"| Штраф регулятора ({_md_cell(risk.legal_basis)}) | {format_kzt(risk.regulatory_kzt)} |",
+        ]
+        if risk.incident_kzt:
+            lines.append(f"| Стоимость инцидента | {format_kzt(risk.incident_kzt)} |")
+        lines += ["", "| Находка | Категория | Расположение | Доля риска |", "|---|---|---|---:|"]
+        for r in risk.top_findings:
+            lines.append(
+                f"| {_md_cell(r.title)} | {_md_cell(r.category_label)} | `{_md_cell(r.location)}` | {format_kzt(r.risk_kzt)} |"
+            )
+        lines.append("")
+    lines += [f"- _{_md_cell(a)}_" for a in risk.assumptions]
+    lines.append("")
+    return lines
 
 
 def render_markdown(report: AuditReport) -> str:
@@ -166,6 +193,9 @@ def render_markdown(report: AuditReport) -> str:
         "| " + " | ".join(str(report.severity_counts.get(s.value, 0)) for s in SEVERITY_ORDER)
         + f" | {report.total_findings} |",
         "",
+    ]
+    lines += _risk_markdown(report.risk)
+    lines += [
         "## Заключение AI",
         "",
         f"_Модель: {_md_cell(ai_source)}_",
@@ -290,7 +320,22 @@ def render_pdf(report: AuditReport, output_path: Path) -> None:
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
-    story += [sev_table, p("Заключение AI", h2)]
+    story.append(sev_table)
+    if report.risk is not None:
+        story += [p("Финансовый риск (₸)", h2), p(report.risk.headline, ParagraphStyle("CGRisk", parent=body, fontName=bold))]
+        if report.risk.total_kzt:
+            risk_rows = [[p(h, cell_bold) for h in ("Находка", "Категория", "Расположение", "Доля риска")]]
+            for r in report.risk.top_findings:
+                risk_rows.append([p(r.title, cell), p(r.category_label, cell), p(r.location, cell), p(format_kzt(r.risk_kzt), cell)])
+            risk_table = Table(risk_rows, colWidths=[62 * mm, 46 * mm, 38 * mm, 24 * mm], repeatRows=1)
+            risk_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F5F9")),
+                ("GRID", (0, 0), (-1, -1), 0.4, line),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            story.append(risk_table)
+        story += [p(a, subtitle) for a in report.risk.assumptions]
+    story.append(p("Заключение AI", h2))
 
     ai_source = (
         f"Модель: {report.ai_model} (локально, {report.ai_duration_seconds} c)"

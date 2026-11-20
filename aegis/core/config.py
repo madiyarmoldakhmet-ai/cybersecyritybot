@@ -76,6 +76,20 @@ class Settings(BaseSettings):
         description="GitHub Webhook HMAC Secret for signature validation"
     )
 
+    # Git Time Machine (secrets that were deleted but still live in git history)
+    git_history_scan_enabled: bool = Field(
+        default=True,
+        description="Replay git history and report secrets removed from HEAD but still recoverable"
+    )
+    git_history_max_commits: int = Field(
+        default=500,
+        description="Maximum number of most recent commits replayed by the git history scanner"
+    )
+    webhook_clone_depth: int = Field(
+        default=50,
+        description="History depth cloned for webhook audits (1 disables git-history scanning in practice)"
+    )
+
     # Concurrency & Queue Settings
     max_concurrent_llm_jobs: int = Field(
         default=1,

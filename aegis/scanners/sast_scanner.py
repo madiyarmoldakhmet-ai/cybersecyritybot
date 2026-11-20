@@ -908,24 +908,46 @@ class SASTScanner:
                     VulnerabilityFinding(
                         id=f"taint-flow-{idx}",
                         scanner=ScannerType.CUSTOM,
-                        title=f"{tf.vulnerability_type}: {flow_str}",
+                        title=f"{tf.sink_kind or tf.vulnerability_type}: {flow_str}",
                         description=(
-                            f"Untrusted input from `{rel_src}:{tf.source_line}` reaches sink at "
-                            f"`{rel_sink}:{tf.sink_line}` via `{flow_str}` without sanitization."
+                            f"Untrusted input `{tf.source_name or 'user input'}` from `{rel_src}:{tf.source_line}` "
+                            f"reaches `{tf.sink_name or 'sink'}` at `{rel_sink}:{tf.sink_line}` via `{flow_str}` "
+                            "without sanitization (variable-level inter-procedural data flow)."
                         ),
                         severity=sev,
                         file_path=rel_sink,
                         line_start=tf.sink_line,
                         line_end=tf.sink_line,
                         code_snippet="\n".join(tf.code_snippets),
-                        cwe=["CWE-20", "CWE-89"],
+                        cwe=tf.cwe or ["CWE-20"],
                         cve=[],
                         recommendation="Validate and sanitize untrusted input at the entry point and use parameterized sinks.",
+                        raw_metadata={
+                            "taint_path": tf.taint_path,
+                            "source": {"file": rel_src, "line": tf.source_line, "name": tf.source_name},
+                            "sink": {"file": rel_sink, "line": tf.sink_line, "name": tf.sink_name},
+                            "sink_kind": tf.sink_kind,
+                        },
                     )
                 )
             return converted
 
         return await asyncio.to_thread(_run)
+
+    async def run_git_history(self, target_path: Path) -> List[VulnerabilityFinding]:
+        """Git Time Machine: secrets deleted from HEAD but still recoverable from history."""
+        from aegis.core.config import settings
+        from aegis.scanners.git_history import GitHistoryScanner
+
+        if not settings.git_history_scan_enabled or not GitHistoryScanner.is_git_repo(target_path):
+            return []
+        scanner = GitHistoryScanner(max_commits=settings.git_history_max_commits)
+        try:
+            history = await asyncio.to_thread(scanner.scan_history, target_path)
+        except Exception as e:
+            logger.warning(f"Git history scan skipped: {e}")
+            return []
+        return GitHistoryScanner.to_findings(history)
 
     def _apply_project_config(
         self, findings: List[VulnerabilityFinding], project_cfg: ProjectConfig
@@ -1034,7 +1056,10 @@ class SASTScanner:
         logger.info(f"Starting multi-language SAST & Mobile security audit for: {path}")
 
         # Emit ScanStarted
-        total_files = sum(1 for root, dirs, files in os.walk(path) for f in files if not any(d in root for d in IGNORED_DIRS) and not any(d.startswith(".") for d in root.split(os.sep)))
+        total_files = 0
+        for root, dirs, files in os.walk(path):
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
+            total_files += len(files)
         await self._emit(ScanStarted(repo_url=str(path), total_files=total_files))
 
         from aegis.scanners.secret_scanner import SecretScanner
@@ -1068,9 +1093,10 @@ class SASTScanner:
         # Flutter scan runs asynchronously now
         flutter_findings = await flutter_scanner.scan(path)
         custom_findings = self._run_custom_rules(path, project_cfg)
+        history_findings = await self.run_git_history(path)
 
         raw_findings: List[VulnerabilityFinding] = (
-            mobile_findings + bandit_findings + semgrep_findings + ml_findings + taint_findings + sca_findings + (pip_findings or []) + secret_findings + flutter_findings + custom_findings
+            mobile_findings + bandit_findings + semgrep_findings + ml_findings + taint_findings + sca_findings + (pip_findings or []) + secret_findings + flutter_findings + custom_findings + history_findings
         )
 
         # Normalize paths relative to target_path for consistent deduplication and reports
@@ -1111,6 +1137,7 @@ class SASTScanner:
             ScannerType.PIP_AUDIT,
             ScannerType.SECRET,
             ScannerType.FLUTTER,
+            ScannerType.GIT_HISTORY,
         ]
 
         result = SASTScanResult(
