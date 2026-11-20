@@ -1,9 +1,12 @@
-.PHONY: run test self-scan web-build docker seed check
+.PHONY: run stage test self-scan web-build docker seed check
 
 PORT ?= 8000
 
 run:
 	ENVIRONMENT=development ALLOW_CLOUD_LLM=false python3 -m uvicorn aegis_server.main:app --host 127.0.0.1 --port $(PORT)
+
+stage:
+	PORT=$(PORT) ./start_stage_demo.sh
 
 test:
 	python3 -m pytest tests/ -q
