@@ -1,14 +1,47 @@
 'use client';
 
 import { FormEvent, KeyboardEvent, ReactNode, useEffect, useId, useRef, useState } from 'react';
-import { ArrowUp, Paperclip, RotateCcw, Upload } from 'lucide-react';
+import {
+  ArrowUp,
+  FileDown,
+  FileText,
+  GitBranch,
+  HeartPulse,
+  Paperclip,
+  RotateCcw,
+  ShieldAlert,
+  ShieldCheck,
+  Upload,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+export type ChatAuditCard = {
+  repoName: string;
+  commitSha?: string;
+  branch?: string;
+  author?: string;
+  durationSeconds?: number;
+  score: number | null;
+  grade: string | null;
+  totalFindings: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  riskKzt?: number;
+  summary?: string;
+  pdfUrl?: string | null;
+  mdUrl?: string | null;
+  topFindings?: { severity: string; title: string; location: string }[];
+  canSelfHeal?: boolean;
+};
 
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  auditCard?: ChatAuditCard;
 };
 
 interface AiCopilotChatProps {
@@ -19,6 +52,8 @@ interface AiCopilotChatProps {
   onQuickPrompt: (prompt: string) => void;
   onResetChat: () => void;
   onUploadZip: (file: File) => void;
+  onTriggerSelfHeal?: () => void;
+  isHealing?: boolean;
   isTyping: boolean;
   isScanning: boolean;
   ollamaOnline: boolean | null;
@@ -120,6 +155,141 @@ function FormattedBubbleContent({ content }: { content: string }) {
   );
 }
 
+function formatKztInline(n: number): string {
+  return `${Math.round(n).toLocaleString('ru-RU').replace(/,/g, ' ')} ₸`;
+}
+
+function TelegramAuditCard({
+  card,
+  onTriggerSelfHeal,
+  isHealing,
+}: {
+  card: ChatAuditCard;
+  onTriggerSelfHeal?: () => void;
+  isHealing?: boolean;
+}) {
+  const isClean = card.critical === 0 && card.high === 0;
+  return (
+    <div className="mt-1.5 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-paper)] p-3.5 space-y-2.5 text-xs">
+      {/* Header matching Telegram Bot _format_scan_summary */}
+      <div className="flex items-start justify-between gap-2 pb-2 border-b border-[var(--color-line)]">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 font-medium text-[var(--color-ink)]">
+            {isClean ? (
+              <ShieldCheck className="w-4 h-4 text-[#3fbf7f] shrink-0" aria-hidden="true" />
+            ) : (
+              <ShieldAlert className="w-4 h-4 text-[#e94a32] shrink-0" aria-hidden="true" />
+            )}
+            <span className="truncate">{card.repoName}</span>
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10.5px] text-[var(--color-muted-soft)]">
+            {card.branch && (
+              <span className="inline-flex items-center gap-0.5">
+                <GitBranch className="w-3 h-3" aria-hidden="true" />
+                {card.branch}
+              </span>
+            )}
+            {card.commitSha && <code>{card.commitSha.slice(0, 8)}</code>}
+            {card.author && <span>@{card.author}</span>}
+            {typeof card.durationSeconds === 'number' && card.durationSeconds > 0 && (
+              <span>{card.durationSeconds.toFixed(1)} с</span>
+            )}
+          </div>
+        </div>
+        <div
+          className={cn(
+            'font-mono text-xs font-semibold px-2 py-0.5 rounded-md border tabular-nums shrink-0',
+            isClean
+              ? 'bg-[#3fbf7f]/15 text-[#3fbf7f] border-[#3fbf7f]/35'
+              : 'bg-[#e94a32]/15 text-[#ff735d] border-[#e94a32]/35'
+          )}
+        >
+          {card.score ?? '—'}/100 ({card.grade ?? '—'})
+        </div>
+      </div>
+
+      {/* Severity Counts */}
+      <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] tabular-nums">
+        <span className="text-[var(--color-muted-soft)]">Находок: <b className="text-[var(--color-ink)]">{card.totalFindings}</b></span>
+        <span className="px-1.5 py-0.5 rounded bg-[#e94a32]/15 text-[#ff735d]">CRIT {card.critical}</span>
+        <span className="px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-400">HIGH {card.high}</span>
+        <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">MED {card.medium}</span>
+        <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400">LOW {card.low}</span>
+      </div>
+
+      {/* Financial Risk */}
+      {card.riskKzt && card.riskKzt > 0 ? (
+        <div className="px-2.5 py-1.5 rounded-lg bg-[#e94a32]/10 border border-[#e94a32]/30 font-mono text-[11px] text-[#ff735d]">
+          Риск (ст. 79 КоАП РК): <b>до {formatKztInline(card.riskKzt)}</b>
+        </div>
+      ) : null}
+
+      {/* Top Findings list */}
+      {card.topFindings && card.topFindings.length > 0 && (
+        <div className="space-y-1">
+          <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+            Топ находок
+          </div>
+          <ol className="space-y-1">
+            {card.topFindings.slice(0, 5).map((f, i) => (
+              <li key={i} className="text-[11.5px] leading-snug text-[var(--color-body-text)]">
+                <span className="font-mono text-[10px] text-[#ff735d] mr-1">[{f.severity}]</span>
+                <span className="text-[var(--color-ink)]">{f.title}</span>{' '}
+                <code className="font-mono text-[10px] text-[var(--color-muted-soft)]">{f.location}</code>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Auditor summary */}
+      {card.summary && (
+        <p className="text-[11.5px] text-[var(--color-muted-soft)] leading-relaxed border-t border-[var(--color-line)] pt-2">
+          {card.summary.slice(0, 320)}
+          {card.summary.length > 320 ? '…' : ''}
+        </p>
+      )}
+
+      {/* Downloadable Compliance PDF / MD Document Attachments (1:1 like Telegram reply_document) */}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        {card.pdfUrl && (
+          <a
+            href={card.pdfUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-h-8 px-3 py-1.5 rounded-lg bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-[11px] inline-flex items-center gap-1.5 transition-colors"
+          >
+            <FileDown className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Compliance_Report.pdf</span>
+          </a>
+        )}
+        {card.mdUrl && (
+          <a
+            href={card.mdUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-h-8 px-3 py-1.5 rounded-lg border border-[var(--color-line-strong)] hover:border-[var(--color-ink)] bg-[var(--color-panel)] text-[var(--color-ink)] font-mono text-[11px] inline-flex items-center gap-1.5 transition-colors"
+          >
+            <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Markdown (.md)</span>
+          </a>
+        )}
+        {card.canSelfHeal && onTriggerSelfHeal && (
+          <button
+            type="button"
+            disabled={isHealing}
+            onClick={onTriggerSelfHeal}
+            className="min-h-8 px-3 py-1.5 rounded-lg bg-[#3fbf7f] hover:bg-[#34a96e] text-[#09120d] disabled:opacity-60 font-mono text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <HeartPulse className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>{isHealing ? 'Исцеляю...' : 'Self-Heal'}</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function AiCopilotChat({
   messages,
   input,
@@ -128,6 +298,8 @@ export function AiCopilotChat({
   onQuickPrompt,
   onResetChat,
   onUploadZip,
+  onTriggerSelfHeal,
+  isHealing,
   isTyping,
   isScanning,
   ollamaOnline,
@@ -246,7 +418,14 @@ export function AiCopilotChat({
                     : 'bg-[var(--color-panel)] border-[var(--color-line)] text-[var(--color-body-text)] rounded-2xl rounded-bl-sm'
                 )}
               >
-                <FormattedBubbleContent content={msg.content} />
+                {msg.content && <FormattedBubbleContent content={msg.content} />}
+                {msg.auditCard && (
+                  <TelegramAuditCard
+                    card={msg.auditCard}
+                    onTriggerSelfHeal={onTriggerSelfHeal}
+                    isHealing={isHealing}
+                  />
+                )}
                 <div
                   className={cn(
                     'font-mono text-[10.5px] tabular-nums flex items-center gap-1.5 text-[var(--color-faint)]',

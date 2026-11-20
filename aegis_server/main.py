@@ -70,11 +70,79 @@ app = FastAPI(title="Commit Guardian Security API", version="2.0", lifespan=life
 DEMO_TARGET_DIR = Path(__file__).resolve().parent.parent / "demo_targets" / "fintech_demo"
 
 
-def _build_scan_payload(result: SASTScanResult, repo_name: str, artifacts: AuditArtifacts) -> Dict[str, Any]:
-    """Serialize SAST scan results, security score, and report URLs for the web console."""
+async def _extract_git_metadata(
+    repo_dir: Path,
+    fallback_sha: str,
+    fallback_branch: str = "main",
+    fallback_author: str = "unknown",
+) -> tuple[str, str, str, List[Dict[str, str]]]:
+    """Read real branch, HEAD commit SHA/author, and recent commit log from a cloned git directory."""
+    if not (repo_dir / ".git").exists():
+        return fallback_sha, fallback_branch, fallback_author, []
+
+    branch = fallback_branch
+    try:
+        proc_br = await asyncio.create_subprocess_exec(
+            "git", "-C", str(repo_dir), "rev-parse", "--abbrev-ref", "HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out_br, _ = await asyncio.wait_for(proc_br.communicate(), timeout=5.0)
+        if proc_br.returncode == 0:
+            parsed_br = out_br.decode("utf-8", errors="replace").strip()
+            if parsed_br and parsed_br != "HEAD":
+                branch = parsed_br
+    except Exception as exc:
+        logger.debug(f"Could not read git branch for {repo_dir}: {exc}")
+
+    commits: List[Dict[str, str]] = []
+    try:
+        proc_log = await asyncio.create_subprocess_exec(
+            "git", "-C", str(repo_dir), "log", "-n", "10", "--format=%H%x1f%an%x1f%aI%x1f%s",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out_log, _ = await asyncio.wait_for(proc_log.communicate(), timeout=5.0)
+        if proc_log.returncode == 0:
+            for line in out_log.decode("utf-8", errors="replace").splitlines():
+                parts = line.split("\x1f")
+                if len(parts) >= 4:
+                    sha = parts[0].strip()
+                    commits.append({
+                        "sha": sha,
+                        "short": sha[:8],
+                        "author": parts[1].strip(),
+                        "date": parts[2].strip(),
+                        "subject": parts[3].strip(),
+                    })
+    except Exception as exc:
+        logger.debug(f"Could not read git log for {repo_dir}: {exc}")
+
+    if commits:
+        return commits[0]["sha"], branch, commits[0]["author"] or fallback_author, commits
+    return fallback_sha, branch, fallback_author, []
+
+
+def _build_scan_payload(
+    result: SASTScanResult,
+    repo_name: str,
+    artifacts: AuditArtifacts,
+    commit_sha: Optional[str] = None,
+    branch: str = "main",
+    author: str = "unknown",
+    commits: Optional[List[Dict[str, str]]] = None,
+) -> Dict[str, Any]:
+    """Serialize SAST scan results, security score, real commits, and report URLs for the web console."""
+    sev_counts = {sev.value: count for sev, count in result.findings_by_severity.items()}
     return {
         "status": "success",
         "repo_name": repo_name,
+        "commit_sha": commit_sha or "",
+        "branch": branch,
+        "author": author,
+        "commits": commits or [],
+        "duration_seconds": result.duration_seconds,
+        "severity_counts": sev_counts,
         "total_findings": result.total_findings,
         "security_score": artifacts.score,
         "grade": artifacts.grade,
@@ -116,10 +184,13 @@ SCANS_DIR.mkdir(parents=True, exist_ok=True)
 
 class ScanRequest(BaseModel):
     github_url: str
+    github_token: Optional[str] = None
+    proof_token: Optional[str] = None
+    require_ownership: bool = False
 
 
 async def clone_repo(repo_url: str, dest_dir: Path, token: Optional[str] = None) -> bool:
-    """Clones a validated GitHub repository into the specified directory."""
+    """Clones a validated GitHub repository with bounded commit history for Git Time Machine."""
     repo_name = OwnershipVerifier.parse_github_repo(repo_url)
     if not repo_name:
         logger.warning(f"Rejected invalid or non-GitHub clone URL: {repo_url}")
@@ -131,10 +202,11 @@ async def clone_repo(repo_url: str, dest_dir: Path, token: Optional[str] = None)
         if clean_token
         else f"https://github.com/{repo_name}.git"
     )
-    logger.info(f"Cloning {repo_name} into {dest_dir}...")
+    clone_depth = str(max(1, settings.webhook_clone_depth))
+    logger.info(f"Cloning {repo_name} (depth={clone_depth}) into {dest_dir}...")
     try:
         process = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", "1", "--", safe_url, str(dest_dir),
+            "git", "clone", "--depth", clone_depth, "--", safe_url, str(dest_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
@@ -150,6 +222,56 @@ async def clone_repo(repo_url: str, dest_dir: Path, token: Optional[str] = None)
         logger.error(f"Error during git clone: {e}")
         return False
 
+
+@app.post("/api/scan/repo")
+async def scan_repo_http(req: ScanRequest):
+    """HTTP repository audit endpoint (identical pipeline to Telegram bot & WebSocket scanner)."""
+    repo_name = OwnershipVerifier.parse_github_repo(req.github_url.strip())
+    if not repo_name:
+        return JSONResponse(status_code=400, content={"error": "Неверный формат GitHub URL или owner/repo."})
+
+    allowed, auth_verified, auth_status, auth_actor, can_create_pr, auth_msg = await _authorize_ws_scan(
+        repo_name, req.github_token, req.proof_token, req.require_ownership
+    )
+    if not allowed:
+        return JSONResponse(status_code=403, content={"error": auth_msg})
+
+    scan_uuid = uuid.uuid4().hex[:12]
+    repo_dir = SCANS_DIR / f"repo_{scan_uuid}"
+    try:
+        clone_token = (req.github_token or "").strip() or (settings.github_token or "")
+        success = await clone_repo(repo_name, repo_dir, token=clone_token)
+        if not success:
+            return JSONResponse(status_code=502, content={"error": f"Не удалось клонировать репозиторий {repo_name}."})
+
+        commit_sha, branch, author, commits = await _extract_git_metadata(
+            repo_dir, fallback_sha=scan_uuid, fallback_branch="main", fallback_author=auth_actor
+        )
+        scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
+        result = await scanner.scan(repo_dir)
+        artifacts = await finalize_scan_audit(
+            result,
+            repo_name=repo_name,
+            commit_sha=commit_sha,
+            branch=branch,
+            author=author,
+            commit_url=f"https://github.com/{repo_name}/commit/{commit_sha}" if len(commit_sha) == 40 else None,
+        )
+        payload = _build_scan_payload(
+            result, repo_name, artifacts, commit_sha=commit_sha, branch=branch, author=author, commits=commits
+        )
+        payload.update({
+            "authorship_verified": auth_verified,
+            "authorship_status": auth_status,
+            "authorship_actor": auth_actor,
+            "can_create_pr": can_create_pr,
+        })
+        return payload
+    finally:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        logger.info("Код удалён с сервера")
+
+
 @app.post("/api/scan/demo")
 async def scan_demo():
     """Run a 1-click live demo audit against the built-in fintech/GovTech target with real git history."""
@@ -160,17 +282,22 @@ async def scan_demo():
     work_dir = SCANS_DIR / f"demo_{scan_uuid}"
     try:
         target = await asyncio.to_thread(materialize_demo_repo, DEMO_TARGET_DIR, work_dir / "kz-fintech-app")
+        commit_sha, branch, author, commits = await _extract_git_metadata(
+            target, fallback_sha=scan_uuid, fallback_branch="demo", fallback_author="stage-demo"
+        )
         scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
         result = await scanner.scan(target)
         repo_name = "demo/kz-fintech-app"
         artifacts = await finalize_scan_audit(
             result,
             repo_name=repo_name,
-            commit_sha=scan_uuid,
-            branch="demo",
-            author="stage-demo",
+            commit_sha=commit_sha,
+            branch=branch,
+            author=author,
         )
-        return _build_scan_payload(result, repo_name, artifacts)
+        return _build_scan_payload(
+            result, repo_name, artifacts, commit_sha=commit_sha, branch=branch, author=author, commits=commits
+        )
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -233,7 +360,14 @@ async def scan_upload(file: UploadFile = File(...)):
             branch="zip-upload",
             author="web-upload",
         )
-        return _build_scan_payload(result, repo_name, artifacts)
+        return _build_scan_payload(
+            result,
+            repo_name,
+            artifacts,
+            commit_sha=scan_uuid[:12],
+            branch="zip-upload",
+            author="web-upload",
+        )
     finally:
         shutil.rmtree(repo_dir, ignore_errors=True)
         logger.info("Код удалён с сервера")
@@ -355,16 +489,26 @@ async def websocket_scan(websocket: WebSocket):
             await websocket.send_json(event.model_dump(mode="json"))
             
         result = await scan_task
+        commit_sha, branch, author, commits = await _extract_git_metadata(
+            repo_dir, fallback_sha=scan_uuid[:12], fallback_branch="main", fallback_author=auth_actor
+        )
         artifacts = await finalize_scan_audit(
             result,
             repo_name=repo_name,
-            commit_sha=scan_uuid[:12],
-            branch="main",
-            author=auth_actor,
+            commit_sha=commit_sha,
+            branch=branch,
+            author=author,
+            commit_url=f"https://github.com/{repo_name}/commit/{commit_sha}" if len(commit_sha) == 40 else None,
         )
+        sev_counts = {sev.value: count for sev, count in result.findings_by_severity.items()}
         await websocket.send_json({
             "event_type": "ScanResult",
             "repo_name": repo_name,
+            "commit_sha": commit_sha,
+            "branch": branch,
+            "author": author,
+            "commits": commits,
+            "severity_counts": sev_counts,
             "total_findings": result.total_findings,
             "security_score": artifacts.score,
             "grade": artifacts.grade,
@@ -436,6 +580,70 @@ class ChatHttpRequest(BaseModel):
     scan_context: Optional[Dict[str, Any]] = None
 
 
+async def _try_handle_bot_command(data: str) -> Optional[Dict[str, Any]]:
+    """Mirror Telegram bot commands (/verify and GitHub repo URL/slug scanning) directly in web chat."""
+    text = data.strip()
+    if not text:
+        return None
+
+    # 1. /verify command (1:1 with Telegram bot/main.py)
+    if text.startswith("/verify"):
+        parts = text.split()
+        if len(parts) < 2:
+            return {
+                "reply": (
+                    "### Проверка авторства (`/verify`)\n\n"
+                    "- `/verify owner/repo` — получить одноразовый код подтверждения\n"
+                    "- `/verify owner/repo cybersec-verify-xxxx` — проверить код в коммите или `verify.txt`"
+                ),
+                "ai_generated": False,
+            }
+        target = parts[1]
+        if len(parts) >= 3:
+            ok, msg = await OwnershipVerifier.verify_commit_challenge(target, parts[2])
+            badge = "✅" if ok else "⛔"
+            return {"reply": f"{badge} {msg}", "ai_generated": False}
+        try:
+            ch = OwnershipVerifier.issue_challenge(target, "github")
+            code = ch["challenge_code"]
+            repo = ch["target"]
+            return {
+                "reply": (
+                    f"### 🔐 Код подтверждения авторства для `{repo}`\n\n"
+                    f"Код: `{code}`\n\n"
+                    f"Выполни в репозитории:\n"
+                    f"```bash\ngit commit --allow-empty -m \"{code}\" && git push\n```\n\n"
+                    f"Затем напиши сюда: `/verify {repo} {code}`"
+                ),
+                "ai_generated": False,
+            }
+        except ValueError as err:
+            return {"reply": f"⛔ {err}", "ai_generated": False}
+
+    # 2. GitHub URL anywhere in message OR clean bare owner/repo message
+    repo_candidate = next((w for w in text.split() if "github.com/" in w), None)
+    if repo_candidate:
+        parsed = OwnershipVerifier.parse_github_repo(repo_candidate)
+        if parsed:
+            return {
+                "action": "SCAN",
+                "github_url": f"https://github.com/{parsed}",
+                "reply": f"Клонирую `{parsed}`, читаю коммиты и запускаю локальный аудит...",
+                "ai_generated": False,
+            }
+    elif len(text.split()) == 1 and "/" in text and not text.startswith("/"):
+        parsed = OwnershipVerifier.parse_github_repo(text)
+        if parsed:
+            return {
+                "action": "SCAN",
+                "github_url": f"https://github.com/{parsed}",
+                "reply": f"Клонирую `{parsed}`, читаю коммиты и запускаю локальный аудит...",
+                "ai_generated": False,
+            }
+
+    return None
+
+
 @app.post("/api/chat")
 async def http_chat(req: ChatHttpRequest):
     """HTTP fallback for AI AppSec chat when WebSocket transport is unavailable."""
@@ -443,14 +651,9 @@ async def http_chat(req: ChatHttpRequest):
     if not data:
         return {"reply": "", "ai_generated": False}
 
-    if "github.com/" in data:
-        url = next((word for word in data.split() if "github.com/" in word), data)
-        return {
-            "action": "SCAN",
-            "github_url": url,
-            "reply": f"Запустил аудит репозитория {url}. Результаты и отчёт появятся в консоли справа.",
-            "ai_generated": False,
-        }
+    cmd_result = await _try_handle_bot_command(data)
+    if cmd_result is not None:
+        return cmd_result
 
     ctx_dict = req.scan_context if isinstance(req.scan_context, dict) and req.scan_context.get("repo_name") else None
     scan_context_note = format_scan_context_note(ctx_dict)
@@ -507,13 +710,14 @@ async def websocket_chat(websocket: WebSocket):
                 await websocket.send_json({"type": "done"})
                 continue
 
-            # Trigger scan when a GitHub URL is sent
-            if "github.com/" in data:
-                url = next((word for word in data.split() if "github.com/" in word), data)
+            # Mirror Telegram bot commands (/verify, GitHub URL, or bare owner/repo)
+            cmd_result = await _try_handle_bot_command(data)
+            if cmd_result is not None:
                 chat_history.append({"role": "user", "content": data})
-                await websocket.send_json({"type": "action", "action": "SCAN", "github_url": url})
-                reply = f"Запустил аудит репозитория {url}. Результаты и отчёт появятся в консоли справа."
-                chat_history.append({"role": "assistant", "content": f"Запустил локальное сканирование для {url}."})
+                if cmd_result.get("action") == "SCAN":
+                    await websocket.send_json({"type": "action", "action": "SCAN", "github_url": cmd_result["github_url"]})
+                reply = cmd_result["reply"]
+                chat_history.append({"role": "assistant", "content": reply})
                 await websocket.send_json({"type": "chunk", "content": reply})
                 await websocket.send_json({"type": "done"})
                 continue

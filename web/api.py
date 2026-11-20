@@ -19,6 +19,7 @@ import httpx
 
 from aegis.ai.offline_chat import probe_ai_status
 from aegis.ai.remediation_engine import RemediationEngine, RemediationResult
+from aegis.core.audit_pipeline import report_urls_for
 from aegis.core.config import settings
 from aegis.core.logging_config import setup_logging
 from aegis.core.metrics_store import get_metrics_store
@@ -422,6 +423,33 @@ async def create_pull_request(req: PRCreateRequest):
 
 
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+@api_router.get("/api/v1/reports", tags=["Reports"])
+async def list_audit_reports(limit: int = 25):
+    """Return recent audited commits and downloadable PDF/Markdown compliance reports for the web console."""
+    capped = max(1, min(limit, 50))
+    summary = get_metrics_store().summary(recent_limit=capped)
+    audits = []
+    for item in summary.recent:
+        pdf_url, md_url = report_urls_for(item["repo_name"], item.get("report_name"))
+        audits.append({
+            **item,
+            "pdf_url": pdf_url if item.get("status") != "failed" else None,
+            "md_url": md_url if item.get("status") != "failed" else None,
+        })
+    return {
+        "total_scans": summary.total_scans,
+        "failed_scans": summary.failed_scans,
+        "critical_found": summary.critical_found,
+        "high_found": summary.high_found,
+        "total_findings": summary.total_findings,
+        "repos_monitored": summary.repos_monitored,
+        "avg_scan_seconds": summary.avg_scan_seconds,
+        "appeals_count": summary.appeals_count,
+        "audits": audits,
+        "recent_appeals": summary.recent_appeals,
+    }
 
 
 @api_router.get("/api/v1/reports/{repo_slug}/{filename}", tags=["Reports"])

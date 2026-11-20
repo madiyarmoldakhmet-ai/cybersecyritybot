@@ -8,8 +8,6 @@ import {
   GitPullRequest,
   HeartPulse,
   Lock,
-  Play,
-  ShieldCheck,
   Terminal,
   Undo2,
   Upload,
@@ -18,10 +16,10 @@ import {
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { TerminalWindow, ScanEvent } from '@/components/TerminalWindow';
-import { MetricsDashboard } from '@/components/MetricsDashboard';
 import { SecurityScore } from '@/components/SecurityScore';
-import { AiCopilotChat, ChatMessage } from '@/components/AiCopilotChat';
+import { AiCopilotChat, ChatAuditCard, ChatMessage } from '@/components/AiCopilotChat';
 import { AuthorshipPanel, AuthorshipState } from '@/components/AuthorshipPanel';
+import { CommitsReportsPanel, RepoCommit, ReportsFeedData } from '@/components/CommitsReportsPanel';
 import {
   FinancialRisk,
   GhostSecret,
@@ -93,7 +91,7 @@ function computeLocalScore(activeFindings: Finding[]): { score: number; grade: s
   return { score: clamped, grade };
 }
 
-type InspectorTab = 'overview' | 'authorship' | 'scanner' | 'findings';
+type InspectorTab = 'reports' | 'findings' | 'scanner' | 'authorship';
 
 const SEVERITY_BADGE: Record<string, string> = {
   CRITICAL: 'bg-[#e94a32]/15 text-[#ff735d] border border-[#e94a32]/40',
@@ -107,7 +105,7 @@ const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
   id: 'welcome-1',
   role: 'assistant',
   content:
-    'На связи **Commit Guardian AI**. Спрашивай о безопасности кода, прикрепи `.zip` скрепкой, вставь ссылку `github.com/owner/repo` или запусти **«Демо-аудит»** — проверю уязвимости, утечки ИИН и помогу подтвердить авторство.',
+    'На связи **Commit Guardian** — работает как Telegram-бот прямо в браузере.\nОтправь `github.com/owner/repo` (или просто `owner/repo`), прикрепи `.zip`, введи `/verify owner/repo` или нажми **«Демо-аудит»** — проверю коммиты, уязвимости, утечки ИИН и пришлю **PDF-отчёт** прямо сюда в чат.',
   timestamp: 'Сегодня',
 };
 
@@ -137,11 +135,71 @@ function formatCweShort(cwes?: string[]): string {
   return Array.from(new Set(compact)).slice(0, 2).join(', ');
 }
 
+function buildAuditChatCard(data: {
+  repo_name?: string;
+  commit_sha?: string;
+  branch?: string;
+  author?: string;
+  total_findings?: number;
+  vulnerabilities?: Finding[];
+  findings?: Finding[];
+  security_score?: number;
+  grade?: string;
+  summary?: string;
+  report_pdf_url?: string | null;
+  report_md_url?: string | null;
+  financial_risk?: FinancialRisk | null;
+  scan_result?: { duration_seconds?: number };
+  duration_seconds?: number;
+}): ChatAuditCard {
+  const list = data.vulnerabilities || data.findings || [];
+  const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+  for (const f of list) {
+    const s = f.severity?.toUpperCase() as keyof typeof counts;
+    if (s in counts) counts[s] += 1;
+  }
+  const rank: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, INFO: 4 };
+  const topFindings = [...list]
+    .sort((a, b) => (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9))
+    .slice(0, 5)
+    .map((f) => ({
+      severity: f.severity,
+      title: f.title,
+      location: `${f.file_path}:${f.line_start || 1}`,
+    }));
+  const repoName = data.repo_name || 'workspace';
+  return {
+    repoName,
+    commitSha: data.commit_sha || undefined,
+    branch: data.branch || undefined,
+    author: data.author || undefined,
+    durationSeconds: data.scan_result?.duration_seconds ?? data.duration_seconds,
+    score: typeof data.security_score === 'number' ? data.security_score : null,
+    grade: data.grade ?? null,
+    totalFindings: data.total_findings ?? list.length,
+    critical: counts.CRITICAL,
+    high: counts.HIGH,
+    medium: counts.MEDIUM,
+    low: counts.LOW,
+    riskKzt: data.financial_risk?.total_kzt,
+    summary: data.summary || '',
+    pdfUrl: data.report_pdf_url ?? null,
+    mdUrl: data.report_md_url ?? null,
+    topFindings,
+    canSelfHeal: repoName === 'demo/kz-fintech-app' && list.length > 0,
+  };
+}
+
 export default function Home() {
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('reports');
   const [messages, setMessages] = useState<ChatMessage[]>([INITIAL_ASSISTANT_MESSAGE]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+
+  // Live persisted commits & compliance reports feed (/api/v1/reports)
+  const [reportsFeed, setReportsFeed] = useState<ReportsFeedData | null>(null);
+  const [loadingFeed, setLoadingFeed] = useState(false);
+  const [activeCommits, setActiveCommits] = useState<RepoCommit[]>([]);
 
   // Live backend & Ollama posture
   const [ollamaOnline, setOllamaOnline] = useState<boolean | null>(null);
@@ -157,8 +215,6 @@ export default function Home() {
   const [isScanning, setIsScanning] = useState(false);
   const [events, setEvents] = useState<ScanEvent[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
-  const [scannedFiles, setScannedFiles] = useState(0);
-  const [totalFiles, setTotalFiles] = useState(0);
   const [vulnerabilities, setVulnerabilities] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [securityScore, setSecurityScore] = useState<number | null>(null);
@@ -174,6 +230,24 @@ export default function Home() {
   const [appealedMap, setAppealedMap] = useState<Record<string, AppealRecord>>({});
   const [hydrated, setHydrated] = useState(false);
 
+  const refreshReportsFeed = useCallback(async () => {
+    setLoadingFeed(true);
+    try {
+      const res = await fetch('/api/v1/reports?limit=25', { cache: 'no-store' });
+      if (res.ok) {
+        setReportsFeed(await res.json());
+      }
+    } catch {
+      // Keep previous feed cleanly
+    } finally {
+      setLoadingFeed(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshReportsFeed();
+  }, [refreshReportsFeed]);
+
   const ghostSecrets = useMemo<GhostSecret[]>(() => {
     const out: GhostSecret[] = [];
     for (const f of findings) {
@@ -184,6 +258,15 @@ export default function Home() {
     }
     return out;
   }, [findings]);
+
+  const ghostCommitShas = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of ghostSecrets) {
+      if (g.introduced?.short) set.add(g.introduced.short);
+      if (g.removed?.short) set.add(g.removed.short);
+    }
+    return set;
+  }, [ghostSecrets]);
 
   const activeFindingsCount = useMemo(
     () => findings.filter((f) => !appealedMap[makeFindingKey(f)]).length,
@@ -303,14 +386,12 @@ export default function Home() {
           if (typeof saved.auditSummary === 'string') setAuditSummary(saved.auditSummary);
           if (typeof saved.elapsedTime === 'number') setElapsedTime(saved.elapsedTime);
           if (typeof saved.vulnerabilities === 'number') setVulnerabilities(saved.vulnerabilities);
-          if (typeof saved.scannedFiles === 'number') setScannedFiles(saved.scannedFiles);
-          if (typeof saved.totalFiles === 'number') setTotalFiles(saved.totalFiles);
+          if (Array.isArray(saved.activeCommits)) setActiveCommits(saved.activeCommits);
           if (saved.reportPdfUrl) setReportPdfUrl(saved.reportPdfUrl);
           if (saved.reportMdUrl) setReportMdUrl(saved.reportMdUrl);
           if (saved.financialRisk) setFinancialRisk(saved.financialRisk);
           if (saved.healReport) setHealReport(saved.healReport);
           if (saved.appealedMap && typeof saved.appealedMap === 'object') setAppealedMap(saved.appealedMap);
-          if (Array.isArray(saved.findings) && saved.findings.length > 0) setInspectorTab('findings');
         }
       }
     } catch {
@@ -333,8 +414,7 @@ export default function Home() {
           auditSummary,
           elapsedTime,
           vulnerabilities,
-          scannedFiles,
-          totalFiles,
+          activeCommits,
           reportPdfUrl,
           reportMdUrl,
           financialRisk,
@@ -354,8 +434,7 @@ export default function Home() {
     auditSummary,
     elapsedTime,
     vulnerabilities,
-    scannedFiles,
-    totalFiles,
+    activeCommits,
     reportPdfUrl,
     reportMdUrl,
     financialRisk,
@@ -366,13 +445,12 @@ export default function Home() {
   const resetScanState = (targetLabel: string) => {
     setEvents([]);
     setFindings([]);
-    setScannedFiles(0);
-    setTotalFiles(0);
     setVulnerabilities(0);
     setElapsedTime(0);
     setSecurityScore(null);
     setGrade(null);
     setAuditSummary('');
+    setActiveCommits([]);
     setReportPdfUrl(null);
     setReportMdUrl(null);
     setFinancialRisk(null);
@@ -391,6 +469,10 @@ export default function Home() {
 
   const applyCompletedPayload = (data: {
     repo_name?: string;
+    commit_sha?: string;
+    branch?: string;
+    author?: string;
+    commits?: RepoCommit[];
     total_findings?: number;
     vulnerabilities?: Finding[];
     findings?: Finding[];
@@ -407,9 +489,11 @@ export default function Home() {
     const list = data.vulnerabilities || data.findings || [];
     setFindings(list);
     setVulnerabilities(data.total_findings ?? list.length);
+    if (data.repo_name) setActiveTarget(data.repo_name);
     if (typeof data.security_score === 'number') setSecurityScore(data.security_score);
     if (data.grade) setGrade(data.grade);
     if (data.summary) setAuditSummary(data.summary);
+    if (Array.isArray(data.commits)) setActiveCommits(data.commits);
     if (data.authorship_status) setAuditAuthorshipLabel(data.authorship_status);
     setReportPdfUrl(data.report_pdf_url ?? null);
     setReportMdUrl(data.report_md_url ?? null);
@@ -423,7 +507,8 @@ export default function Home() {
     }
     setIsScanning(false);
     if (timerRef.current) clearInterval(timerRef.current);
-    if (list.length > 0) setInspectorTab('findings');
+    setInspectorTab(list.length > 0 ? 'findings' : 'reports');
+    refreshReportsFeed();
 
     setEvents((prev) => [
       ...prev,
@@ -542,7 +627,7 @@ export default function Home() {
     setMessages((prev) => [
       ...prev,
       { id: `${Date.now()}`, role: 'user', content: 'Запусти демо-аудит KZ Fintech', timestamp: now },
-      { id: 'streaming', role: 'assistant', content: 'Запускаю локальный аудит (SAST + Taint + Secrets)...', timestamp: now },
+      { id: 'streaming', role: 'assistant', content: 'Клонирую историю коммитов и запускаю локальный аудит (SAST + Taint + Secrets + Git Time Machine)...', timestamp: now },
     ]);
     setEvents([{ event_type: 'ScanStarted', message: 'Инициализация on-premise движка Commit Guardian...' }]);
 
@@ -557,7 +642,8 @@ export default function Home() {
             {
               id: `${Date.now()}`,
               role: 'assistant',
-              content: `Демо-аудит завершён: **${data.total_findings}** находок, Score **${data.security_score}/100 (${data.grade})**. Спроси о любой уязвимости или жми «Патч» справа.`,
+              content: 'Аудит завершён — официальный Compliance-отчёт и сводка по коммитам готовы:',
+              auditCard: buildAuditChatCard(data),
               timestamp: formatNowTime(),
             },
           ];
@@ -565,8 +651,6 @@ export default function Home() {
         return [...filtered, { id: `${Date.now()}`, role: 'assistant', content: `Ошибка демо-скана: ${data.error}`, timestamp: formatNowTime() }];
       });
       if (res.ok) {
-        setScannedFiles(2);
-        setTotalFiles(2);
         applyCompletedPayload(data);
       } else {
         setIsScanning(false);
@@ -593,7 +677,7 @@ export default function Home() {
     setMessages((prev) => [
       ...prev,
       { id: `${Date.now()}`, role: 'user', content: `Проверь архив \`${file.name}\``, timestamp: now },
-      { id: 'streaming', role: 'assistant', content: 'Распаковка и локальный анализ...', timestamp: now },
+      { id: 'streaming', role: 'assistant', content: 'Распаковка и локальный анализ (код будет удалён сразу после проверки)...', timestamp: now },
     ]);
 
     const formData = new FormData();
@@ -610,7 +694,8 @@ export default function Home() {
             {
               id: `${Date.now()}`,
               role: 'assistant',
-              content: `Аудит завершён: **${data.total_findings ?? 0}** находок · Score **${data.security_score ?? '-'}/100 (${data.grade ?? '-'})**. Исходный код удалён.`,
+              content: 'Аудит ZIP-архива завершён, исходный код удалён с сервера:',
+              auditCard: buildAuditChatCard(data),
               timestamp: formatNowTime(),
             },
           ];
@@ -632,12 +717,68 @@ export default function Home() {
     }
   };
 
+  const runRepoScanHttpFallback = async (clean: string) => {
+    try {
+      const res = await fetch('/api/scan/repo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          github_url: clean,
+          github_token: authorship.githubToken || undefined,
+          proof_token: authorship.proofToken || undefined,
+          require_ownership: requireOwnership,
+        }),
+      });
+      const data = await res.json();
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== 'streaming');
+        if (res.ok) {
+          return [
+            ...filtered,
+            {
+              id: `${Date.now()}`,
+              role: 'assistant',
+              content: 'Аудит репозитория и коммитов завершён, копия кода удалена с сервера:',
+              auditCard: buildAuditChatCard(data),
+              timestamp: formatNowTime(),
+            },
+          ];
+        }
+        return [
+          ...filtered,
+          { id: `${Date.now()}`, role: 'assistant', content: `⛔ ${data.error || 'Не удалось выполнить скан репозитория.'}`, timestamp: formatNowTime() },
+        ];
+      });
+      if (res.ok) {
+        applyCompletedPayload(data);
+      } else {
+        setIsScanning(false);
+        if (timerRef.current) clearInterval(timerRef.current);
+      }
+    } catch (err) {
+      setIsScanning(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== 'streaming'),
+        { id: `${Date.now()}`, role: 'assistant', content: `⛔ Ошибка сети при сканировании: ${err}`, timestamp: formatNowTime() },
+      ]);
+    }
+  };
+
   const startScan = (repoUrl: string) => {
     const clean = repoUrl.trim();
     if (!clean) return;
     setRepoScanUrl(clean);
     setVerifyTarget(clean);
     resetScanState(clean);
+
+    const now = formatNowTime();
+    setMessages((prev) => [
+      ...prev.filter((m) => m.id !== 'streaming'),
+      { id: 'streaming', role: 'assistant', content: `Клонирую \`${clean}\`, проверяю коммиты и запускаю аудит...`, timestamp: now },
+    ]);
+
+    let finished = false;
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/scan`;
     const ws = new WebSocket(wsUrl);
     scanWsRef.current = ws;
@@ -656,26 +797,49 @@ export default function Home() {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.event_type === 'ScanResult') {
+        finished = true;
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== 'streaming'),
+          {
+            id: `${Date.now()}`,
+            role: 'assistant',
+            content: 'Аудит репозитория и коммитов завершён, копия кода удалена с сервера:',
+            auditCard: buildAuditChatCard(data),
+            timestamp: formatNowTime(),
+          },
+        ]);
         applyCompletedPayload(data);
         return;
       }
       setEvents((prev) => [...prev, data]);
-      if (data.event_type === 'ScanStarted' && data.total_files) {
-        setTotalFiles(data.total_files);
-      } else if (data.event_type === 'FileScanning') {
-        setScannedFiles((prev) => prev + 1);
-      } else if (data.event_type === 'VulnerabilityFound') {
+      if (data.event_type === 'VulnerabilityFound') {
         setVulnerabilities((prev) => prev + 1);
       } else if (data.event_type === 'SystemError') {
+        finished = true;
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
         setMessages((prev) => [
-          ...prev,
+          ...prev.filter((m) => m.id !== 'streaming'),
           { id: `${Date.now()}`, role: 'assistant', content: `⛔ ${data.message}`, timestamp: formatNowTime() },
         ]);
       } else if (data.event_type === 'ScanCompleted') {
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
+      }
+    };
+
+    ws.onerror = () => {
+      if (!finished) {
+        finished = true;
+        ws.close();
+        runRepoScanHttpFallback(clean);
+      }
+    };
+
+    ws.onclose = () => {
+      if (!finished) {
+        finished = true;
+        runRepoScanHttpFallback(clean);
       }
     };
   };
@@ -747,6 +911,7 @@ export default function Home() {
       if (existing.appealId) {
         try {
           await fetch(`/api/v1/findings/appeal/${existing.appealId}`, { method: 'DELETE' });
+          refreshReportsFeed();
         } catch {
           // Local state already reverted cleanly
         }
@@ -790,6 +955,7 @@ export default function Home() {
             [key]: { appealId: data.appeal.id, reason: data.appeal.reason || 'False Positive' },
           }));
         }
+        refreshReportsFeed();
       }
     } catch {
       // Optimistic local calculation remains active
@@ -1041,10 +1207,10 @@ export default function Home() {
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5" role="group" aria-label="Модули рабочей области">
                   {(
                     [
-                      { id: 'overview', label: 'ОБЗОР И AI', count: `${messages.length}` },
-                      { id: 'authorship', label: 'АВТОРСТВО', count: authorship.verified ? 'OK' : 'CHECK' },
+                      { id: 'reports', label: 'КОММИТЫ И ОТЧЁТЫ', count: `${reportsFeed?.total_scans ?? 0}` },
+                      { id: 'findings', label: 'НАХОДКИ И ПАТЧИ', count: `${activeFindingsCount}` },
                       { id: 'scanner', label: 'СКАНЕР И ЛОГИ', count: `${events.length}` },
-                      { id: 'findings', label: 'ПАТЧИ И PDF', count: `${vulnerabilities}` },
+                      { id: 'authorship', label: 'АВТОРСТВО', count: authorship.verified ? 'OK' : 'CHECK' },
                     ] as const
                   ).map((pill) => {
                     const active = inspectorTab === pill.id;
@@ -1082,6 +1248,8 @@ export default function Home() {
                       onQuickPrompt={(prompt) => sendChatText(prompt)}
                       onResetChat={handleResetChat}
                       onUploadZip={handleZipUpload}
+                      onTriggerSelfHeal={handleDemoHeal}
+                      isHealing={isHealing}
                       isTyping={isTyping}
                       isScanning={isScanning}
                       ollamaOnline={ollamaOnline}
@@ -1167,6 +1335,16 @@ export default function Home() {
                           reportPdfUrl={reportPdfUrl}
                           reportMdUrl={reportMdUrl}
                         />
+
+                        {auditSummary && (
+                          <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-2.5 text-xs text-[var(--color-body-text)] leading-relaxed">
+                            <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted-soft)] mr-2">
+                              ЗАКЛЮЧЕНИЕ:
+                            </span>
+                            {auditSummary.slice(0, 220)}
+                            {auditSummary.length > 220 ? '…' : ''}
+                          </div>
+                        )}
 
                         {findings.length > 0 ? (
                           <div
@@ -1273,66 +1451,18 @@ export default function Home() {
                         )}
                       </div>
                     ) : (
-                      /* Default Overview matching prtner drafting / routing card */
-                      <div className="space-y-4 flex-1 flex flex-col justify-between">
-                        <div className="space-y-4">
-                          <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)]">
-                            <span>DRAFT · TELEMETRY</span>
-                            <span className={authorship.verified ? 'text-[#3fbf7f]' : 'text-[var(--color-faint)]'}>
-                              {authorship.verified ? `OWNER @${authorship.actor}` : 'PUBLIC MODE'}
-                            </span>
-                          </div>
-
-                          <SecurityScore
-                            score={securityScore}
-                            grade={grade}
-                            elapsedTime={elapsedTime}
-                            vulnerabilities={vulnerabilities}
-                            isScanning={isScanning}
-                            reportPdfUrl={reportPdfUrl}
-                            reportMdUrl={reportMdUrl}
-                          />
-
-                          <MetricsDashboard
-                            scannedFiles={scannedFiles}
-                            totalFiles={totalFiles}
-                            vulnerabilities={vulnerabilities}
-                            elapsedTime={elapsedTime}
-                            ollamaOnline={ollamaOnline}
-                            ollamaModel={ollamaModel}
-                            isScanning={isScanning}
-                          />
-
-                          {auditSummary && (
-                            <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3.5 text-xs text-[var(--color-body-text)] leading-relaxed">
-                              <div className="font-mono text-[10.5px] uppercase tracking-wider text-[var(--color-muted-soft)] mb-1">
-                                ЗАКЛЮЧЕНИЕ АУДИТОРА
-                              </div>
-                              {auditSummary}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2 pt-2">
-                          <button
-                            type="button"
-                            onClick={handleDemoScan}
-                            disabled={isScanning}
-                            className="min-h-9 px-3 py-2 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                          >
-                            <Play className="w-3.5 h-3.5" aria-hidden="true" />
-                            <span>Демо KZ</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setInspectorTab('authorship')}
-                            className="min-h-9 px-3 py-2 rounded-full border border-[var(--color-line-strong)] hover:border-[var(--color-ink)] bg-[var(--color-panel)] text-[var(--color-ink)] font-mono text-xs inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                          >
-                            <ShieldCheck className="w-3.5 h-3.5 text-[#3fbf7f]" aria-hidden="true" />
-                            <span>Авторство</span>
-                          </button>
-                        </div>
-                      </div>
+                      /* Default Commits & Reports Feed (live from SQLite + active repo git log) */
+                      <CommitsReportsPanel
+                        feed={reportsFeed}
+                        loadingFeed={loadingFeed}
+                        onRefreshFeed={refreshReportsFeed}
+                        activeCommits={activeCommits}
+                        activeRepoName={activeTarget}
+                        ghostCommitShas={ghostCommitShas}
+                        isScanning={isScanning}
+                        onScanRepo={(repo) => startScan(repo)}
+                        onDemoScan={handleDemoScan}
+                      />
                     )}
                   </aside>
                 </div>

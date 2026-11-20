@@ -205,3 +205,44 @@ def test_roi_bounds_and_seeder_idempotency(tmp_path: Path):
     m = MetricsStore(db).summary()
     assert m.total_scans == 3
     assert m.appeals_count == 1
+
+
+@pytest.mark.asyncio
+async def test_telegram_parity_chat_commands_and_reports_feed(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(settings, "metrics_db_path", tmp_path / "parity.db")
+    store = get_metrics_store()
+    store.record_audit(
+        repo_name="demo/kz-fintech-app",
+        commit_sha="abcdef1234567890",
+        branch="main",
+        severity_counts={"CRITICAL": 2, "HIGH": 1, "MEDIUM": 0, "LOW": 0},
+        total_findings=3,
+        scan_seconds=4.2,
+        ai_seconds=0.0,
+        ai_generated=False,
+        report_name="20261120T150000Z_abcdef123456.pdf",
+    )
+
+    from aegis_server.main import app
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        # 1. /api/v1/reports returns audited commits with direct PDF/MD URLs
+        rep = await client.get("/api/v1/reports?limit=10")
+        assert rep.status_code == 200
+        rdata = rep.json()
+        assert rdata["total_scans"] == 1
+        assert len(rdata["audits"]) == 1
+        assert rdata["audits"][0]["pdf_url"].endswith(".pdf")
+        assert rdata["audits"][0]["md_url"].endswith(".md")
+
+        # 2. /verify owner/repo works in web chat just like Telegram bot
+        ver = await client.post("/api/chat", json={"message": "/verify octocat/hello-world"})
+        assert ver.status_code == 200
+        assert "cybersec-verify-" in ver.json()["reply"]
+
+        # 3. Bare owner/repo in web chat triggers repo scan just like Telegram bot
+        bare = await client.post("/api/chat", json={"message": "octocat/hello-world"})
+        assert bare.status_code == 200
+        assert bare.json().get("action") == "SCAN"
+        assert bare.json().get("github_url") == "https://github.com/octocat/hello-world"
+
