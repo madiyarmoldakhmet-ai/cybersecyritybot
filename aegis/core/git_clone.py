@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional
@@ -33,7 +34,15 @@ SKIP_DIR_NAMES = {
     "public", "assets", "static", "media", "fonts", "images", "img", "icons",
     "docs", "doc", "vendor", "third_party", "testdata", "fixtures",
     "__fixtures__", "screenshots", "storybook-static", "coverage",
+    "scripts", "script", "tools", "tooling", "e2e", "playwright", "cypress",
+    "codegen", "generators",
 }
+
+BUILD_CONFIG_PREFIXES = (
+    "vite.", "vitest.", "webpack.", "rollup.", "esbuild.", "babel.",
+    "postcss.", "tailwind.", "eslint.", "prettier.", "jest.", "playwright.",
+    "cypress.", "tsup.", "metro.", "knip.",
+)
 
 SECURITY_CODE_EXTS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".dart", ".java", ".kt", ".go",
@@ -51,12 +60,20 @@ HIGH_PRIORITY_FILENAMES = {
 }
 
 SECURITY_PATH_KEYWORDS = (
+    # Auth, crypto, secrets & sessions
     "auth", "login", "oauth", "jwt", "token", "secret", "cred", "key",
     "crypto", "cipher", "pass", "session", "cookie", "security", "guard",
     "perm", "role", "admin", "payment", "billing", "checkout", "wallet",
-    "bank", "iin", "pii", "sql", "query", "db", "database", "prisma",
-    "api", "server", "backend", "route", "controller", "middleware",
-    "webhook", "upload", "exec", "shell", "config", "settings", "env",
+    "bank", "iin", "pii",
+    # Backend data & APIs
+    "sql", "query", "db", "database", "prisma", "api", "backend", "route",
+    "controller", "middleware", "webhook", "upload", "exec", "shell",
+    # Client / Browser / Mobile runtime AppSec (XSS, DOM, storage, workers, links)
+    "xss", "sanitize", "purify", "innerhtml", "dom", "iframe", "webview",
+    "postmessage", "origin", "cors", "csp", "storage", "localstorage",
+    "indexeddb", "mtproto", "worker", "serviceworker", "link", "url",
+    "redirect", "markdown", "rich", "embed", "deserialize", "fetch",
+    "websocket", "webrtc", "download", "blob",
 )
 
 
@@ -118,8 +135,17 @@ async def _run_git(
         raise
 
 
+_REPO_SIZE_CACHE: Dict[str, tuple[int, float]] = {}
+_REPO_SIZE_TTL_SECONDS = 600.0
+
+
 async def fetch_github_repo_size_kb(repo_name: str, token: str = "") -> Optional[int]:
-    """Quickly query GitHub repo size (KB) so huge asset-heavy repos skip bloated full clones."""
+    """Quickly query GitHub repo size (KB) with short in-memory cache so huge repos skip bloated full clones."""
+    cache_key = repo_name.lower()
+    cached = _REPO_SIZE_CACHE.get(cache_key)
+    if cached and (time.monotonic() - cached[1]) < _REPO_SIZE_TTL_SECONDS:
+        return cached[0]
+
     headers = {
         "User-Agent": "CommitGuardian-Cloner/2.0",
         "Accept": "application/vnd.github.v3+json",
@@ -127,11 +153,12 @@ async def fetch_github_repo_size_kb(repo_name: str, token: str = "") -> Optional
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
             resp = await client.get(f"https://api.github.com/repos/{repo_name}", headers=headers)
             if resp.status_code == 200:
                 size = resp.json().get("size")
                 if isinstance(size, int) and size >= 0:
+                    _REPO_SIZE_CACHE[cache_key] = (size, time.monotonic())
                     return size
     except Exception as exc:
         logger.debug(f"Could not query GitHub size for {repo_name}: {type(exc).__name__}: {exc}")
@@ -154,6 +181,8 @@ def select_security_sparse_paths(all_paths: List[str], max_files: int = DEFAULT_
         if fname.endswith((".min.js", ".min.css", ".map", ".d.ts", ".lock", ".svg", ".snap")):
             continue
         if fname in {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "composer.lock"}:
+            continue
+        if fname.startswith(BUILD_CONFIG_PREFIXES) or fname.endswith((".config.js", ".config.ts", ".config.mjs", ".config.cjs")):
             continue
 
         ext = os.path.splitext(fname)[1]

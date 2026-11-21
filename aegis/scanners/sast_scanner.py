@@ -732,7 +732,10 @@ class SASTScanner:
         if not shutil.which("semgrep"):
             return [], "Semgrep binary not found in PATH."
 
-        exclude_args = [f"--exclude={d}" for d in IGNORED_DIRS]
+        semgrep_excludes = sorted(
+            IGNORED_DIRS | {"public", "assets", "docs", "scripts", "vendor", "third_party", "coverage", "*.min.js", "*.map"}
+        )
+        exclude_args = [f"--exclude={d}" for d in semgrep_excludes]
 
         cmd = [
             "semgrep",

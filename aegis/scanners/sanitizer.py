@@ -26,6 +26,20 @@ TEST_PATH_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+# Dev/build tooling, local generator scripts, and documentation (never shipped as production runtime)
+DEV_TOOLING_PATH_REGEX = re.compile(
+    r"(^|/)(scripts?|tools?|tooling|build-scripts?|dev-scripts?|hack|codegen|generators?|docs?|documentation)/|"
+    r"(^|/)((vite|vitest|webpack|rollup|esbuild|babel|postcss|tailwind|eslint|prettier|"
+    r"jest|playwright|cypress|next|nuxt|svelte|astro|metro|tsup|turbo|knip)\.[^/]*\.(js|ts|mjs|cjs)|"
+    r"[^/]+\.config\.(js|ts|mjs|cjs))$",
+    re.IGNORECASE,
+)
+
+# Classic JS/TS Semgrep false positives (e.g. console.log flagged as CWE-134 C format string)
+JS_CLIENT_NOISE_RULES = (
+    "unsafe-formatstring",
+)
+
 
 def calculate_shannon_entropy(data: str) -> float:
     """
@@ -80,6 +94,12 @@ class FalsePositiveSanitizer:
         norm_path = file_path.replace("\\", "/")
         return bool(TEST_PATH_REGEX.search(norm_path))
 
+    @staticmethod
+    def is_dev_tooling_file(file_path: str) -> bool:
+        """Identify local build/dev configs and helper scripts not shipped in app runtime."""
+        norm_path = file_path.replace("\\", "/")
+        return bool(DEV_TOOLING_PATH_REGEX.search(norm_path))
+
     def is_valid_secret_entropy(self, secret_candidate: str) -> bool:
         """Validate whether candidate secret has sufficient Shannon entropy."""
         clean = secret_candidate.strip("\"' \t\n\r")
@@ -98,6 +118,7 @@ class FalsePositiveSanitizer:
         Validate single finding. Returns sanitized finding or None if classified as False Positive.
         """
         file_path = finding.file_path.lower()
+        rule_blob = f"{finding.id} {finding.title}".lower()
 
         # 1. Path Filtering: Filter out tests, examples, and mock files for high/critical findings
         if self.filter_test_paths and self.is_test_file(finding.file_path):
@@ -105,11 +126,27 @@ class FalsePositiveSanitizer:
             if "eval" not in finding.title.lower() and "sqli" not in finding.title.lower():
                 return None
 
-        # 2. Secret & API Key Sanitization
-        is_secret_rule = any(
-            kw in finding.title.lower() or kw in finding.id.lower()
-            for kw in ["secret", "api key", "token", "credential", "private key", "password"]
+        # 2. Secret & API Key classification (secrets in dev scripts are still real leaks)
+        is_secret_rule = (
+            finding.scanner.value in ("secret", "git_history")
+            or any(
+                kw in rule_blob
+                for kw in ["secret", "api key", "token", "credential", "private key", "password"]
+            )
         )
+
+        # 3. Drop C-style format-string noise on JS/TS console logging
+        if file_path.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")) and any(
+            hint in rule_blob for hint in JS_CLIENT_NOISE_RULES
+        ):
+            return None
+
+        # 4. Drop non-secret SAST/taint noise on local dev/build scripts, configs, and docs/
+        # (Hardcoded secrets & private keys in scripts/docs are STILL reported!)
+        if self.filter_test_paths and not is_secret_rule and self.is_dev_tooling_file(finding.file_path):
+            return None
+
+        # 5. Secret & API Key Entropy & Placeholder Sanitization
 
         if is_secret_rule:
             snippet = finding.code_snippet or ""

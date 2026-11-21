@@ -43,20 +43,31 @@ class SCAScanner:
         try:
             content = file_path.read_text(encoding="utf-8")
             data = json.loads(content)
-            deps = data.get("dependencies", {})
-            dev_deps = data.get("devDependencies", {})
-            all_deps = {**deps, **dev_deps}
+            deps = data.get("dependencies") if isinstance(data.get("dependencies"), dict) else {}
+            dev_deps = data.get("devDependencies") if isinstance(data.get("devDependencies"), dict) else {}
+            all_deps = {**dev_deps, **deps}
             if not all_deps:
                 return findings
+
+            # Resolve real line numbers inside package.json instead of hardcoding line 1
+            pkg_lines: Dict[str, int] = {}
+            for idx, raw_line in enumerate(content.splitlines(), start=1):
+                m = re.search(r'"([^"]+)"\s*:', raw_line)
+                if m and m.group(1) in all_deps and m.group(1) not in pkg_lines:
+                    pkg_lines[m.group(1)] = idx
 
             clean_deps: Dict[str, Tuple[str, int]] = {}
             for name, version in all_deps.items():
                 clean_v = str(version).lstrip("^~><=")
                 if clean_v and "*" not in clean_v and clean_v[0].isdigit():
-                    clean_deps[name] = (clean_v, 1)
+                    clean_deps[name] = (clean_v, pkg_lines.get(name, 1))
 
+            dev_only = {name for name in dev_deps if name not in deps}
             findings = await self._query_osv_batch(
-                clean_deps, "npm", file_path.relative_to(target_dir).as_posix()
+                clean_deps,
+                "npm",
+                file_path.relative_to(target_dir).as_posix(),
+                dev_only_packages=dev_only,
             )
         except Exception as e:
             logger.error(f"Failed to scan package.json: {e}")
@@ -93,8 +104,10 @@ class SCAScanner:
         packages: Dict[str, Tuple[str, int]],
         ecosystem: str,
         file_rel_path: str,
+        dev_only_packages: Optional[set] = None,
     ) -> List[VulnerabilityFinding]:
         findings: List[VulnerabilityFinding] = []
+        dev_set = dev_only_packages or set()
         queries = []
         line_map: List[int] = []
         for name, (version, line_num) in packages.items():
@@ -118,8 +131,11 @@ class SCAScanner:
                                 pkg = batch[idx]["package"]["name"]
                                 ver = batch[idx]["version"]
                                 line_num = batch_lines[idx]
+                                is_dev = pkg in dev_set
                                 for vuln in result["vulns"]:
-                                    finding = self._parse_osv_vuln(vuln, pkg, ver, file_rel_path, line_num)
+                                    finding = self._parse_osv_vuln(
+                                        vuln, pkg, ver, file_rel_path, line_num, is_dev_only=is_dev
+                                    )
                                     if finding:
                                         findings.append(finding)
                     else:
@@ -137,25 +153,36 @@ class SCAScanner:
         pkg_version: str,
         file_path: str,
         line_start: int = 1,
+        is_dev_only: bool = False,
     ) -> Optional[VulnerabilityFinding]:
         vuln_id = vuln.get("id", str(uuid.uuid4()))
         summary = vuln.get("summary", f"Vulnerability in {pkg_name}")
         details = vuln.get("details", "No details provided by OSV.")
         aliases = vuln.get("aliases", [])
         cves = [a for a in aliases if a.startswith("CVE-")]
-        severity = Severity.HIGH if cves else Severity.MEDIUM
+        severity = Severity.INFO if is_dev_only else (Severity.HIGH if cves else Severity.MEDIUM)
+        title = f"[devDependency] {summary}" if is_dev_only else summary
+        scope_note = (
+            f"Dev-only build/test package `{pkg_name}` (v{pkg_version}) in `devDependencies` "
+            f"(not shipped in production client bundle).\n\n{details}"
+            if is_dev_only
+            else f"Package `{pkg_name}` (v{pkg_version}) is vulnerable.\n\n{details}"
+        )
         code_snippet = f'"{pkg_name}": "{pkg_version}"'
 
         return VulnerabilityFinding(
             id=f"sca-{vuln_id.lower()}",
             scanner=ScannerType.SCA,
-            title=summary,
-            description=f"Package `{pkg_name}` (v{pkg_version}) is vulnerable.\n\n{details}",
+            title=title,
+            description=scope_note,
             severity=severity,
             file_path=file_path,
             line_start=line_start,
             code_snippet=code_snippet,
             cve=cves,
             recommendation="Update the package to a non-vulnerable version.",
-            raw_metadata={"osv_id": vuln_id},
+            raw_metadata={
+                "osv_id": vuln_id,
+                "dependency_scope": "devDependencies" if is_dev_only else "dependencies",
+            },
         )

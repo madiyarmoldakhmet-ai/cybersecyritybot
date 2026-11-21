@@ -403,21 +403,175 @@ def test_sparse_path_selector_skips_assets_and_prioritizes_security_files():
         "public/assets/fonts/icon.svg",
         "public/emoji/1f600.png",
         "docs/readme.md",
+        "scripts/vite.preview.config.ts",
+        "scripts/server.js",
+        "vite.config.ts",
         "src/vendor/bundle.min.js",
         "src/components/ui/button.tsx",
         "src/auth/jwt_middleware.ts",
+        "src/lib/mtproto/crypto.ts",
         "package.json",
         ".env.example",
         "tests/e2e/smoke.spec.ts",
+        "tests/unit/smoke.test.ts",
     ]
     selected = select_security_sparse_paths(paths, max_files=10)
     assert "public/assets/fonts/icon.svg" not in selected
     assert "public/emoji/1f600.png" not in selected
+    assert "scripts/vite.preview.config.ts" not in selected
+    assert "scripts/server.js" not in selected
+    assert "vite.config.ts" not in selected
+    assert "tests/e2e/smoke.spec.ts" not in selected
     assert "src/vendor/bundle.min.js" not in selected
     assert ".env.example" in selected[:2]
     assert "package.json" in selected[:2]
     assert selected.index("src/auth/jwt_middleware.ts") < selected.index("src/components/ui/button.tsx")
-    assert selected.index("src/components/ui/button.tsx") < selected.index("tests/e2e/smoke.spec.ts")
+    assert selected.index("src/lib/mtproto/crypto.ts") < selected.index("src/components/ui/button.tsx")
+    assert selected.index("src/components/ui/button.tsx") < selected.index("tests/unit/smoke.test.ts")
+
+
+def test_sanitizer_filters_dev_tooling_backend_noise_but_keeps_real_client_bugs_and_secrets():
+    from aegis.scanners.sanitizer import FalsePositiveSanitizer
+
+    san = FalsePositiveSanitizer()
+
+    # Dev/build scripts should NOT emit backend CSRF / path-traversal noise
+    dev_path_trav = VulnerabilityFinding(
+        id="javascript.lang.security.audit.path-traversal.path-join-resolve-traversal",
+        scanner=ScannerType.SEMGREP,
+        title="Semgrep: path-join-resolve-traversal",
+        description="path.join in vite preview script",
+        severity=Severity.MEDIUM,
+        file_path="scripts/vite.preview.config.ts",
+        line_start=254,
+    )
+    dev_csrf = VulnerabilityFinding(
+        id="javascript.express.security.audit.express-check-csurf-middleware-usage",
+        scanner=ScannerType.SEMGREP,
+        title="Semgrep: express-check-csurf-middleware-usage",
+        description="Local dev server missing csurf",
+        severity=Severity.LOW,
+        file_path="scripts/server.js",
+        line_start=7,
+    )
+    docs_child_proc = VulnerabilityFinding(
+        id="javascript.lang.security.detect-child-process.detect-child-process",
+        scanner=ScannerType.SEMGREP,
+        title="Semgrep: detect-child-process",
+        description="Archived doc helper script",
+        severity=Severity.HIGH,
+        file_path="docs/upstream/git-serve.js",
+        line_start=43,
+    )
+    script_taint = VulnerabilityFinding(
+        id="taint-flow-1",
+        scanner=ScannerType.CUSTOM,
+        title="Path Traversal: <module>() -> cut()",
+        description="CLI eval helper reading argv path",
+        severity=Severity.HIGH,
+        file_path="scripts/noise-suppression-eval/stream.py",
+        line_start=82,
+    )
+    js_fmt = VulnerabilityFinding(
+        id="javascript.lang.security.audit.unsafe-formatstring",
+        scanner=ScannerType.SEMGREP,
+        title="Semgrep: unsafe-formatstring",
+        description="console.log dynamic string",
+        severity=Severity.LOW,
+        file_path="src/components/call/callDeviceSettings.tsx",
+        line_start=63,
+    )
+    # Real client runtime bugs (ReDoS & WebView postMessage in src/) MUST stay
+    client_redos = VulnerabilityFinding(
+        id="javascript.lang.security.audit.detect-non-literal-regexp",
+        scanner=ScannerType.SEMGREP,
+        title="Semgrep: detect-non-literal-regexp",
+        description="Dynamic RegExp in client parser",
+        severity=Severity.MEDIUM,
+        file_path="src/lib/linkCleaner/adGuardRule.ts",
+        line_start=132,
+    )
+    client_postmsg = VulnerabilityFinding(
+        id="javascript.browser.security.insufficient-postmessage-origin-validation",
+        scanner=ScannerType.SEMGREP,
+        title="Semgrep: insufficient-postmessage-origin-validation",
+        description="Missing origin validation in WebView postMessage handler",
+        severity=Severity.MEDIUM,
+        file_path="src/components/telegramWebView.ts",
+        line_start=11,
+    )
+    # Real secret leaked inside scripts/ MUST STILL stay
+    dev_secret = VulnerabilityFinding(
+        id="secret-abc12345",
+        scanner=ScannerType.SECRET,
+        title="Hardcoded AWS Access Key",
+        description="Real leaked key in deploy script",
+        severity=Severity.CRITICAL,
+        file_path="scripts/deploy.sh",
+        line_start=4,
+        code_snippet='AWS_KEY="AKIA9X7K2M4P8Q1R6T3V"',
+    )
+
+    assert san.sanitize_finding(dev_path_trav) is None
+    assert san.sanitize_finding(dev_csrf) is None
+    assert san.sanitize_finding(docs_child_proc) is None
+    assert san.sanitize_finding(script_taint) is None
+    assert san.sanitize_finding(js_fmt) is None
+    assert san.sanitize_finding(client_redos) is not None
+    assert san.sanitize_finding(client_postmsg) is not None
+    assert san.sanitize_finding(dev_secret) is not None
+
+
+@pytest.mark.asyncio
+async def test_sca_npm_separates_prod_dependencies_from_dev_dependencies(tmp_path: Path):
+    from aegis.scanners.sca_scanner import SCAScanner
+
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        '{\n'
+        '  "name": "web-client",\n'
+        '  "dependencies": {\n'
+        '    "dompurify": "^3.0.0"\n'
+        '  },\n'
+        '  "devDependencies": {\n'
+        '    "vitest": "^1.6.0"\n'
+        '  }\n'
+        '}\n',
+        encoding="utf-8",
+    )
+
+    class DummyResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "results": [
+                    {"vulns": [{"id": "GHSA-dev-1", "summary": "Vulnerability in vitest"}]},
+                    {"vulns": [{"id": "GHSA-prod-1", "summary": "XSS in dompurify", "aliases": ["CVE-2025-9999"]}]},
+                ]
+            }
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, json=None):
+            return DummyResp()
+
+    with patch("aegis.scanners.sca_scanner.httpx.AsyncClient", return_value=DummyClient()):
+        findings = await SCAScanner().scan(tmp_path)
+
+    by_id = {f.id: f for f in findings}
+    assert by_id["sca-ghsa-dev-1"].severity == Severity.INFO
+    assert by_id["sca-ghsa-dev-1"].title.startswith("[devDependency]")
+    assert by_id["sca-ghsa-dev-1"].line_start == 7
+    assert by_id["sca-ghsa-prod-1"].severity == Severity.HIGH
+    assert not by_id["sca-ghsa-prod-1"].title.startswith("[devDependency]")
+    assert by_id["sca-ghsa-prod-1"].line_start == 4
 
 
 @pytest.mark.asyncio
