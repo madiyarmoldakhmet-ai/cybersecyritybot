@@ -404,7 +404,7 @@ export function AiCopilotChat({
       >
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
-          const isStreaming = msg.id === 'streaming';
+          const isStreaming = msg.id === 'streaming' || msg.id === 'scan-status';
           return (
             <div
               key={msg.id}

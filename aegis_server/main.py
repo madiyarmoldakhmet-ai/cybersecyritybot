@@ -24,6 +24,7 @@ from aegis.core.archive_utils import safe_extract_zip
 from aegis.core.audit_pipeline import AuditArtifacts, finalize_scan_audit
 from aegis.core.demo_history import materialize_demo_repo
 from aegis.core.event_bus import ScanEventBus
+from aegis.core.git_clone import clone_repo_resilient, extract_git_metadata
 from aegis.core.self_heal import SelfHealer
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.models import SASTScanResult
@@ -75,52 +76,18 @@ async def _extract_git_metadata(
     fallback_sha: str,
     fallback_branch: str = "main",
     fallback_author: str = "unknown",
+    repo_name: Optional[str] = None,
+    token: Optional[str] = None,
 ) -> tuple[str, str, str, List[Dict[str, str]]]:
     """Read real branch, HEAD commit SHA/author, and recent commit log from a cloned git directory."""
-    if not (repo_dir / ".git").exists():
-        return fallback_sha, fallback_branch, fallback_author, []
-
-    branch = fallback_branch
-    try:
-        proc_br = await asyncio.create_subprocess_exec(
-            "git", "-C", str(repo_dir), "rev-parse", "--abbrev-ref", "HEAD",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out_br, _ = await asyncio.wait_for(proc_br.communicate(), timeout=5.0)
-        if proc_br.returncode == 0:
-            parsed_br = out_br.decode("utf-8", errors="replace").strip()
-            if parsed_br and parsed_br != "HEAD":
-                branch = parsed_br
-    except Exception as exc:
-        logger.debug(f"Could not read git branch for {repo_dir}: {exc}")
-
-    commits: List[Dict[str, str]] = []
-    try:
-        proc_log = await asyncio.create_subprocess_exec(
-            "git", "-C", str(repo_dir), "log", "-n", "10", "--format=%H%x1f%an%x1f%aI%x1f%s",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out_log, _ = await asyncio.wait_for(proc_log.communicate(), timeout=5.0)
-        if proc_log.returncode == 0:
-            for line in out_log.decode("utf-8", errors="replace").splitlines():
-                parts = line.split("\x1f")
-                if len(parts) >= 4:
-                    sha = parts[0].strip()
-                    commits.append({
-                        "sha": sha,
-                        "short": sha[:8],
-                        "author": parts[1].strip(),
-                        "date": parts[2].strip(),
-                        "subject": parts[3].strip(),
-                    })
-    except Exception as exc:
-        logger.debug(f"Could not read git log for {repo_dir}: {exc}")
-
-    if commits:
-        return commits[0]["sha"], branch, commits[0]["author"] or fallback_author, commits
-    return fallback_sha, branch, fallback_author, []
+    return await extract_git_metadata(
+        repo_dir,
+        fallback_sha=fallback_sha,
+        fallback_branch=fallback_branch,
+        fallback_author=fallback_author,
+        repo_name=repo_name,
+        token=token,
+    )
 
 
 def _build_scan_payload(
@@ -190,37 +157,9 @@ class ScanRequest(BaseModel):
 
 
 async def clone_repo(repo_url: str, dest_dir: Path, token: Optional[str] = None) -> bool:
-    """Clones a validated GitHub repository with bounded commit history for Git Time Machine."""
-    repo_name = OwnershipVerifier.parse_github_repo(repo_url)
-    if not repo_name:
-        logger.warning(f"Rejected invalid or non-GitHub clone URL: {repo_url}")
-        return False
-
-    clean_token = (token or "").strip()
-    safe_url = (
-        f"https://x-access-token:{clean_token}@github.com/{repo_name}.git"
-        if clean_token
-        else f"https://github.com/{repo_name}.git"
-    )
-    clone_depth = str(max(1, settings.webhook_clone_depth))
-    logger.info(f"Cloning {repo_name} (depth={clone_depth}) into {dest_dir}...")
-    try:
-        process = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", clone_depth, "--", safe_url, str(dest_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        _, stderr = await asyncio.wait_for(process.communicate(), timeout=45.0)
-        if process.returncode != 0:
-            err_msg = stderr.decode("utf-8", errors="replace")[:200]
-            if clean_token:
-                err_msg = err_msg.replace(clean_token, "***")
-            logger.error(f"Failed to clone repository {repo_name}: {err_msg}")
-            return False
-        return True
-    except Exception as e:
-        logger.error(f"Error during git clone: {e}")
-        return False
+    """Clones a validated GitHub repository with smart sparse fallback for large repos / slow links."""
+    outcome = await clone_repo_resilient(repo_url, dest_dir, token=token)
+    return outcome.success
 
 
 @app.post("/api/scan/repo")
@@ -240,12 +179,20 @@ async def scan_repo_http(req: ScanRequest):
     repo_dir = SCANS_DIR / f"repo_{scan_uuid}"
     try:
         clone_token = (req.github_token or "").strip() or (settings.github_token or "")
-        success = await clone_repo(repo_name, repo_dir, token=clone_token)
-        if not success:
-            return JSONResponse(status_code=502, content={"error": f"Не удалось клонировать репозиторий {repo_name}."})
+        outcome = await clone_repo_resilient(repo_name, repo_dir, token=clone_token)
+        if not outcome.success:
+            return JSONResponse(
+                status_code=502,
+                content={"error": outcome.error or f"Не удалось клонировать репозиторий {repo_name}."},
+            )
 
         commit_sha, branch, author, commits = await _extract_git_metadata(
-            repo_dir, fallback_sha=scan_uuid, fallback_branch="main", fallback_author=auth_actor
+            repo_dir,
+            fallback_sha=scan_uuid,
+            fallback_branch="main",
+            fallback_author=auth_actor,
+            repo_name=repo_name,
+            token=clone_token,
         )
         scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
         result = await scanner.scan(repo_dir)
@@ -466,12 +413,26 @@ async def websocket_scan(websocket: WebSocket):
         await websocket.send_json({"event_type": "SystemLog", "message": f"Проверка доступа: {auth_status}"})
         await websocket.send_json({"event_type": "SystemLog", "message": f"Клонирование репозитория {repo_name}..."})
         clone_token = user_token or (settings.github_token or "")
-        success = await clone_repo(repo_name, repo_dir, token=clone_token)
-        
-        if not success:
-            await websocket.send_json({"event_type": "SystemError", "message": f"Не удалось клонировать репозиторий {repo_name}."})
+
+        async def _emit_clone_status(msg: str) -> None:
+            await websocket.send_json({"event_type": "SystemLog", "message": msg})
+
+        outcome = await clone_repo_resilient(
+            repo_name, repo_dir, token=clone_token, on_status=_emit_clone_status
+        )
+        if not outcome.success:
+            await websocket.send_json({
+                "event_type": "SystemError",
+                "message": outcome.error or f"Не удалось клонировать репозиторий {repo_name}.",
+            })
             await websocket.close()
             return
+
+        if outcome.mode == "sparse" and outcome.files_checked_out:
+            await websocket.send_json({
+                "event_type": "SystemLog",
+                "message": f"Загружено {outcome.files_checked_out} ключевых файлов исходного кода — запускаю SAST & Secret Engine...",
+            })
             
         event_bus = ScanEventBus(scan_id=scan_uuid)
         scanner = SASTScanner(event_bus=event_bus)
@@ -490,7 +451,12 @@ async def websocket_scan(websocket: WebSocket):
             
         result = await scan_task
         commit_sha, branch, author, commits = await _extract_git_metadata(
-            repo_dir, fallback_sha=scan_uuid[:12], fallback_branch="main", fallback_author=auth_actor
+            repo_dir,
+            fallback_sha=scan_uuid[:12],
+            fallback_branch="main",
+            fallback_author=auth_actor,
+            repo_name=repo_name,
+            token=clone_token,
         )
         artifacts = await finalize_scan_audit(
             result,
@@ -714,10 +680,13 @@ async def websocket_chat(websocket: WebSocket):
             cmd_result = await _try_handle_bot_command(data)
             if cmd_result is not None:
                 chat_history.append({"role": "user", "content": data})
-                if cmd_result.get("action") == "SCAN":
-                    await websocket.send_json({"type": "action", "action": "SCAN", "github_url": cmd_result["github_url"]})
                 reply = cmd_result["reply"]
                 chat_history.append({"role": "assistant", "content": reply})
+                if cmd_result.get("action") == "SCAN":
+                    # Let the frontend startScan() own the single scan progress bubble (avoid glued duplicates)
+                    await websocket.send_json({"type": "action", "action": "SCAN", "github_url": cmd_result["github_url"]})
+                    await websocket.send_json({"type": "done"})
+                    continue
                 await websocket.send_json({"type": "chunk", "content": reply})
                 await websocket.send_json({"type": "done"})
                 continue

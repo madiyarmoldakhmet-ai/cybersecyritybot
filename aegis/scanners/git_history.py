@@ -110,9 +110,19 @@ class GitHistoryScanner:
         proc = self._git(repo, "grep", "-q", "-F", "-e", value, "HEAD", "--")
         return proc.returncode == 0
 
+    def _is_partial_clone(self, repo: Path) -> bool:
+        try:
+            proc = self._git(repo, "config", "--bool", "remote.origin.promisor")
+            return proc.returncode == 0 and proc.stdout.strip().lower() == "true"
+        except Exception:
+            return False
+
     def scan_history(self, repo_path) -> List[HistorySecret]:
         repo = Path(repo_path).resolve()
         if not self.is_git_repo(repo):
+            return []
+        if self._is_partial_clone(repo):
+            logger.info("Skipping full git log -p replay on sparse/partial clone %s", repo)
             return []
 
         proc = self._git(

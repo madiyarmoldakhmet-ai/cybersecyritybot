@@ -20,6 +20,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aegis.core.archive_utils import safe_extract_zip
 from aegis.core.audit_pipeline import finalize_scan_audit
 from aegis.core.config import settings
+from aegis.core.git_clone import clone_repo_resilient, extract_git_metadata
 from aegis.core.logging_config import setup_logging
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.models import SASTScanResult, Severity
@@ -224,26 +225,26 @@ async def handle_repo_url(message: types.Message):
     scan_uuid = str(uuid.uuid4())
     repo_dir = settings.temp_clone_dir / f"tg_{scan_uuid}"
     repo_dir.mkdir(parents=True, exist_ok=True)
-    clone_url = f"https://github.com/{repo_name}.git"
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth", "1", "--", clone_url, str(repo_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=45.0)
-        if proc.returncode != 0:
-            err = stderr.decode("utf-8", errors="replace")[:200]
-            await status_msg.edit_text(f"Не удалось клонировать репозиторий: <code>{html.escape(err)}</code>", parse_mode=ParseMode.HTML)
+        outcome = await clone_repo_resilient(repo_name, repo_dir, token=settings.github_token)
+        if not outcome.success:
+            err = outcome.error or "Не удалось клонировать репозиторий."
+            await status_msg.edit_text(f"⛔ <code>{html.escape(err)}</code>", parse_mode=ParseMode.HTML)
             return
 
+        commit_sha, _, _, _ = await extract_git_metadata(
+            repo_dir, fallback_sha=scan_uuid[:12], repo_name=repo_name, token=settings.github_token
+        )
         scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
         result = await scanner.scan(repo_dir)
-        await _deliver_scan_result(message, status_msg, result, repo_name, scan_uuid[:12])
+        await _deliver_scan_result(message, status_msg, result, repo_name, commit_sha)
     except Exception as e:
-        logger.error(f"Error scanning repository {repo_name}: {e}")
-        await status_msg.edit_text(f"Ошибка при сканировании: {html.escape(str(e)[:300])}", parse_mode=ParseMode.HTML)
+        logger.error(f"Error scanning repository {repo_name}: {type(e).__name__}: {e}")
+        await status_msg.edit_text(
+            f"Ошибка при сканировании: {html.escape(f'{type(e).__name__}: {e}'[:300])}",
+            parse_mode=ParseMode.HTML,
+        )
     finally:
         shutil.rmtree(repo_dir, ignore_errors=True)
         logger.info("Код удалён с сервера")

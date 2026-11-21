@@ -394,3 +394,72 @@ def test_configured_ollama_model_presence_check():
     assert is_configured_model_available({"models": [{"name": "qwen:latest"}]}, "qwen2.5-coder:14b") is False
     assert is_configured_model_available({"models": [{"name": "qwen2.5-coder:14b"}]}, "qwen2.5-coder:14b") is True
     assert is_configured_model_available({"models": []}, "qwen2.5-coder:14b") is False
+
+
+def test_sparse_path_selector_skips_assets_and_prioritizes_security_files():
+    from aegis.core.git_clone import select_security_sparse_paths
+
+    paths = [
+        "public/assets/fonts/icon.svg",
+        "public/emoji/1f600.png",
+        "docs/readme.md",
+        "src/vendor/bundle.min.js",
+        "src/components/ui/button.tsx",
+        "src/auth/jwt_middleware.ts",
+        "package.json",
+        ".env.example",
+        "tests/e2e/smoke.spec.ts",
+    ]
+    selected = select_security_sparse_paths(paths, max_files=10)
+    assert "public/assets/fonts/icon.svg" not in selected
+    assert "public/emoji/1f600.png" not in selected
+    assert "src/vendor/bundle.min.js" not in selected
+    assert ".env.example" in selected[:2]
+    assert "package.json" in selected[:2]
+    assert selected.index("src/auth/jwt_middleware.ts") < selected.index("src/components/ui/button.tsx")
+    assert selected.index("src/components/ui/button.tsx") < selected.index("tests/e2e/smoke.spec.ts")
+
+
+@pytest.mark.asyncio
+async def test_clone_repo_resilient_switches_to_sparse_for_large_repos_and_timeouts(tmp_path: Path):
+    import asyncio
+    from aegis.core import git_clone
+
+    status_events = []
+
+    async def on_status(msg: str) -> None:
+        status_events.append(msg)
+
+    # Case 1: Large repo (>15 MB) skips full clone and runs sparse directly
+    with (
+        patch.object(git_clone, "fetch_github_repo_size_kb", AsyncMock(return_value=58_000)),
+        patch.object(
+            git_clone,
+            "_try_sparse_code_clone",
+            AsyncMock(return_value=git_clone.CloneOutcome(success=True, mode="sparse", files_checked_out=250)),
+        ) as sparse_mock,
+    ):
+        res = await git_clone.clone_repo_resilient("vxrn0/exterayond", tmp_path / "repo1", on_status=on_status)
+
+    assert res.success is True
+    assert res.mode == "sparse"
+    assert res.files_checked_out == 250
+    sparse_mock.assert_awaited_once()
+    assert any("sparse" in s.lower() for s in status_events)
+
+    # Case 2: Tier 1 timeout falls back cleanly to Tier 2 sparse without empty error
+    with (
+        patch.object(git_clone, "fetch_github_repo_size_kb", AsyncMock(return_value=2_000)),
+        patch.object(git_clone, "_run_git", AsyncMock(side_effect=asyncio.TimeoutError())),
+        patch.object(
+            git_clone,
+            "_try_sparse_code_clone",
+            AsyncMock(return_value=git_clone.CloneOutcome(success=True, mode="sparse", files_checked_out=42)),
+        ) as sparse_fallback,
+    ):
+        res2 = await git_clone.clone_repo_resilient("owner/slow-repo", tmp_path / "repo2")
+
+    assert res2.success is True
+    assert res2.mode == "sparse"
+    sparse_fallback.assert_awaited_once()
+

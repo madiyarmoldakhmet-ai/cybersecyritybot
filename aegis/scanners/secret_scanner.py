@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from pathlib import Path
 from typing import List, Tuple
@@ -67,8 +68,13 @@ class SecretScanner:
 
     IGNORE_DIRS = {".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build", "out", ".next", ".pytest_cache", "temp_scans"}
     IGNORE_EXTENSIONS = {
-        ".jpg", ".png", ".gif", ".pdf", ".zip", ".tar", ".gz", ".mp3", ".mp4", ".pyc", ".o", ".so", ".dll", ".exe"
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg", ".ico",
+        ".pdf", ".zip", ".tar", ".gz", ".mp3", ".mp4", ".webm", ".mov", ".ogg", ".wav",
+        ".woff", ".woff2", ".ttf", ".otf", ".eot", ".wasm", ".bin", ".tgs",
+        ".pyc", ".o", ".so", ".dll", ".exe", ".map", ".lock",
     }
+    MAX_FILE_BYTES = 1_048_576  # 1 MB cap per text file
+    MAX_PROGRESS_EVENTS = 60
 
     def __init__(self, event_bus=None):
         self.event_bus = event_bus
@@ -89,60 +95,66 @@ class SecretScanner:
             
         from aegis.core.event_bus import FileScanning, CodeAnalyzing, VulnerabilityFound
 
-        for filepath in target_path.rglob("*"):
-            if not filepath.is_file():
-                continue
-            
-            rel_parts = filepath.relative_to(target_path).parts
-            if any(part in self.IGNORE_DIRS for part in rel_parts):
-                continue
-                
-            if filepath.suffix.lower() in self.IGNORE_EXTENSIONS:
-                continue
+        emitted_progress = 0
+        for root, dirs, files in os.walk(target_path):
+            dirs[:] = [d for d in dirs if d not in self.IGNORE_DIRS]
 
-            rel_path = filepath.relative_to(target_path).as_posix()
-            await self._emit(FileScanning(file_path=rel_path))
+            for fname in files:
+                filepath = Path(root) / fname
+                if filepath.suffix.lower() in self.IGNORE_EXTENSIONS:
+                    continue
+                try:
+                    if filepath.stat().st_size > self.MAX_FILE_BYTES:
+                        continue
+                except OSError:
+                    continue
 
-            try:
-                content = filepath.read_text(encoding="utf-8")
-                await self._emit(CodeAnalyzing(file_path=rel_path, snippet="Scanning for hardcoded secrets..."))
-                
-                for line_idx, line in enumerate(content.splitlines(), start=1):
-                    for secret_type, value in detect_secrets(line):
-                        if not is_plausible_secret(secret_type, value):
-                            continue
-                        # Never copy the raw secret into reports, Telegram alerts or PR comments
-                        snippet = line.strip().replace(value, mask_secret(value))
-                        if len(snippet) > 200:
-                            snippet = snippet[:200] + "..."
-                                
-                        findings.append(
-                            VulnerabilityFinding(
-                                id=f"secret-{uuid.uuid4().hex[:8]}",
-                                scanner=ScannerType.SECRET,
-                                title=f"Hardcoded {secret_type}",
-                                description=f"A hardcoded {secret_type} was found in the source code. "
-                                            f"Hardcoded secrets can lead to unauthorized access and data breaches.",
-                                severity=Severity.CRITICAL,
-                                file_path=rel_path,
-                                line_start=line_idx,
-                                line_end=line_idx,
-                                code_snippet=snippet,
-                                cwe=["CWE-798"],
-                                cve=[],
-                                recommendation="Remove the hardcoded secret. Use environment variables or a secure secrets management system (e.g., AWS Secrets Manager, HashiCorp Vault)."
+                rel_path = filepath.relative_to(target_path).as_posix()
+                if emitted_progress < self.MAX_PROGRESS_EVENTS:
+                    await self._emit(FileScanning(file_path=rel_path))
+
+                try:
+                    content = filepath.read_text(encoding="utf-8")
+                    if emitted_progress < self.MAX_PROGRESS_EVENTS:
+                        await self._emit(CodeAnalyzing(file_path=rel_path, snippet="Scanning for hardcoded secrets..."))
+                        emitted_progress += 1
+
+                    for line_idx, line in enumerate(content.splitlines(), start=1):
+                        for secret_type, value in detect_secrets(line):
+                            if not is_plausible_secret(secret_type, value):
+                                continue
+                            # Never copy the raw secret into reports, Telegram alerts or PR comments
+                            snippet = line.strip().replace(value, mask_secret(value))
+                            if len(snippet) > 200:
+                                snippet = snippet[:200] + "..."
+
+                            findings.append(
+                                VulnerabilityFinding(
+                                    id=f"secret-{uuid.uuid4().hex[:8]}",
+                                    scanner=ScannerType.SECRET,
+                                    title=f"Hardcoded {secret_type}",
+                                    description=f"A hardcoded {secret_type} was found in the source code. "
+                                                f"Hardcoded secrets can lead to unauthorized access and data breaches.",
+                                    severity=Severity.CRITICAL,
+                                    file_path=rel_path,
+                                    line_start=line_idx,
+                                    line_end=line_idx,
+                                    code_snippet=snippet,
+                                    cwe=["CWE-798"],
+                                    cve=[],
+                                    recommendation="Remove the hardcoded secret. Use environment variables or a secure secrets management system (e.g., AWS Secrets Manager, HashiCorp Vault)."
+                                )
                             )
-                        )
-                        await self._emit(VulnerabilityFound(
-                            severity=Severity.CRITICAL.value,
-                            title=f"Hardcoded {secret_type}",
-                            file_path=rel_path,
-                            line=line_idx,
-                            explanation=f"Found hardcoded {secret_type}."
-                        ))
-            except UnicodeDecodeError:
-                pass
-            except Exception as e:
-                logger.error(f"Error scanning file {filepath}: {e}")
+                            await self._emit(VulnerabilityFound(
+                                severity=Severity.CRITICAL.value,
+                                title=f"Hardcoded {secret_type}",
+                                file_path=rel_path,
+                                line=line_idx,
+                                explanation=f"Found hardcoded {secret_type}."
+                            ))
+                except UnicodeDecodeError:
+                    pass
+                except Exception as e:
+                    logger.error(f"Error scanning file {filepath}: {e}")
 
         return findings

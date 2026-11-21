@@ -323,6 +323,8 @@ export default function Home() {
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'action' && data.action === 'SCAN') {
+          setIsTyping(false);
+          setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
           startScanRef.current(data.github_url);
         } else if (data.type === 'chunk') {
           setIsTyping(false);
@@ -341,6 +343,9 @@ export default function Home() {
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.id === 'streaming') {
+              if (!last.content.trim()) {
+                return prev.slice(0, -1);
+              }
               return [...prev.slice(0, -1), { ...last, id: `${Date.now()}` }];
             }
             return prev;
@@ -566,7 +571,9 @@ export default function Home() {
           const data = await res.json();
           setIsTyping(false);
           if (data.action === 'SCAN' && data.github_url) {
+            setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
             startScanRef.current(data.github_url);
+            return;
           }
           setMessages((prev) => [
             ...prev.filter((m) => m.id !== 'streaming'),
@@ -625,9 +632,9 @@ export default function Home() {
     resetScanState('demo/kz-fintech-app');
     const now = formatNowTime();
     setMessages((prev) => [
-      ...prev,
+      ...prev.filter((m) => m.id !== 'scan-status'),
       { id: `${Date.now()}`, role: 'user', content: 'Запусти демо-аудит KZ Fintech', timestamp: now },
-      { id: 'streaming', role: 'assistant', content: 'Клонирую историю коммитов и запускаю локальный аудит (SAST + Taint + Secrets + Git Time Machine)...', timestamp: now },
+      { id: 'scan-status', role: 'assistant', content: 'Клонирую историю коммитов и запускаю локальный аудит (SAST + Taint + Secrets + Git Time Machine)...', timestamp: now },
     ]);
     setEvents([{ event_type: 'ScanStarted', message: 'Инициализация on-premise движка Commit Guardian...' }]);
 
@@ -635,7 +642,7 @@ export default function Home() {
       const res = await fetch('/api/scan/demo', { method: 'POST' });
       const data = await res.json();
       setMessages((prev) => {
-        const filtered = prev.filter((m) => m.id !== 'streaming');
+        const filtered = prev.filter((m) => m.id !== 'scan-status');
         if (res.ok) {
           return [
             ...filtered,
@@ -660,7 +667,7 @@ export default function Home() {
       setIsScanning(false);
       if (timerRef.current) clearInterval(timerRef.current);
       setMessages((prev) => [
-        ...prev.filter((m) => m.id !== 'streaming'),
+        ...prev.filter((m) => m.id !== 'scan-status'),
         { id: `${Date.now()}`, role: 'assistant', content: `Ошибка сети при демо-скане: ${err}`, timestamp: formatNowTime() },
       ]);
     }
@@ -675,9 +682,9 @@ export default function Home() {
     resetScanState(`upload/${file.name}`);
     const now = formatNowTime();
     setMessages((prev) => [
-      ...prev,
+      ...prev.filter((m) => m.id !== 'scan-status'),
       { id: `${Date.now()}`, role: 'user', content: `Проверь архив \`${file.name}\``, timestamp: now },
-      { id: 'streaming', role: 'assistant', content: 'Распаковка и локальный анализ (код будет удалён сразу после проверки)...', timestamp: now },
+      { id: 'scan-status', role: 'assistant', content: 'Распаковка и локальный анализ (код будет удалён сразу после проверки)...', timestamp: now },
     ]);
 
     const formData = new FormData();
@@ -687,7 +694,7 @@ export default function Home() {
       const res = await fetch('/api/scan/upload', { method: 'POST', body: formData });
       const data = await res.json();
       setMessages((prev) => {
-        const filtered = prev.filter((m) => m.id !== 'streaming');
+        const filtered = prev.filter((m) => m.id !== 'scan-status');
         if (res.ok) {
           return [
             ...filtered,
@@ -711,7 +718,7 @@ export default function Home() {
       setIsScanning(false);
       if (timerRef.current) clearInterval(timerRef.current);
       setMessages((prev) => [
-        ...prev.filter((m) => m.id !== 'streaming'),
+        ...prev.filter((m) => m.id !== 'scan-status'),
         { id: `${Date.now()}`, role: 'assistant', content: `Ошибка сети при загрузке: ${err}`, timestamp: formatNowTime() },
       ]);
     }
@@ -731,7 +738,7 @@ export default function Home() {
       });
       const data = await res.json();
       setMessages((prev) => {
-        const filtered = prev.filter((m) => m.id !== 'streaming');
+        const filtered = prev.filter((m) => m.id !== 'scan-status');
         if (res.ok) {
           return [
             ...filtered,
@@ -759,7 +766,7 @@ export default function Home() {
       setIsScanning(false);
       if (timerRef.current) clearInterval(timerRef.current);
       setMessages((prev) => [
-        ...prev.filter((m) => m.id !== 'streaming'),
+        ...prev.filter((m) => m.id !== 'scan-status'),
         { id: `${Date.now()}`, role: 'assistant', content: `⛔ Ошибка сети при сканировании: ${err}`, timestamp: formatNowTime() },
       ]);
     }
@@ -774,8 +781,8 @@ export default function Home() {
 
     const now = formatNowTime();
     setMessages((prev) => [
-      ...prev.filter((m) => m.id !== 'streaming'),
-      { id: 'streaming', role: 'assistant', content: `Клонирую \`${clean}\`, проверяю коммиты и запускаю аудит...`, timestamp: now },
+      ...prev.filter((m) => m.id !== 'scan-status' && m.id !== 'streaming'),
+      { id: 'scan-status', role: 'assistant', content: `Клонирую \`${clean}\`, проверяю коммиты и запускаю аудит...`, timestamp: now },
     ]);
 
     let finished = false;
@@ -799,7 +806,7 @@ export default function Home() {
       if (data.event_type === 'ScanResult') {
         finished = true;
         setMessages((prev) => [
-          ...prev.filter((m) => m.id !== 'streaming'),
+          ...prev.filter((m) => m.id !== 'scan-status'),
           {
             id: `${Date.now()}`,
             role: 'assistant',
@@ -811,7 +818,7 @@ export default function Home() {
         applyCompletedPayload(data);
         return;
       }
-      setEvents((prev) => [...prev, data]);
+      setEvents((prev) => [...prev.slice(-199), data]);
       if (data.event_type === 'VulnerabilityFound') {
         setVulnerabilities((prev) => prev + 1);
       } else if (data.event_type === 'SystemError') {
@@ -819,7 +826,7 @@ export default function Home() {
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
         setMessages((prev) => [
-          ...prev.filter((m) => m.id !== 'streaming'),
+          ...prev.filter((m) => m.id !== 'scan-status'),
           { id: `${Date.now()}`, role: 'assistant', content: `⛔ ${data.message}`, timestamp: formatNowTime() },
         ]);
       } else if (data.event_type === 'ScanCompleted') {
@@ -853,15 +860,15 @@ export default function Home() {
     setIsHealing(true);
     const now = formatNowTime();
     setMessages((prev) => [
-      ...prev,
+      ...prev.filter((m) => m.id !== 'scan-status'),
       { id: `${Date.now()}`, role: 'user', content: 'Запусти самоисцеление с доказательством (Self-Heal)', timestamp: now },
-      { id: 'streaming', role: 'assistant', content: 'Патчу копию кода через AST → ast.parse() → пересканирую песочницу...', timestamp: now },
+      { id: 'scan-status', role: 'assistant', content: 'Патчу копию кода через AST → ast.parse() → пересканирую песочницу...', timestamp: now },
     ]);
     try {
       const res = await fetch('/api/scan/demo/heal', { method: 'POST' });
       const data = await res.json();
       setMessages((prev) => {
-        const filtered = prev.filter((m) => m.id !== 'streaming');
+        const filtered = prev.filter((m) => m.id !== 'scan-status');
         if (res.ok) {
           return [
             ...filtered,
@@ -887,7 +894,7 @@ export default function Home() {
       }
     } catch (err) {
       setMessages((prev) => [
-        ...prev.filter((m) => m.id !== 'streaming'),
+        ...prev.filter((m) => m.id !== 'scan-status'),
         { id: `${Date.now()}`, role: 'assistant', content: `Ошибка сети при самоисцелении: ${err}`, timestamp: formatNowTime() },
       ]);
     } finally {

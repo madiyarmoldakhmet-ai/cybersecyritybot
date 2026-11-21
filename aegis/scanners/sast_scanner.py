@@ -644,6 +644,9 @@ class SASTScanner:
     async def run_multi_language_analyzer(self, target_path: Path) -> List[VulnerabilityFinding]:
         """Analyze multi-language source files (Dart, JS, TS, Python, JSON, YAML) with directory pruning."""
         findings: List[VulnerabilityFinding] = []
+        emitted_progress = 0
+        max_progress_events = 80
+        max_file_bytes = 512_000
 
         for root, dirs, files in os.walk(target_path):
             # Prune ignored directories in-place to prevent os.walk from descending into them
@@ -655,7 +658,15 @@ class SASTScanner:
                 is_env = file.startswith(".env")
 
                 if ext in TARGET_EXTENSIONS or is_env:
-                    await self._emit(FileScanning(file_path=str(file_path.relative_to(target_path) if file_path.is_relative_to(target_path) else file_path)))
+                    try:
+                        if file_path.stat().st_size > max_file_bytes:
+                            continue
+                    except OSError:
+                        continue
+                    rel_display = str(file_path.relative_to(target_path) if file_path.is_relative_to(target_path) else file_path)
+                    if emitted_progress < max_progress_events:
+                        await self._emit(FileScanning(file_path=rel_display))
+                        emitted_progress += 1
                     try:
                         content = file_path.read_text(encoding="utf-8", errors="replace")
 
@@ -674,7 +685,8 @@ class SASTScanner:
                         # 2. Python-specific AST security visitor
                         if ext == ".py":
                             try:
-                                await self._emit(CodeAnalyzing(file_path=str(file_path), snippet="ast.parse() - Analyzing Python syntax tree..."))
+                                if emitted_progress < max_progress_events:
+                                    await self._emit(CodeAnalyzing(file_path=rel_display, snippet="ast.parse() - Analyzing Python syntax tree..."))
                                 tree = ast.parse(content, filename=str(file_path))
                                 ast_visitor = PythonASTSecurityVisitor(file_path, content)
                                 ast_visitor.visit(tree)
@@ -690,12 +702,11 @@ class SASTScanner:
                             except Exception as ast_err:
                                 logger.debug(f"AST parsing skipped for {file_path}: {ast_err}")
 
-                        # 3. JavaScript/TypeScript AST security visitor (esprima)
-                        if ext in [".js", ".jsx", ".ts", ".tsx"]:
+                        # 3. JavaScript AST security visitor (esprima only supports JS/JSX, not TS)
+                        if ext in (".js", ".jsx") and len(content) <= 250_000:
                             try:
-                                await self._emit(CodeAnalyzing(file_path=str(file_path), snippet="esprima.parseScript() - Analyzing JS/TS AST..."))
-                                # Esprima doesn't natively support TS, but we can try parsing.
-                                # If it fails (e.g. strict TS syntax), it falls back safely.
+                                if emitted_progress < max_progress_events:
+                                    await self._emit(CodeAnalyzing(file_path=rel_display, snippet="esprima.parseScript() - Analyzing JS AST..."))
                                 js_tree = esprima.parseScript(content, {"loc": True, "jsx": True}).toDict()
                                 js_ast_visitor = JSASTSecurityVisitor(file_path, content)
                                 js_ast_visitor.visit(js_tree)
@@ -709,7 +720,7 @@ class SASTScanner:
                                         explanation=f.description
                                     ))
                             except Exception as js_ast_err:
-                                logger.debug(f"JS/TS AST parsing skipped for {file_path}: {js_ast_err}")
+                                logger.debug(f"JS AST parsing skipped for {file_path}: {js_ast_err}")
 
                     except Exception as e:
                         logger.debug(f"Multi-language scanner skipped {file_path}: {e}")
