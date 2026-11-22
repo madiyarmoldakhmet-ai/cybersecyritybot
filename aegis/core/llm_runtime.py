@@ -275,13 +275,18 @@ async def chat_completion(
             global _resolved_gemini_model
 
             def _gemini_payload(target_model: str) -> Dict[str, Any]:
-                gen_cfg: Dict[str, Any] = {
-                    "temperature": temperature,
-                    "maxOutputTokens": max(max_tokens, 1400),
-                }
-                # Gemini 3.x defaults to medium thinking (15-25s latency); LOW keeps real-time chat ~1-3s
-                if "gemini-3" in target_model.lower():
-                    gen_cfg["thinkingConfig"] = {"thinkingLevel": "LOW"}
+                low_name = target_model.lower()
+                if "gemini-3" in low_name:
+                    # Gemini 3.6+/3.8+ deprecate legacy temperature & use lowercase thinkingLevel="low" for fast chat
+                    gen_cfg: Dict[str, Any] = {
+                        "maxOutputTokens": max(max_tokens, 1400),
+                        "thinkingConfig": {"thinkingLevel": "low"},
+                    }
+                else:
+                    gen_cfg = {
+                        "temperature": temperature,
+                        "maxOutputTokens": max(max_tokens, 1024),
+                    }
                 return {
                     "systemInstruction": {"parts": [{"text": system_prompt}]},
                     "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -293,17 +298,25 @@ async def chat_completion(
                 if _resolved_gemini_model
                 else [
                     "gemini-3.8-flash" if model == "gemini-2.5-flash" else model,
-                    "gemini-3.8-flash",
-                    "gemini-flash-latest",
+                    "gemini-3.8-flash-lite",
                     "gemini-2.5-flash-lite",
+                    "gemini-flash-latest",
                 ]
             )
             candidate_models = list(dict.fromkeys(m for m in base_candidates if m))
             hdrs = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-            async with httpx.AsyncClient(timeout=max(timeout, 35.0)) as client:
+            per_model_timeout = min(max(timeout, 12.0), 14.0) if not _resolved_gemini_model else max(timeout, 25.0)
+            async with httpx.AsyncClient(timeout=per_model_timeout) as client:
                 for cand_model in candidate_models:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{cand_model}:generateContent"
-                    resp = await client.post(url, headers=hdrs, json=_gemini_payload(cand_model))
+                    try:
+                        resp = await client.post(url, headers=hdrs, json=_gemini_payload(cand_model))
+                    except httpx.TimeoutException:
+                        logger.warning(f"{task_label}: Gemini '{cand_model}' timed out after {per_model_timeout:.0f}s, trying next...")
+                        if _resolved_gemini_model == cand_model:
+                            _resolved_gemini_model = None
+                        continue
+
                     if resp.status_code == 200:
                         cands = resp.json().get("candidates") or []
                         if cands:
@@ -316,50 +329,63 @@ async def chat_completion(
                             if txt:
                                 _resolved_gemini_model = cand_model
                                 return txt
-                    elif resp.status_code == 404:
-                        logger.warning(f"{task_label}: Gemini model '{cand_model}' returned 404, trying fallback...")
+                    elif resp.status_code in (404, 429, 503):
+                        logger.warning(
+                            f"{task_label}: Gemini '{cand_model}' HTTP {resp.status_code} ({resp.text[:140]}), trying next..."
+                        )
                         continue
                     else:
                         logger.warning(
                             f"{task_label}: Gemini ({cand_model}) HTTP {resp.status_code}: {resp.text[:220]}"
                         )
-                        break
+                        continue
 
-                # Last-resort dynamic discovery from /v1beta/models if all static model IDs returned 404
-                list_resp = await client.get(
-                    "https://generativelanguage.googleapis.com/v1beta/models",
-                    headers={"x-goog-api-key": api_key},
-                )
-                if list_resp.status_code == 200:
-                    models_list = list_resp.json().get("models") or []
-                    flash_models = [
-                        str(m.get("name", "")).replace("models/", "")
-                        for m in models_list
-                        if "generateContent" in (m.get("supportedGenerationMethods") or [])
-                        and "flash" in str(m.get("name", "")).lower()
-                        and "image" not in str(m.get("name", "")).lower()
-                        and "tts" not in str(m.get("name", "")).lower()
-                    ]
-                    if flash_models:
-                        dyn_model = flash_models[-1]
-                        logger.info(f"{task_label}: Auto-discovered live Gemini model '{dyn_model}'")
-                        resp2 = await client.post(
-                            f"https://generativelanguage.googleapis.com/v1beta/models/{dyn_model}:generateContent",
-                            headers=hdrs,
-                            json=_gemini_payload(dyn_model),
-                        )
-                        if resp2.status_code == 200:
-                            cands = resp2.json().get("candidates") or []
-                            if cands:
-                                parts = (cands[0].get("content") or {}).get("parts") or []
-                                txt = "\n".join(
-                                    str(p.get("text", ""))
-                                    for p in parts
-                                    if p.get("text") and not p.get("thought")
-                                ).strip()
-                                if txt:
-                                    _resolved_gemini_model = dyn_model
-                                    return txt
+                # Dynamic discovery from /v1beta/models (preferring fast flash-lite / flash models)
+                try:
+                    list_resp = await client.get(
+                        "https://generativelanguage.googleapis.com/v1beta/models",
+                        headers={"x-goog-api-key": api_key},
+                    )
+                    if list_resp.status_code == 200:
+                        models_list = list_resp.json().get("models") or []
+                        flash_models = [
+                            str(m.get("name", "")).replace("models/", "")
+                            for m in models_list
+                            if "generateContent" in (m.get("supportedGenerationMethods") or [])
+                            and "flash" in str(m.get("name", "")).lower()
+                            and not any(
+                                skip in str(m.get("name", "")).lower()
+                                for skip in ("image", "tts", "audio", "exp", "embedding", "live")
+                            )
+                        ]
+                        # Prefer lite models first for blazing-fast chat latency
+                        flash_models.sort(key=lambda n: ("lite" not in n.lower(), n))
+                        logger.info(f"{task_label}: Available Gemini flash models: {flash_models[:8]}")
+                        for dyn_model in flash_models[:3]:
+                            if dyn_model in candidate_models:
+                                continue
+                            try:
+                                resp2 = await client.post(
+                                    f"https://generativelanguage.googleapis.com/v1beta/models/{dyn_model}:generateContent",
+                                    headers=hdrs,
+                                    json=_gemini_payload(dyn_model),
+                                )
+                            except httpx.TimeoutException:
+                                continue
+                            if resp2.status_code == 200:
+                                cands = resp2.json().get("candidates") or []
+                                if cands:
+                                    parts = (cands[0].get("content") or {}).get("parts") or []
+                                    txt = "\n".join(
+                                        str(p.get("text", ""))
+                                        for p in parts
+                                        if p.get("text") and not p.get("thought")
+                                    ).strip()
+                                    if txt:
+                                        _resolved_gemini_model = dyn_model
+                                        return txt
+                except Exception as disc_err:
+                    logger.warning(f"{task_label}: Gemini model discovery failed: {type(disc_err).__name__}: {disc_err}")
             return None
 
         if provider == LLMProvider.ANTHROPIC and api_key:
