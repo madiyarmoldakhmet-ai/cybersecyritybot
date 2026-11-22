@@ -23,7 +23,7 @@ import { SecurityScore } from '@/components/SecurityScore';
 import { AiCopilotChat, ChatAuditCard, ChatMessage } from '@/components/AiCopilotChat';
 import { AuthorshipPanel, AuthorshipState } from '@/components/AuthorshipPanel';
 import { CommitsReportsPanel, RepoCommit, ReportsFeedData } from '@/components/CommitsReportsPanel';
-import { CompanionMood, MaidCompanion } from '@/components/MaidCompanion';
+import { CompanionMood, OrcaCompanion } from '@/components/OrcaCompanion';
 import {
   FinancialRisk,
   GhostSecret,
@@ -109,8 +109,8 @@ const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
   id: 'welcome-1',
   role: 'assistant',
   content:
-    'Привет! Я **Aegis-chan**, твой локальный on-prem помощник по безопасности коммитов (0 байт кода уходит в облако).\n' +
-    'Нажми **«Демо-аудит»**, перетащи сюда свой `.zip` или подтверди свой репозиторий командой `/verify owner/repo` — проверю код, найду утечки и сразу пришлю **PDF-отчёт** прямо сюда в чат.',
+    'Привет! Я **Aegis Orca**, твоя локальная косатка-страж по безопасности коммитов (0 байт кода уходит в облако).\n' +
+    'Нажми **«Демо-аудит»**, перетащи сюда свой `.zip` или подтверди свой репозиторий командой `/verify owner/repo` — просвечу код сонаром, поймаю утечки и сразу скину **PDF-отчёт** прямо сюда в чат.',
   timestamp: 'Сегодня',
 };
 
@@ -1093,26 +1093,26 @@ export default function Home() {
 
   const companionSpeech = useMemo(() => {
     if (isHealing) return 'Патчу уязвимый код, прогоняю ast.parse() и пересканирую песочницу…';
-    if (isScanning) return `Проверяю ${activeTarget || 'репозиторий'}: AST, Taint, секреты и Git-историю…`;
-    if (isTyping) return 'Секунду — разбираю твой вопрос локально…';
+    if (isScanning) return `Просвечиваю ${activeTarget || 'репозиторий'} сонаром: AST, Taint, секреты и Git-история…`;
+    if (isTyping) return 'Пингую локальный движок — разбираю твой вопрос…';
     if (ownershipBlockedRepo) {
-      return `Стоп! Чужой репозиторий ${ownershipBlockedRepo} без подтверждения авторства не пропущу. Сделай /verify справа!`;
+      return `Стоп! Чужой репозиторий ${ownershipBlockedRepo} без подтверждения авторства не пропущу. Пройди /verify справа!`;
     }
     if (healReport) {
-      return `Исцелила ${healReport.fixed_count} уязвимостей: Score ${healReport.before_score} → ${healReport.after_score} (${healReport.after_grade}). Проверенные diffs уже в панели «Находки»!`;
+      return `Сожрал ${healReport.fixed_count} уязвимостей: Score ${healReport.before_score} → ${healReport.after_score} (${healReport.after_grade}). Проверенные diffs уже в панели «Находки»!`;
     }
     if (securityScore !== null && activeFindingsCount > 0) {
       return securityScore < 70
-        ? `Ой! Нашла ${activeFindingsCount} проблем в ${activeTarget} (Score ${securityScore}/100). Открой «Находки» или жми Self-Heal!`
-        : `Проверила ${activeTarget}: Score ${securityScore}/100 (${grade}). Есть ${activeFindingsCount} мелких замечаний — всё чисто по критике.`;
+        ? `Тревога! Поймал ${activeFindingsCount} проблем в ${activeTarget} (Score ${securityScore}/100). Открой «Находки» или жми Self-Heal!`
+        : `Проверил ${activeTarget}: Score ${securityScore}/100 (${grade}). Есть ${activeFindingsCount} мелких замечаний — по критике чисто.`;
     }
     if (securityScore !== null && activeFindingsCount === 0) {
-      return `Контур ${activeTarget} чист! Score ${securityScore}/100 (${grade}) — ни одной активной угрозы.`;
+      return `Вода чиста в ${activeTarget}! Score ${securityScore}/100 (${grade}) — ни одной активной угрозы.`;
     }
     if (authorship.verified) {
-      return `Авторство ${authorship.target} подтверждено! Теперь кидай ссылку в чат — сразу проверю.`;
+      return `Авторство ${authorship.target} подтверждено! Кидай ссылку в чат — сразу проверю.`;
     }
-    return 'Я на дежурстве! Нажми «Демо-аудит», кинь .zip или введи /verify owner/repo для своего проекта.';
+    return 'На патруле! Жми «Демо-аудит», кидай .zip или вводи /verify owner/repo для своего проекта.';
   }, [
     isHealing,
     isScanning,
@@ -1132,7 +1132,7 @@ export default function Home() {
   return (
     <div className="h-dvh w-full overflow-hidden bg-[var(--color-canvas)] text-[var(--color-ink)] font-sans flex flex-col">
       <a href="#chat-workspace" className="skip-link visually-hidden">
-        Перейти к чату с Aegis-chan
+        Перейти к чату с Aegis Orca
       </a>
 
       {/* Hidden global ZIP input shared by companion & chat */}
@@ -1217,9 +1217,9 @@ export default function Home() {
 
       {/* Pure Full-Viewport Companion + Chat Shell */}
       <main id="chat-workspace" className="flex-1 min-h-0 flex flex-col lg:flex-row relative overflow-hidden">
-        {/* Left: Live Animated Sakurasou-style Maid-Guardian Companion */}
+        {/* Left: Live Animated Cyber-Orca Companion */}
         <div className="lg:w-[320px] xl:w-[348px] lg:h-full shrink-0 flex flex-col">
-          <MaidCompanion
+          <OrcaCompanion
             mood={companionMood}
             speech={companionSpeech}
             isScanning={isScanning}

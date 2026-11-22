@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 
 export type CompanionMood = 'idle' | 'thinking' | 'scanning' | 'alert' | 'blocked' | 'happy';
 
-interface MaidCompanionProps {
+interface OrcaCompanionProps {
   mood: CompanionMood;
   speech: string;
   isScanning: boolean;
@@ -49,49 +49,49 @@ const MOOD_CONFIG: Record<
   }
 > = {
   idle: {
-    src: '/mascot/maid_idle.webp',
-    alt: 'Aegis-chan — дежурный AI-компаньон безопасности кода',
-    label: 'НА ДЕЖУРСТВЕ',
-    accentClass: 'text-[#e94a32] border-[#e94a32]/35 bg-[#e94a32]/10',
-    ringColor: 'border-[#e94a32]/30',
-    glowBg: 'from-[#e94a32]/20 via-transparent to-transparent',
+    src: '/mascot/orca_idle.webp',
+    alt: 'Aegis Orca — анимированная косатка-страж на дежурстве',
+    label: 'ПАТРУЛЬ',
+    accentClass: 'text-sky-400 border-sky-400/35 bg-sky-400/10',
+    ringColor: 'border-sky-400/30',
+    glowBg: 'from-sky-500/18 via-transparent to-transparent',
   },
   thinking: {
-    src: '/mascot/maid_scan.webp',
-    alt: 'Aegis-chan анализирует вопрос',
-    label: 'ДУМАЮ…',
+    src: '/mascot/orca_scan.webp',
+    alt: 'Aegis Orca сканирует вопрос сонаром',
+    label: 'СОНАР…',
     accentClass: 'text-[#e8a33d] border-[#e8a33d]/40 bg-[#e8a33d]/10',
     ringColor: 'border-[#e8a33d]/45',
     glowBg: 'from-[#e8a33d]/22 via-transparent to-transparent',
   },
   scanning: {
-    src: '/mascot/maid_scan.webp',
-    alt: 'Aegis-chan сканирует коммиты и AST-граф',
-    label: 'СКАНИРУЮ КОД',
-    accentClass: 'text-sky-400 border-sky-400/45 bg-sky-400/12',
+    src: '/mascot/orca_scan.webp',
+    alt: 'Aegis Orca просвечивает коммиты и AST-граф сонаром',
+    label: 'ОХОТА НА БАГИ',
+    accentClass: 'text-sky-400 border-sky-400/45 bg-sky-400/14',
     ringColor: 'border-sky-400/55',
     glowBg: 'from-sky-400/24 via-[#e94a32]/12 to-transparent',
   },
   alert: {
-    src: '/mascot/maid_alert.webp',
-    alt: 'Aegis-chan обнаружила критические уязвимости',
-    label: 'УГРОЗА НАЙДЕНА',
+    src: '/mascot/orca_alert.webp',
+    alt: 'Aegis Orca обнаружила критические уязвимости',
+    label: 'УГРОЗА В КОДЕ',
     accentClass: 'text-[#ff735d] border-[#e94a32]/55 bg-[#e94a32]/15',
     ringColor: 'border-[#e94a32]/70',
     glowBg: 'from-[#e94a32]/30 via-transparent to-transparent',
   },
   blocked: {
-    src: '/mascot/maid_alert.webp',
-    alt: 'Aegis-chan заблокировала чужой репозиторий без подтверждения авторства',
+    src: '/mascot/orca_alert.webp',
+    alt: 'Aegis Orca заблокировала чужой репозиторий без подтверждения авторства',
     label: 'ДОСТУП ЗАКРЫТ',
     accentClass: 'text-[#ff735d] border-[#e94a32]/55 bg-[#e94a32]/15',
     ringColor: 'border-[#e94a32]/65',
     glowBg: 'from-[#e94a32]/26 via-transparent to-transparent',
   },
   happy: {
-    src: '/mascot/maid_happy.webp',
-    alt: 'Aegis-chan радуется чистому или исцелённому коду',
-    label: 'КОНТУР ЧИСТ',
+    src: '/mascot/orca_happy.webp',
+    alt: 'Aegis Orca радуется чистому или исцелённому коду',
+    label: 'ВОДА ЧИСТА',
     accentClass: 'text-[#3fbf7f] border-[#3fbf7f]/45 bg-[#3fbf7f]/12',
     ringColor: 'border-[#3fbf7f]/55',
     glowBg: 'from-[#3fbf7f]/25 via-transparent to-transparent',
@@ -99,14 +99,14 @@ const MOOD_CONFIG: Record<
 };
 
 const POKE_LINES = [
-  'Не отвлекай — я караулю твои коммиты, чтобы ни один ИИН и токен не утекли!',
-  'Всё крутится локально on-prem: 0 байт исходников наружу, клянусь щитом.',
-  'Нажми «Демо-аудит» — за 5 секунд покажу 17 багов и исцелю их в один клик.',
-  'Чужой GitHub без `/verify` не пропущу — сначала докажи, что репо твоё.',
-  'Можешь просто перетащить `.zip` прямо в чат — проверю и сразу сотру копию.',
+  'Пинг сонаром! Ни один утёкший ИИН или токен не проплывёт мимо меня.',
+  'Работаю 100% локально on-prem: 0 байт кода уходит в облако.',
+  'Жми «Демо-аудит» — за 5 секунд поймаю 17 багов и сожру их через Self-Heal!',
+  'Чужие GitHub-репо без `/verify` не пропускаю — охраняю этику и периметр.',
+  'Можешь кинуть свой `.zip` прямо в чат — проверю и сразу удалю копию.',
 ];
 
-export function MaidCompanion({
+export function OrcaCompanion({
   mood,
   speech,
   isScanning,
@@ -122,15 +122,15 @@ export function MaidCompanion({
   onTriggerSelfHeal,
   onUploadZipClick,
   onOpenDrawer,
-}: MaidCompanionProps) {
+}: OrcaCompanionProps) {
   const prefersReducedMotion = useReducedMotion();
   const [motionPaused, setMotionPaused] = useState(false);
   const [pokeIndex, setPokeIndex] = useState<number | null>(null);
   const [pokeCount, setPokeCount] = useState(0);
 
-  // Preload all 4 mascot sprites once so mood transitions crossfade instantaneously
+  // Preload all 4 orca sprites so mood switches crossfade without blink
   useEffect(() => {
-    ['/mascot/maid_idle.webp', '/mascot/maid_scan.webp', '/mascot/maid_alert.webp', '/mascot/maid_happy.webp'].forEach(
+    ['/mascot/orca_idle.webp', '/mascot/orca_scan.webp', '/mascot/orca_alert.webp', '/mascot/orca_happy.webp'].forEach(
       (src) => {
         const img = new window.Image();
         img.src = src;
@@ -149,13 +149,13 @@ export function MaidCompanion({
 
   return (
     <aside
-      aria-label="Aegis-chan — живой AI-помощник"
+      aria-label="Aegis Orca — живой питомец-помощник"
       className={cn(
         'lg:h-full flex flex-col justify-between gap-3 p-4 sm:p-5 bg-[var(--color-paper)] border-b lg:border-b-0 lg:border-r border-[var(--color-line)] shrink-0',
-        disableMotion && 'maid-paused'
+        disableMotion && 'orca-paused'
       )}
     >
-      {/* Top Companion Identity + Motion Pause Control (WCAG 2.2.2) */}
+      {/* Top Companion Status + Motion Pause Control (WCAG 2.2.2) */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span
@@ -177,7 +177,7 @@ export function MaidCompanion({
         <button
           type="button"
           onClick={() => setMotionPaused((p) => !p)}
-          title={motionPaused ? 'Включить анимацию питомца' : 'Поставить анимацию на паузу'}
+          title={motionPaused ? 'Включить анимацию косатки' : 'Поставить анимацию на паузу'}
           className="min-h-7 px-2 py-1 rounded-full border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] font-mono text-[10.5px] inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0"
         >
           {motionPaused ? (
@@ -194,15 +194,15 @@ export function MaidCompanion({
         </button>
       </div>
 
-      {/* Live Animated Maid-Guardian Portrait Stage */}
+      {/* Live Animated Orca Portrait Stage */}
       <div className="flex flex-row lg:flex-col items-center gap-4 lg:gap-3.5 my-auto">
         <button
           type="button"
           onClick={handlePoke}
-          aria-label="Погладить или спросить подсказку у Aegis-chan"
+          aria-label="Кликнуть по косатке Aegis Orca для подсказки"
           className="group relative w-28 h-28 sm:w-36 sm:h-36 lg:w-60 lg:h-60 aspect-square shrink-0 rounded-3xl overflow-hidden border border-[var(--color-line-strong)] bg-[#0f0f12] shadow-[0_20px_44px_-22px_rgba(0,0,0,0.65)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e94a32]"
         >
-          {/* Ambient radial aura matching current mood */}
+          {/* Ambient radial deep-ocean / mood aura */}
           <div
             aria-hidden="true"
             className={cn(
@@ -211,23 +211,51 @@ export function MaidCompanion({
             )}
           />
 
-          {/* Orbiting holographic security ring */}
+          {/* Expanding echolocation sonar rings when scanning or thinking */}
+          {(mood === 'scanning' || mood === 'thinking') && !disableMotion && (
+            <>
+              <div
+                aria-hidden="true"
+                className="orca-sonar pointer-events-none absolute inset-6 rounded-full border border-sky-400/60"
+              />
+              <div
+                aria-hidden="true"
+                className="orca-sonar-delayed pointer-events-none absolute inset-6 rounded-full border border-[#e94a32]/45"
+              />
+            </>
+          )}
+
+          {/* Subtle ambient floating bubbles */}
+          {!disableMotion && (
+            <>
+              <span
+                aria-hidden="true"
+                className="orca-bubble pointer-events-none absolute bottom-8 left-5 w-2 h-2 rounded-full border border-sky-300/60 bg-sky-300/15"
+              />
+              <span
+                aria-hidden="true"
+                className="orca-bubble-delayed pointer-events-none absolute bottom-10 right-6 w-1.5 h-1.5 rounded-full border border-sky-200/55 bg-sky-200/15"
+              />
+            </>
+          )}
+
+          {/* Orbiting holographic perimeter ring */}
           <div
             aria-hidden="true"
             className={cn(
               'pointer-events-none absolute inset-2.5 rounded-full border border-dashed transition-colors duration-300',
               cfg.ringColor,
-              isScanning ? 'maid-orbit-fast' : 'maid-orbit'
+              isScanning ? 'orca-orbit-fast' : 'orca-orbit'
             )}
           />
 
-          {/* Crossfading animated sprite */}
+          {/* Swimming animated Orca sprite */}
           <motion.div
             key={`poke-${pokeCount}`}
-            initial={disableMotion ? false : { scale: 0.96 }}
-            animate={disableMotion ? { scale: 1 } : { scale: [0.96, 1.03, 1] }}
-            transition={{ duration: 0.35, ease: 'easeOut' }}
-            className={cn('relative w-full h-full flex items-center justify-center', !disableMotion && 'maid-float')}
+            initial={disableMotion ? false : { scale: 0.94, rotate: -3 }}
+            animate={disableMotion ? { scale: 1, rotate: 0 } : { scale: [0.94, 1.05, 1], rotate: [-3, 3, 0] }}
+            transition={{ duration: 0.42, ease: 'easeOut' }}
+            className={cn('relative w-full h-full flex items-center justify-center', !disableMotion && 'orca-swim')}
           >
             <AnimatePresence mode="wait">
               <motion.img
@@ -236,9 +264,9 @@ export function MaidCompanion({
                 alt={cfg.alt}
                 width={512}
                 height={512}
-                initial={disableMotion ? { opacity: 1 } : { opacity: 0, scale: 0.97 }}
+                initial={disableMotion ? { opacity: 1 } : { opacity: 0, scale: 0.96 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={disableMotion ? { opacity: 0 } : { opacity: 0, scale: 1.02 }}
+                exit={disableMotion ? { opacity: 0 } : { opacity: 0, scale: 1.03 }}
                 transition={{ duration: 0.24 }}
                 className="w-full h-full object-cover select-none"
                 draggable={false}
@@ -246,24 +274,24 @@ export function MaidCompanion({
             </AnimatePresence>
           </motion.div>
 
-          {/* Active scan laser sweep during scanning/thinking */}
+          {/* Active sonar scanline sweep */}
           {(mood === 'scanning' || mood === 'thinking') && !disableMotion && (
             <div
               aria-hidden="true"
-              className="maid-scanline pointer-events-none absolute inset-x-0 top-0 h-1/3 bg-gradient-to-b from-transparent via-sky-400/25 to-transparent border-b border-sky-400/60"
+              className="orca-scanline pointer-events-none absolute inset-x-0 top-0 h-1/3 bg-gradient-to-b from-transparent via-sky-400/25 to-transparent border-b border-sky-400/60"
             />
           )}
 
-          {/* Sparkles when happy */}
+          {/* Celebratory emerald sparkles */}
           {mood === 'happy' && !disableMotion && (
             <>
               <Sparkles
                 aria-hidden="true"
-                className="maid-sparkle pointer-events-none absolute top-3 right-3 w-4 h-4 text-[#3fbf7f]"
+                className="orca-sparkle pointer-events-none absolute top-3 right-3 w-4 h-4 text-[#3fbf7f]"
               />
               <Sparkles
                 aria-hidden="true"
-                className="maid-sparkle pointer-events-none absolute bottom-10 left-3 w-3.5 h-3.5 text-[#3fbf7f]"
+                className="orca-sparkle pointer-events-none absolute bottom-10 left-3 w-3.5 h-3.5 text-[#3fbf7f]"
               />
             </>
           )}
@@ -271,7 +299,7 @@ export function MaidCompanion({
           {/* Bottom live nameplate overlay */}
           <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 py-1.5 bg-gradient-to-t from-[#09090b]/95 via-[#09090b]/70 to-transparent flex items-center justify-between gap-2">
             <span className="font-mono text-[11px] font-medium text-[#f4f4f2] tracking-tight">
-              aegis-chan
+              aegis.orca
             </span>
             {securityScore !== null && (
               <span
@@ -288,11 +316,11 @@ export function MaidCompanion({
           </div>
         </button>
 
-        {/* Companion Speech Bubble */}
+        {/* Orca Speech Bubble */}
         <div className="flex-1 lg:w-full min-w-0 space-y-2.5">
           <div className="relative rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-panel)] px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed text-[var(--color-body-text)]">
             <div className="flex items-center justify-between gap-2 mb-1 font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted-soft)]">
-              <span>Aegis-chan · on-prem питомец</span>
+              <span>Aegis Orca · on-prem страж</span>
               {pokeIndex !== null && (
                 <button
                   type="button"
@@ -317,7 +345,7 @@ export function MaidCompanion({
             </AnimatePresence>
           </div>
 
-          {/* Primary 1-Click Companion Actions */}
+          {/* Primary 1-Click Actions */}
           <div className="grid grid-cols-2 gap-1.5">
             <button
               type="button"
@@ -354,7 +382,7 @@ export function MaidCompanion({
         </div>
       </div>
 
-      {/* Bottom Compact Module Shortcuts (open on-demand Inspector Drawer) */}
+      {/* Bottom Compact Module Shortcuts */}
       <div className="grid grid-cols-4 lg:grid-cols-2 gap-1.5 pt-2 border-t border-[var(--color-line)] font-mono text-[11px]">
         <button
           type="button"

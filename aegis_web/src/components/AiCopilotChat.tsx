@@ -351,7 +351,7 @@ export function AiCopilotChat({
 
   return (
     <section
-      aria-label="Чат с Aegis-chan"
+      aria-label="Чат с Aegis Orca"
       className={cn(
         'bg-[var(--color-canvas)] text-[var(--color-ink)] flex flex-col relative h-full min-h-0',
         className
@@ -373,16 +373,16 @@ export function AiCopilotChat({
         <div className="flex items-center gap-2.5 min-w-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/mascot/maid_idle.webp"
+            src="/mascot/orca_idle.webp"
             alt=""
             width={28}
             height={28}
-            className="w-7 h-7 rounded-full object-cover border border-[var(--color-line-strong)] shrink-0"
+            className="w-7 h-7 rounded-full object-cover border border-[var(--color-line-strong)] shrink-0 bg-[#0f0f12]"
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="font-sans text-sm font-medium tracking-tight truncate">
-                Aegis-chan
+                Aegis Orca
               </span>
               <span className="inline-flex items-center gap-1 font-mono text-[10.5px] text-[var(--color-muted-soft)]">
                 <span
@@ -423,21 +423,21 @@ export function AiCopilotChat({
         role="log"
         aria-live="polite"
         aria-relevant="additions"
-        aria-label="Переписка с Aegis-chan"
+        aria-label="Переписка с Aegis Orca"
         className="cg-scroll flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4 space-y-3.5 prtner-dots"
       >
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
           const isStreaming = msg.id === 'streaming' || msg.id === 'scan-status';
           const avatarSrc = msg.content.startsWith('⛔')
-            ? '/mascot/maid_alert.webp'
+            ? '/mascot/orca_alert.webp'
             : msg.auditCard && msg.auditCard.critical === 0 && msg.auditCard.high === 0
-            ? '/mascot/maid_happy.webp'
+            ? '/mascot/orca_happy.webp'
             : msg.auditCard
-            ? '/mascot/maid_alert.webp'
+            ? '/mascot/orca_alert.webp'
             : isStreaming
-            ? '/mascot/maid_scan.webp'
-            : '/mascot/maid_idle.webp';
+            ? '/mascot/orca_scan.webp'
+            : '/mascot/orca_idle.webp';
 
           return (
             <motion.div
@@ -480,7 +480,7 @@ export function AiCopilotChat({
                     isUser ? 'justify-end' : 'justify-start'
                   )}
                 >
-                  <span>{isUser ? 'you' : 'aegis-chan'} · {msg.timestamp}</span>
+                  <span>{isUser ? 'you' : 'orca'} · {msg.timestamp}</span>
                   {isStreaming && (
                     <span
                       className="inline-block w-1.5 h-3 bg-[#e94a32] animate-pulse"

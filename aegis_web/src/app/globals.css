@@ -316,17 +316,42 @@ dialog::backdrop {
   }
 }
 
-/* Maid-Guardian live companion animations (compositor-only, opt-in for reduced motion) */
-@keyframes maid-float {
+/* Orca-Guardian live companion animations (compositor-only, opt-in for reduced motion) */
+@keyframes orca-swim {
   0%, 100% {
-    transform: translateY(0px) scale(1);
+    transform: translateY(0px) rotate(-1.6deg) scale(1);
   }
   50% {
-    transform: translateY(-6px) scale(1.012);
+    transform: translateY(-7px) rotate(1.6deg) scale(1.018);
   }
 }
 
-@keyframes maid-orbit {
+@keyframes orca-sonar {
+  0% {
+    transform: scale(0.62);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.32);
+    opacity: 0;
+  }
+}
+
+@keyframes orca-bubble {
+  0% {
+    transform: translateY(14px) scale(0.7);
+    opacity: 0;
+  }
+  25% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateY(-28px) scale(1.1);
+    opacity: 0;
+  }
+}
+
+@keyframes orca-orbit {
   from {
     transform: rotate(0deg);
   }
@@ -335,7 +360,7 @@ dialog::backdrop {
   }
 }
 
-@keyframes maid-scanline {
+@keyframes orca-scanline {
   0% {
     transform: translateY(-110%);
     opacity: 0;
@@ -349,7 +374,7 @@ dialog::backdrop {
   }
 }
 
-@keyframes maid-sparkle {
+@keyframes orca-sparkle {
   0%, 100% {
     transform: scale(0.85) translateY(0px);
     opacity: 0.45;
@@ -360,37 +385,61 @@ dialog::backdrop {
   }
 }
 
-.maid-float {
+.orca-swim {
   @media (prefers-reduced-motion: no-preference) {
-    animation: maid-float 4.2s ease-in-out infinite;
+    animation: orca-swim 4.4s ease-in-out infinite;
   }
 }
 
-.maid-orbit {
+.orca-sonar {
   @media (prefers-reduced-motion: no-preference) {
-    animation: maid-orbit 18s linear infinite;
+    animation: orca-sonar 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
   }
 }
 
-.maid-orbit-fast {
+.orca-sonar-delayed {
   @media (prefers-reduced-motion: no-preference) {
-    animation: maid-orbit 5.5s linear infinite;
+    animation: orca-sonar 2.4s cubic-bezier(0.16, 1, 0.3, 1) 1.2s infinite;
   }
 }
 
-.maid-scanline {
+.orca-bubble {
   @media (prefers-reduced-motion: no-preference) {
-    animation: maid-scanline 2.2s ease-in-out infinite;
+    animation: orca-bubble 3.6s ease-in-out infinite;
   }
 }
 
-.maid-sparkle {
+.orca-bubble-delayed {
   @media (prefers-reduced-motion: no-preference) {
-    animation: maid-sparkle 2.4s ease-in-out infinite;
+    animation: orca-bubble 4.2s ease-in-out 1.5s infinite;
   }
 }
 
-.maid-paused,
-.maid-paused * {
+.orca-orbit {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-orbit 20s linear infinite;
+  }
+}
+
+.orca-orbit-fast {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-orbit 5.5s linear infinite;
+  }
+}
+
+.orca-scanline {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-scanline 2.2s ease-in-out infinite;
+  }
+}
+
+.orca-sparkle {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-sparkle 2.4s ease-in-out infinite;
+  }
+}
+
+.orca-paused,
+.orca-paused * {
   animation-play-state: paused !important;
 }
