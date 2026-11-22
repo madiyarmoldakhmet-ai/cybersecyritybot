@@ -58,6 +58,7 @@ class RuntimeLLMOverride:
 _runtime_override: Optional[RuntimeLLMOverride] = None
 _ollama_tags_cache: Tuple[str, float, List[str]] = ("", 0.0, [])
 _OLLAMA_CACHE_TTL = 15.0
+_resolved_gemini_model: Optional[str] = None
 
 
 async def list_ollama_models(force_refresh: bool = False) -> List[str]:
@@ -198,7 +199,10 @@ async def resolve_active_llm(
         if settings.llm_provider == LLMProvider.OPENROUTER and settings.openrouter_api_key:
             return LLMProvider.OPENROUTER, settings.openrouter_model, settings.openrouter_api_key, False
         if settings.llm_provider == LLMProvider.GEMINI and settings.gemini_api_key:
-            return LLMProvider.GEMINI, settings.gemini_model, settings.gemini_api_key, False
+            eff_model = _resolved_gemini_model or (
+                "gemini-3.8-flash" if settings.gemini_model == "gemini-2.5-flash" else settings.gemini_model
+            )
+            return LLMProvider.GEMINI, eff_model, settings.gemini_api_key, False
 
     installed = await list_ollama_models()
     return LLMProvider.OLLAMA, _pick_best_ollama_model(installed), None, True
@@ -268,30 +272,49 @@ async def chat_completion(
 
     try:
         if provider == LLMProvider.GEMINI and api_key:
-            payload = {
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                "generationConfig": {
+            global _resolved_gemini_model
+
+            def _gemini_payload(target_model: str) -> Dict[str, Any]:
+                gen_cfg: Dict[str, Any] = {
                     "temperature": temperature,
-                    "maxOutputTokens": max_tokens,
-                },
-            }
-            # Try configured model first on generativelanguage.googleapis.com (works for both AIza... & AQ. keys),
-            # and automatically fall back on 404 model deprecations to live Flash models!
-            candidate_models = list(
-                dict.fromkeys([model, "gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"])
+                    "maxOutputTokens": max(max_tokens, 1400),
+                }
+                # Gemini 3.x defaults to medium thinking (15-25s latency); LOW keeps real-time chat ~1-3s
+                if "gemini-3" in target_model.lower():
+                    gen_cfg["thinkingConfig"] = {"thinkingLevel": "LOW"}
+                return {
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "generationConfig": gen_cfg,
+                }
+
+            base_candidates = (
+                [_resolved_gemini_model]
+                if _resolved_gemini_model
+                else [
+                    "gemini-3.8-flash" if model == "gemini-2.5-flash" else model,
+                    "gemini-3.8-flash",
+                    "gemini-flash-latest",
+                    "gemini-2.5-flash-lite",
+                ]
             )
+            candidate_models = list(dict.fromkeys(m for m in base_candidates if m))
             hdrs = {"Content-Type": "application/json", "x-goog-api-key": api_key}
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=max(timeout, 35.0)) as client:
                 for cand_model in candidate_models:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{cand_model}:generateContent"
-                    resp = await client.post(url, headers=hdrs, json=payload)
+                    resp = await client.post(url, headers=hdrs, json=_gemini_payload(cand_model))
                     if resp.status_code == 200:
                         cands = resp.json().get("candidates") or []
                         if cands:
                             parts = (cands[0].get("content") or {}).get("parts") or []
-                            txt = "\n".join(str(p.get("text", "")) for p in parts if p.get("text")).strip()
+                            txt = "\n".join(
+                                str(p.get("text", ""))
+                                for p in parts
+                                if p.get("text") and not p.get("thought")
+                            ).strip()
                             if txt:
+                                _resolved_gemini_model = cand_model
                                 return txt
                     elif resp.status_code == 404:
                         logger.warning(f"{task_label}: Gemini model '{cand_model}' returned 404, trying fallback...")
@@ -323,14 +346,19 @@ async def chat_completion(
                         resp2 = await client.post(
                             f"https://generativelanguage.googleapis.com/v1beta/models/{dyn_model}:generateContent",
                             headers=hdrs,
-                            json=payload,
+                            json=_gemini_payload(dyn_model),
                         )
                         if resp2.status_code == 200:
                             cands = resp2.json().get("candidates") or []
                             if cands:
                                 parts = (cands[0].get("content") or {}).get("parts") or []
-                                txt = "\n".join(str(p.get("text", "")) for p in parts if p.get("text")).strip()
+                                txt = "\n".join(
+                                    str(p.get("text", ""))
+                                    for p in parts
+                                    if p.get("text") and not p.get("thought")
+                                ).strip()
                                 if txt:
+                                    _resolved_gemini_model = dyn_model
                                     return txt
             return None
 
@@ -377,5 +405,5 @@ async def chat_completion(
                 return await _invoke() or None
         return await _invoke() or None
     except Exception as exc:
-        logger.warning(f"{task_label} ({provider.value}/{model}) failed: {exc}")
+        logger.warning(f"{task_label} ({provider.value}/{model}) failed: {type(exc).__name__}: {exc}")
         return None
