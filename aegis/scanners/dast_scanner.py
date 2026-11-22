@@ -3,8 +3,12 @@ import json
 import logging
 from pathlib import Path
 from typing import Optional, Tuple
-from playwright.async_api import async_playwright
 import uuid
+
+try:
+    from playwright.async_api import async_playwright
+except ImportError:  # Optional headless-browser PoC dependency (omitted in lean cloud images)
+    async_playwright = None
 
 from aegis.core.config import settings
 from aegis.scanners.http_dast import HTTPSecurityScanner
@@ -66,6 +70,10 @@ class DASTScanner(HTTPSecurityScanner):
 
         xss_triggered = False
         screenshot_path = None
+
+        if async_playwright is None:
+            logger.info("Playwright is not installed in this environment; skipping headless XSS PoC screenshot.")
+            return False, None
 
         try:
             async with async_playwright() as p:
