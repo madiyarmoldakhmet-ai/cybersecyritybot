@@ -4,6 +4,7 @@ Uses Pydantic Settings for strictly typed, environment-driven configuration.
 """
 
 from enum import Enum
+import os
 from pathlib import Path
 from typing import Annotated, List, Optional
 from pydantic import Field, field_validator, model_validator
@@ -225,6 +226,12 @@ class Settings(BaseSettings):
         even if a key is present in the environment.
         """
         if self.allow_cloud_llm:
+            # Auto-pick configured cloud provider when ALLOW_CLOUD_LLM=true and provider was left at default ollama
+            if self.llm_provider == LLMProvider.OLLAMA:
+                if self.gemini_api_key:
+                    self.llm_provider = LLMProvider.GEMINI
+                elif self.openrouter_api_key:
+                    self.llm_provider = LLMProvider.OPENROUTER
             self.llm_policy_notices = [
                 f"Cloud LLM inference is ENABLED (provider: {self.llm_provider.value}); "
                 "source code may be sent to a third-party API."
@@ -258,6 +265,9 @@ class Settings(BaseSettings):
     def cors_origins(self) -> List[str]:
         """Explicit browser origins for CORS; never a wildcard, since credentials are allowed."""
         origins = [self.web_app_url.rstrip("/")] + [o.rstrip("/") for o in self.cors_allow_origins]
+        space_host = (os.environ.get("SPACE_HOST") or "").strip().strip("/")
+        if space_host:
+            origins.append(f"https://{space_host}")
         return [o for o in dict.fromkeys(origins) if o and o != "*"]
 
     @property

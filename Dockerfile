@@ -8,7 +8,10 @@ RUN npm run build
 
 FROM python:3.12-slim
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    HOME=/home/guardian \
+    SEMGREP_SEND_METRICS=off \
+    PORT=7860
 # git: repository cloning for audits · fonts-dejavu-core: Cyrillic text in PDF audit reports
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git fonts-dejavu-core \
@@ -23,10 +26,10 @@ COPY web/ ./web/
 COPY demo_targets/ ./demo_targets/
 COPY scripts/ ./scripts/
 COPY .aegis.yml ./
-# Run as an unprivileged user; it owns only the directories the app writes to
-RUN useradd --create-home --uid 10001 guardian \
-    && mkdir -p /app/reports /app/data /app/temp_scans \
-    && chown -R guardian:guardian /app/reports /app/data /app/temp_scans
+# UID 1000 matches Hugging Face Spaces non-root Docker requirement
+RUN useradd --create-home --uid 1000 guardian \
+    && mkdir -p /app/reports /app/data /app/temp_scans /home/guardian/.cache \
+    && chown -R guardian:guardian /app/reports /app/data /app/temp_scans /home/guardian
 USER guardian
-ENV PORT=8000
-CMD uvicorn aegis_server.main:app --host 0.0.0.0 --port $PORT
+EXPOSE 7860
+CMD uvicorn aegis_server.main:app --host 0.0.0.0 --port ${PORT:-7860}
