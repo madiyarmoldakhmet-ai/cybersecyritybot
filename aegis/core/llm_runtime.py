@@ -43,7 +43,7 @@ _PREFERRED_OLLAMA_MODELS: Tuple[str, ...] = (
 DEFAULT_BYOK_MODELS: Dict[str, str] = {
     "openrouter": "anthropic/claude-3.5-sonnet",
     "anthropic": "claude-sonnet-4-20250514",
-    "gemini": "gemini-2.5-flash",
+    "gemini": "gemini-3.8-flash",
     "openai": "gpt-4o-mini",
 }
 
@@ -276,40 +276,16 @@ async def chat_completion(
                     "maxOutputTokens": max_tokens,
                 },
             }
-            # Support both Vertex Express / new AI Studio `AQ.` keys AND classic `AIza...` Developer API keys
-            if api_key.startswith("AQ."):
-                endpoints = [
-                    (
-                        "aiplatform",
-                        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent",
-                        {"Content-Type": "application/json"},
-                        {"key": api_key},
-                    ),
-                    (
-                        "generativelanguage",
-                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                        {"Content-Type": "application/json", "x-goog-api-key": api_key},
-                        None,
-                    ),
-                ]
-            else:
-                endpoints = [
-                    (
-                        "generativelanguage",
-                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                        {"Content-Type": "application/json", "x-goog-api-key": api_key},
-                        None,
-                    ),
-                    (
-                        "aiplatform",
-                        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent",
-                        {"Content-Type": "application/json"},
-                        {"key": api_key},
-                    ),
-                ]
+            # Try configured model first on generativelanguage.googleapis.com (works for both AIza... & AQ. keys),
+            # and automatically fall back on 404 model deprecations to live Flash models!
+            candidate_models = list(
+                dict.fromkeys([model, "gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"])
+            )
+            hdrs = {"Content-Type": "application/json", "x-goog-api-key": api_key}
             async with httpx.AsyncClient(timeout=timeout) as client:
-                for host_label, url, hdrs, qparams in endpoints:
-                    resp = await client.post(url, headers=hdrs, params=qparams, json=payload)
+                for cand_model in candidate_models:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{cand_model}:generateContent"
+                    resp = await client.post(url, headers=hdrs, json=payload)
                     if resp.status_code == 200:
                         cands = resp.json().get("candidates") or []
                         if cands:
@@ -317,10 +293,45 @@ async def chat_completion(
                             txt = "\n".join(str(p.get("text", "")) for p in parts if p.get("text")).strip()
                             if txt:
                                 return txt
+                    elif resp.status_code == 404:
+                        logger.warning(f"{task_label}: Gemini model '{cand_model}' returned 404, trying fallback...")
+                        continue
                     else:
                         logger.warning(
-                            f"{task_label}: Gemini ({host_label}/{model}) HTTP {resp.status_code}: {resp.text[:220]}"
+                            f"{task_label}: Gemini ({cand_model}) HTTP {resp.status_code}: {resp.text[:220]}"
                         )
+                        break
+
+                # Last-resort dynamic discovery from /v1beta/models if all static model IDs returned 404
+                list_resp = await client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    headers={"x-goog-api-key": api_key},
+                )
+                if list_resp.status_code == 200:
+                    models_list = list_resp.json().get("models") or []
+                    flash_models = [
+                        str(m.get("name", "")).replace("models/", "")
+                        for m in models_list
+                        if "generateContent" in (m.get("supportedGenerationMethods") or [])
+                        and "flash" in str(m.get("name", "")).lower()
+                        and "image" not in str(m.get("name", "")).lower()
+                        and "tts" not in str(m.get("name", "")).lower()
+                    ]
+                    if flash_models:
+                        dyn_model = flash_models[-1]
+                        logger.info(f"{task_label}: Auto-discovered live Gemini model '{dyn_model}'")
+                        resp2 = await client.post(
+                            f"https://generativelanguage.googleapis.com/v1beta/models/{dyn_model}:generateContent",
+                            headers=hdrs,
+                            json=payload,
+                        )
+                        if resp2.status_code == 200:
+                            cands = resp2.json().get("candidates") or []
+                            if cands:
+                                parts = (cands[0].get("content") or {}).get("parts") or []
+                                txt = "\n".join(str(p.get("text", "")) for p in parts if p.get("text")).strip()
+                                if txt:
+                                    return txt
             return None
 
         if provider == LLMProvider.ANTHROPIC and api_key:

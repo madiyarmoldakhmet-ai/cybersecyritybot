@@ -22,7 +22,7 @@ interface AiModelSwitcherProps {
 const BYOK_PROVIDERS = [
   { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet', hint: 'sk-or-v1-...' },
   { id: 'anthropic', label: 'Claude', defaultModel: 'claude-sonnet-4-20250514', hint: 'sk-ant-...' },
-  { id: 'gemini', label: 'Gemini', defaultModel: 'gemini-2.5-flash', hint: 'AIza...' },
+  { id: 'gemini', label: 'Gemini', defaultModel: 'gemini-3.8-flash', hint: 'AIza... / AQ...' },
   { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o-mini', hint: 'sk-...' },
 ] as const;
 
