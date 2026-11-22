@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
+import { useReducedMotion } from 'framer-motion';
 import {
   FileText,
   HeartPulse,
@@ -16,7 +16,8 @@ import {
   VolumeX,
   Zap,
 } from 'lucide-react';
-import { OrcaMood, OrcaRigSvg } from '@/components/OrcaRigSvg';
+import { Orca3DCanvas } from '@/components/Orca3DCanvas';
+import { OrcaMood } from '@/components/OrcaRigSvg';
 import { cn } from '@/lib/utils';
 
 export type CompanionMood = OrcaMood;
@@ -377,78 +378,36 @@ export function OrcaCompanion({
         </div>
       </div>
 
-      {/* Live Articulated Vector Orca Stage */}
+      {/* Live 3D WebGL Orca Stage */}
       <div className="flex flex-row lg:flex-col items-center gap-3.5 my-auto">
         <button
           ref={stageRef}
           type="button"
           onClick={handlePoke}
-          aria-label="Кликнуть по косатке Aegis Orca, чтобы она заговорила"
-          className="group relative w-28 h-28 sm:w-36 sm:h-36 lg:w-60 lg:h-60 aspect-square shrink-0 rounded-3xl overflow-hidden border border-[var(--color-line-strong)] bg-[#060911] shadow-[0_20px_44px_-22px_rgba(0,0,0,0.72)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e94a32]"
+          aria-label="Кликнуть по 3D-косатке Aegis Orca, чтобы она заговорила"
+          className={cn(
+            'group relative w-28 h-28 sm:w-36 sm:h-36 lg:w-full lg:h-[252px] shrink-0 rounded-3xl overflow-hidden border bg-[#040811] shadow-[0_24px_50px_-24px_rgba(0,0,0,0.85)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e94a32] transition-colors duration-300',
+            cfg.ringColor
+          )}
         >
-          {/* Expanding echolocation sonar rings when scanning or thinking */}
-          {(mood === 'scanning' || mood === 'thinking') && !disableMotion && (
-            <>
-              <div
-                aria-hidden="true"
-                className="orca-sonar pointer-events-none absolute inset-6 rounded-full border border-sky-400/55 z-10"
-              />
-              <div
-                aria-hidden="true"
-                className="orca-sonar-delayed pointer-events-none absolute inset-6 rounded-full border border-[#e94a32]/40 z-10"
-              />
-            </>
-          )}
-
-          {/* Ambient rising bubbles */}
-          {!disableMotion && (
-            <>
-              <span
-                aria-hidden="true"
-                className="orca-bubble pointer-events-none absolute bottom-9 left-5 w-2 h-2 rounded-full border border-sky-300/60 bg-sky-300/15 z-10"
-              />
-              <span
-                aria-hidden="true"
-                className="orca-bubble-delayed pointer-events-none absolute bottom-11 right-6 w-1.5 h-1.5 rounded-full border border-sky-200/55 bg-sky-200/15 z-10"
-              />
-            </>
-          )}
-
-          {/* Orbiting subtle HUD ring */}
-          <div
-            aria-hidden="true"
-            className={cn(
-              'pointer-events-none absolute inset-2 rounded-full border border-dashed transition-colors duration-300 z-10',
-              cfg.ringColor,
-              isScanning ? 'orca-orbit-fast' : 'orca-orbit'
-            )}
-          />
-
-          {/* Articulated Live Vector Orca (tail wag, fin paddle, blinking, cursor eyes, lip-sync jaw) */}
-          <motion.div
-            key={`poke-${pokeCount}`}
-            initial={disableMotion ? false : { scale: 0.93, y: 4 }}
-            animate={disableMotion ? { scale: 1, y: 0 } : { scale: [0.93, 1.04, 1], y: [4, -4, 0] }}
-            transition={{ duration: 0.38, ease: 'easeOut' }}
-            className="relative w-full h-full"
-          >
-            <OrcaRigSvg
+          {/* Live 3D WebGL Orca (organic swimming spine wave, 3D jaw lip-sync, eye-tracking, blinking, 3D sonar) */}
+          <div className="relative w-full h-full">
+            <Orca3DCanvas
               mood={mood}
               isTalking={isTalking}
               mouthLevel={mouthLevel}
               paused={disableMotion}
               lookX={lookOffset.x}
               lookY={lookOffset.y}
+              pokeTrigger={pokeCount}
             />
-          </motion.div>
+          </div>
 
-          {/* Active sonar scanline sweep */}
-          {(mood === 'scanning' || mood === 'thinking') && !disableMotion && (
-            <div
-              aria-hidden="true"
-              className="orca-scanline pointer-events-none absolute inset-x-0 top-0 h-1/3 bg-gradient-to-b from-transparent via-sky-400/20 to-transparent border-b border-sky-400/55 z-10"
-            />
-          )}
+          {/* Subtle top glass sheen */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-white/[0.05] to-transparent z-10"
+          />
 
           {/* Bottom Live Nameplate + Talking Equalizer Bars */}
           <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 py-1.5 bg-gradient-to-t from-[#05070c]/95 via-[#05070c]/65 to-transparent flex items-center justify-between gap-2 z-20">
