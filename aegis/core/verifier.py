@@ -355,7 +355,45 @@ class OwnershipVerifier:
                         f"Репозиторий '{repo_full_name}' не найден или он приватный (для приватных репо вставьте GitHub Token).",
                     )
 
-                # 3. Instant GitHub Contents API check (only when commits changed or first check — avoids rate limit burn)
+                # 3. Check ALL branches inside the repository (ETag-cached -> 0 quota on 304).
+                # Creating a branch inside owner/repo requires real write/owner permissions (third-party forks
+                # never appear here), so checking patch branches (e.g. "<user>-patch-1" created by GitHub Web UI
+                # when branch protection is enabled on main) is both cryptographically sound and instant via commit SHA.
+                branches_url = f"https://api.github.com/repos/{repo_full_name}/branches?per_page=30"
+                branches_status, branches_data, _ = await _get_with_etag(client, branches_url)
+                branch_refs: list[Tuple[str, str]] = []
+                if branches_status == 200 and isinstance(branches_data, list):
+                    def _branch_priority(b: Dict[str, Any]) -> Tuple[int, int, str]:
+                        name = str(b.get("name") or "")
+                        # Prioritize GitHub web-UI patch branches (highest number first), then default_branch, then others
+                        m = re.search(r"-patch-(\d+)$", name, re.IGNORECASE)
+                        if m:
+                            return (0, -int(m.group(1)), name)
+                        if name == default_branch:
+                            return (1, 0, name)
+                        return (2, 0, name)
+
+                    for b in sorted(branches_data, key=_branch_priority)[:12]:
+                        b_name = str(b.get("name") or "").strip()
+                        b_sha = str((b.get("commit") or {}).get("sha") or "").strip()
+                        if b_name:
+                            branch_refs.append((b_name, b_sha or b_name))
+
+                # Check verify files by exact commit SHA on raw.githubusercontent.com (0 API quota, zero stale 404 cache!)
+                for b_name, ref in branch_refs:
+                    for rel_path in ("verify.txt", f"verify-{suffix}.txt", ".well-known/aegis-verify.txt"):
+                        raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/{ref}/{rel_path}"
+                        try:
+                            raw_resp = await client.get(raw_url)
+                            if raw_resp.status_code == 200 and clean_code in raw_resp.text:
+                                return (
+                                    True,
+                                    f"Код подтверждения найден в `{rel_path}` (ветка `{b_name}`). Авторство {repo_full_name} подтверждено.",
+                                )
+                        except Exception as raw_ex:
+                            logger.debug(f"Could not fetch {raw_url}: {raw_ex}")
+
+                # 4. Instant GitHub Contents API check on default branch (only when commits changed or first check)
                 if commits_status == 200 and not commits_304:
                     for rel_path in candidate_files:
                         content_url = f"https://api.github.com/repos/{repo_full_name}/contents/{rel_path}"
@@ -374,21 +412,22 @@ class OwnershipVerifier:
                         except Exception as content_err:
                             logger.debug(f"Could not fetch contents {content_url}: {content_err}")
 
-                # 4. raw.githubusercontent.com fallback (no 60/hr API rate limit)
-                branches = list(dict.fromkeys([default_branch, "main", "master"]))
-                cache_bust = int(time.time())
-                for branch in branches:
-                    for rel_path in (f"verify-{suffix}.txt", "verify.txt"):
-                        raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/{branch}/{rel_path}?t={cache_bust}"
-                        try:
-                            raw_resp = await client.get(raw_url)
-                            if raw_resp.status_code == 200 and clean_code in raw_resp.text:
-                                return (
-                                    True,
-                                    f"Код подтверждения найден в `{rel_path}` (ветка `{branch}`). Авторство {repo_full_name} подтверждено.",
-                                )
-                        except Exception as raw_ex:
-                            logger.debug(f"Could not fetch {raw_url}: {raw_ex}")
+                # 5. raw.githubusercontent.com fallback by branch name (when GitHub API hits 403 rate limit)
+                if not branch_refs:
+                    fallback_branches = list(dict.fromkeys([default_branch, "main", "master"]))
+                    cache_bust = int(time.time())
+                    for branch in fallback_branches:
+                        for rel_path in (f"verify-{suffix}.txt", "verify.txt"):
+                            raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/{branch}/{rel_path}?t={cache_bust}"
+                            try:
+                                raw_resp = await client.get(raw_url)
+                                if raw_resp.status_code == 200 and clean_code in raw_resp.text:
+                                    return (
+                                        True,
+                                        f"Код подтверждения найден в `{rel_path}` (ветка `{branch}`). Авторство {repo_full_name} подтверждено.",
+                                    )
+                            except Exception as raw_ex:
+                                logger.debug(f"Could not fetch {raw_url}: {raw_ex}")
 
                 if commits_status == 403 and repo_status == 403:
                     return False, "Превышен лимит запросов GitHub API. Вставьте GitHub Token для мгновенной проверки."

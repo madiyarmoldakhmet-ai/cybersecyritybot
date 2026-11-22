@@ -729,5 +729,38 @@ async def test_zero_terminal_verify_contents_api_and_repo_description():
     assert ok2 is True
     assert "verify.txt" in msg2
 
+    # Case 3: Match via GitHub Web UI patch branch (when main has branch protection)
+    verifier_mod._GITHUB_ETAG_CACHE.clear()
+
+    class PatchBranchClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None):
+            if "/commits" in url:
+                return MockResp(200, [{"sha": "0000001", "commit": {"message": "init", "author": {"name": "dev"}}}])
+            if url.endswith("/repos/madiyar/growthlab"):
+                return MockResp(200, {"default_branch": "main", "description": ""})
+            if "/branches" in url:
+                return MockResp(
+                    200,
+                    [
+                        {"name": "main", "commit": {"sha": "0000001"}},
+                        {"name": "madiyar-patch-1", "commit": {"sha": "1111111"}},
+                        {"name": "madiyar-patch-2", "commit": {"sha": "2222222"}},
+                    ],
+                )
+            if url == "https://raw.githubusercontent.com/madiyar/growthlab/2222222/verify.txt":
+                return MockResp(200, text=f"{code}\n")
+            return MockResp(404)
+
+    with patch("aegis.core.verifier.httpx.AsyncClient", return_value=PatchBranchClient()):
+        ok3, msg3 = await OwnershipVerifier.verify_commit_challenge("madiyar/growthlab", code)
+    assert ok3 is True
+    assert "madiyar-patch-2" in msg3
+
 
 
