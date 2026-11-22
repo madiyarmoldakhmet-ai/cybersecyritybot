@@ -20,8 +20,8 @@ import {
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { TerminalWindow, ScanEvent } from '@/components/TerminalWindow';
 import { SecurityScore } from '@/components/SecurityScore';
-import { AiCopilotChat, ChatAuditCard, ChatMessage } from '@/components/AiCopilotChat';
-import { AuthorshipPanel, AuthorshipState } from '@/components/AuthorshipPanel';
+import { AiCopilotChat, ChatAuditCard, ChatMessage, ChatVerifyCard } from '@/components/AiCopilotChat';
+import { AuthorshipPanel, AuthorshipState, PendingVerifyChallenge } from '@/components/AuthorshipPanel';
 import { CommitsReportsPanel, RepoCommit, ReportsFeedData } from '@/components/CommitsReportsPanel';
 import { CompanionMood, OrcaCompanion } from '@/components/OrcaCompanion';
 import {
@@ -109,10 +109,24 @@ const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
   id: 'welcome-1',
   role: 'assistant',
   content:
-    'Привет! Я **Aegis Orca**, твоя локальная косатка-страж по безопасности коммитов (0 байт кода уходит в облако).\n' +
-    'Нажми **«Демо-аудит»**, перетащи сюда свой `.zip` или подтверди свой репозиторий командой `/verify owner/repo` — просвечу код сонаром, поймаю утечки и сразу скину **PDF-отчёт** прямо сюда в чат.',
+    'Привет! Я **Aegis Orca**, твоя локальная говорящая косатка-страж (0 байт кода уходит в облако).\n' +
+    'Просто вставь ссылку на свой GitHub — я выдам кнопку подтверждения в 1 клик, сама всё проверю и сразу запущу аудит! Или жми **«Демо-аудит»** / перетащи сюда `.zip`.',
   timestamp: 'Сегодня',
 };
+
+function summarizeSpeechLine(markdown: string): string {
+  const plain = markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^#{1,4}\s+/gm, '')
+    .replace(/[*_`]/g, '')
+    .replace(/⛔|✅|🔐/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!plain) return '';
+  const firstSentence = plain.match(/^[^.!?]+[.!?]/)?.[0] || plain;
+  const trimmed = firstSentence.length >= 24 ? firstSentence : plain;
+  return trimmed.length > 150 ? `${trimmed.slice(0, 147).trim()}…` : trimmed;
+}
 
 const EMPTY_AUTHORSHIP: AuthorshipState = {
   verified: false,
@@ -200,6 +214,9 @@ export default function Home() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [ownershipBlockedRepo, setOwnershipBlockedRepo] = useState<string | null>(null);
+  const [pendingVerify, setPendingVerify] = useState<(PendingVerifyChallenge & { checks: number }) | null>(null);
+  const [isCheckingVerify, setIsCheckingVerify] = useState(false);
+  const [orcaChatReply, setOrcaChatReply] = useState<string>('');
 
   // Live persisted commits & compliance reports feed (/api/v1/reports)
   const [reportsFeed, setReportsFeed] = useState<ReportsFeedData | null>(null);
@@ -306,7 +323,114 @@ export default function Home() {
   const chatWsRef = useRef<WebSocket | null>(null);
   const scanWsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startScanRef = useRef<(repoUrl: string) => void>(() => {});
+  const startScanRef = useRef<(repoUrl: string, overrideAuth?: { proofToken?: string; githubToken?: string }) => void>(() => {});
+  const verifyInFlightRef = useRef(false);
+  const lastFocusPollRef = useRef(0);
+
+  const activatePendingVerify = useCallback((challenge: PendingVerifyChallenge) => {
+    setPendingVerify({ ...challenge, checks: 0 });
+    setOwnershipBlockedRepo(challenge.repoName);
+    setVerifyTarget(challenge.repoName);
+  }, []);
+
+  const checkOwnershipOnce = useCallback(
+    async (repoName: string, challengeCode: string, manual = false) => {
+      if (verifyInFlightRef.current) return;
+      verifyInFlightRef.current = true;
+      if (manual) setIsCheckingVerify(true);
+      try {
+        const res = await fetch('/api/v1/verify/ownership', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            target: repoName,
+            method: 'challenge',
+            challenge_code: challengeCode,
+          }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setPendingVerify((prev) =>
+          prev && prev.repoName.toLowerCase() === repoName.toLowerCase()
+            ? { ...prev, checks: prev.checks + 1 }
+            : prev
+        );
+
+        if (data.verified && data.proof_token) {
+          const verifiedRepo = data.target || repoName;
+          setPendingVerify(null);
+          setOwnershipBlockedRepo(null);
+          setOrcaChatReply('');
+          setAuthorship((prev) => ({
+            ...prev,
+            verified: true,
+            target: verifiedRepo,
+            targetType: 'github',
+            method: data.method || 'challenge',
+            actor: data.username || data.repo_owner || 'verified-author',
+            role: data.role || 'VerifiedAuthor',
+            canCreatePr: Boolean(data.can_create_pr),
+            message: data.message || `Авторство ${verifiedRepo} подтверждено.`,
+            proofToken: data.proof_token,
+          }));
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.verifyCard && m.verifyCard.repoName.toLowerCase() === repoName.toLowerCase()
+                ? { ...m, verifyCard: { ...m.verifyCard, verified: true } }
+                : m
+            )
+          );
+          // Auto-start scan immediately using the freshly minted proof token!
+          startScanRef.current(verifiedRepo, { proofToken: data.proof_token });
+        } else if (manual) {
+          setOrcaChatReply('Пока не вижу коммит в GitHub — убедись, что нажал зелёную кнопку «Commit changes»!');
+        }
+      } catch {
+        // Silent retry on next automatic tick
+      } finally {
+        verifyInFlightRef.current = false;
+        if (manual) setIsCheckingVerify(false);
+      }
+    },
+    []
+  );
+
+  // Automatic zero-terminal GitHub verification poller (ETag-cached on server -> 0 quota on 304)
+  const pendingRepoName = pendingVerify?.repoName ?? null;
+  const pendingChallengeCode = pendingVerify?.challengeCode ?? null;
+  useEffect(() => {
+    if (!pendingRepoName || !pendingChallengeCode) return;
+    let ticks = 0;
+    const maxTicks = 90; // ~5.5 minutes
+
+    const tick = () => {
+      ticks += 1;
+      if (ticks > maxTicks) {
+        setPendingVerify(null);
+        return;
+      }
+      void checkOwnershipOnce(pendingRepoName, pendingChallengeCode, false);
+    };
+
+    const intervalId = setInterval(tick, 3500);
+
+    // Check immediately when user switches back from the GitHub tab after clicking Commit!
+    const handleReturnToTab = () => {
+      if (document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      if (now - lastFocusPollRef.current < 1200) return;
+      lastFocusPollRef.current = now;
+      void checkOwnershipOnce(pendingRepoName, pendingChallengeCode, false);
+    };
+    window.addEventListener('focus', handleReturnToTab);
+    document.addEventListener('visibilitychange', handleReturnToTab);
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('focus', handleReturnToTab);
+      document.removeEventListener('visibilitychange', handleReturnToTab);
+    };
+  }, [pendingRepoName, pendingChallengeCode, checkOwnershipOnce]);
 
   useEffect(() => {
     let active = true;
@@ -342,7 +466,9 @@ export default function Home() {
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'authorship' && data.proof_token) {
+          setPendingVerify(null);
           setOwnershipBlockedRepo(null);
+          setOrcaChatReply('');
           setAuthorship((prev) => ({
             ...prev,
             verified: true,
@@ -354,6 +480,25 @@ export default function Home() {
             message: data.message || `Авторство ${data.target} подтверждено.`,
             proofToken: data.proof_token,
           }));
+        } else if (data.type === 'verify_challenge' && data.challenge_code && data.verify_url) {
+          setIsTyping(false);
+          const card: ChatVerifyCard = {
+            repoName: data.repo_name,
+            challengeCode: data.challenge_code,
+            verifyUrl: data.verify_url,
+            verifyFilename: data.verify_filename || 'verify.txt',
+          };
+          activatePendingVerify(card);
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== 'streaming'),
+            {
+              id: `${Date.now()}`,
+              role: 'assistant',
+              content: data.message || `Подтверди авторство \`${data.repo_name}\` в 1 клик — я сама проверю GitHub и запущу аудит!`,
+              verifyCard: card,
+              timestamp: formatNowTime(),
+            },
+          ]);
         } else if (data.type === 'action' && data.action === 'SCAN') {
           setIsTyping(false);
           setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
@@ -378,6 +523,8 @@ export default function Home() {
               if (!last.content.trim()) {
                 return prev.slice(0, -1);
               }
+              const spoken = summarizeSpeechLine(last.content);
+              if (spoken) setOrcaChatReply(spoken);
               return [...prev.slice(0, -1), { ...last, id: `${Date.now()}` }];
             }
             return prev;
@@ -406,7 +553,7 @@ export default function Home() {
       scanWsRef.current?.close();
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, []);
+  }, [activatePendingVerify]);
 
   // Persist & restore audit session across F5 browser refreshes
   useEffect(() => {
@@ -481,6 +628,8 @@ export default function Home() {
 
   const resetScanState = (targetLabel: string) => {
     setOwnershipBlockedRepo(null);
+    setPendingVerify(null);
+    setOrcaChatReply('');
     setEvents([]);
     setFindings([]);
     setVulnerabilities(0);
@@ -603,7 +752,9 @@ export default function Home() {
           setIsTyping(false);
           if (data.verified_authorship?.proof_token) {
             const va = data.verified_authorship;
+            setPendingVerify(null);
             setOwnershipBlockedRepo(null);
+            setOrcaChatReply('');
             setAuthorship((prev) => ({
               ...prev,
               verified: true,
@@ -616,17 +767,41 @@ export default function Home() {
               proofToken: va.proof_token,
             }));
           }
+          if (data.verify_challenge?.challenge_code && data.verify_challenge?.verify_url) {
+            const vc = data.verify_challenge;
+            const card: ChatVerifyCard = {
+              repoName: vc.repo_name,
+              challengeCode: vc.challenge_code,
+              verifyUrl: vc.verify_url,
+              verifyFilename: vc.verify_filename || 'verify.txt',
+            };
+            activatePendingVerify(card);
+            setMessages((prev) => [
+              ...prev.filter((m) => m.id !== 'streaming'),
+              {
+                id: `${Date.now() + 1}`,
+                role: 'assistant',
+                content: data.reply || `Подтверди авторство \`${vc.repo_name}\` в 1 клик — я сама всё проверю!`,
+                verifyCard: card,
+                timestamp: formatNowTime(),
+              },
+            ]);
+            return;
+          }
           if (data.action === 'SCAN' && data.github_url) {
             setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
             startScanRef.current(data.github_url);
             return;
           }
+          const replyText = data.reply || 'Запрос обработан.';
+          const spoken = summarizeSpeechLine(replyText);
+          if (spoken) setOrcaChatReply(spoken);
           setMessages((prev) => [
             ...prev.filter((m) => m.id !== 'streaming'),
             {
               id: `${Date.now() + 1}`,
               role: 'assistant',
-              content: data.reply || 'Запрос обработан.',
+              content: replyText,
               timestamp: formatNowTime(),
             },
           ]);
@@ -655,7 +830,7 @@ export default function Home() {
         })
       );
     },
-    [activeTarget, findings, grade, securityScore, activeFindingsCount, financialRisk, appealedMap]
+    [activeTarget, findings, grade, securityScore, activeFindingsCount, financialRisk, appealedMap, activatePendingVerify]
   );
 
   const handleSendMessage = (e: FormEvent) => {
@@ -670,6 +845,8 @@ export default function Home() {
     setMessages([{ ...INITIAL_ASSISTANT_MESSAGE, id: `welcome-${Date.now()}` }]);
     setIsTyping(false);
     setOwnershipBlockedRepo(null);
+    setPendingVerify(null);
+    setOrcaChatReply('');
     if (chatWsRef.current && chatWsRef.current.readyState === WebSocket.OPEN) {
       chatWsRef.current.send(JSON.stringify({ reset: true }));
     }
@@ -771,19 +948,34 @@ export default function Home() {
     }
   };
 
-  const runRepoScanHttpFallback = async (clean: string) => {
+  const runRepoScanHttpFallback = async (
+    clean: string,
+    overrideAuth?: { proofToken?: string; githubToken?: string }
+  ) => {
+    const effectiveGithubToken = overrideAuth?.githubToken ?? authorship.githubToken;
+    const effectiveProofToken = overrideAuth?.proofToken ?? authorship.proofToken;
     try {
       const res = await fetch('/api/scan/repo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           github_url: clean,
-          github_token: authorship.githubToken || undefined,
-          proof_token: authorship.proofToken || undefined,
+          github_token: effectiveGithubToken || undefined,
+          proof_token: effectiveProofToken || undefined,
           require_ownership: requireOwnership,
         }),
       });
       const data = await res.json();
+      const verifyCard: ChatVerifyCard | undefined =
+        !res.ok && data.code === 'OWNERSHIP_REQUIRED' && data.challenge_code && data.verify_url
+          ? {
+              repoName: data.repo_name || clean,
+              challengeCode: data.challenge_code,
+              verifyUrl: data.verify_url,
+              verifyFilename: data.verify_filename || 'verify.txt',
+            }
+          : undefined;
+
       setMessages((prev) => {
         const filtered = prev.filter((m) => m.id !== 'scan-status');
         if (res.ok) {
@@ -800,7 +992,15 @@ export default function Home() {
         }
         return [
           ...filtered,
-          { id: `${Date.now()}`, role: 'assistant', content: `⛔ ${data.error || 'Не удалось выполнить скан репозитория.'}`, timestamp: formatNowTime() },
+          {
+            id: `${Date.now()}`,
+            role: 'assistant',
+            content: verifyCard
+              ? data.error || `Подтверди авторство \`${verifyCard.repoName}\` в 1 клик:`
+              : `⛔ ${data.error || 'Не удалось выполнить скан репозитория.'}`,
+            verifyCard,
+            timestamp: formatNowTime(),
+          },
         ];
       });
       if (res.ok) {
@@ -809,9 +1009,12 @@ export default function Home() {
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
         if (data.code === 'OWNERSHIP_REQUIRED') {
-          setOwnershipBlockedRepo(data.repo_name || clean);
-          if (data.repo_name) setVerifyTarget(data.repo_name);
-          openDrawerTab('authorship');
+          if (verifyCard) {
+            activatePendingVerify(verifyCard);
+          } else {
+            setOwnershipBlockedRepo(data.repo_name || clean);
+            if (data.repo_name) setVerifyTarget(data.repo_name);
+          }
         }
       }
     } catch (err) {
@@ -824,9 +1027,11 @@ export default function Home() {
     }
   };
 
-  const startScan = (repoUrl: string) => {
+  const startScan = (repoUrl: string, overrideAuth?: { proofToken?: string; githubToken?: string }) => {
     const clean = repoUrl.trim();
     if (!clean) return;
+    const effectiveGithubToken = overrideAuth?.githubToken ?? authorship.githubToken;
+    const effectiveProofToken = overrideAuth?.proofToken ?? authorship.proofToken;
     setRepoScanUrl(clean);
     setVerifyTarget(clean);
     resetScanState(clean);
@@ -846,8 +1051,8 @@ export default function Home() {
       ws.send(
         JSON.stringify({
           github_url: clean,
-          github_token: authorship.githubToken || undefined,
-          proof_token: authorship.proofToken || undefined,
+          github_token: effectiveGithubToken || undefined,
+          proof_token: effectiveProofToken || undefined,
           require_ownership: requireOwnership,
         })
       );
@@ -877,14 +1082,32 @@ export default function Home() {
         finished = true;
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
+        const verifyCard: ChatVerifyCard | undefined =
+          data.code === 'OWNERSHIP_REQUIRED' && data.challenge_code && data.verify_url
+            ? {
+                repoName: data.repo_name || clean,
+                challengeCode: data.challenge_code,
+                verifyUrl: data.verify_url,
+                verifyFilename: data.verify_filename || 'verify.txt',
+              }
+            : undefined;
         if (data.code === 'OWNERSHIP_REQUIRED') {
-          setOwnershipBlockedRepo(data.repo_name || clean);
-          if (data.repo_name) setVerifyTarget(data.repo_name);
-          openDrawerTab('authorship');
+          if (verifyCard) {
+            activatePendingVerify(verifyCard);
+          } else {
+            setOwnershipBlockedRepo(data.repo_name || clean);
+            if (data.repo_name) setVerifyTarget(data.repo_name);
+          }
         }
         setMessages((prev) => [
           ...prev.filter((m) => m.id !== 'scan-status'),
-          { id: `${Date.now()}`, role: 'assistant', content: `⛔ ${data.message}`, timestamp: formatNowTime() },
+          {
+            id: `${Date.now()}`,
+            role: 'assistant',
+            content: verifyCard ? data.message : `⛔ ${data.message}`,
+            verifyCard,
+            timestamp: formatNowTime(),
+          },
         ]);
       } else if (data.event_type === 'ScanCompleted') {
         setIsScanning(false);
@@ -896,14 +1119,14 @@ export default function Home() {
       if (!finished) {
         finished = true;
         ws.close();
-        runRepoScanHttpFallback(clean);
+        runRepoScanHttpFallback(clean, overrideAuth);
       }
     };
 
     ws.onclose = () => {
       if (!finished) {
         finished = true;
-        runRepoScanHttpFallback(clean);
+        runRepoScanHttpFallback(clean, overrideAuth);
       }
     };
   };
@@ -1092,33 +1315,41 @@ export default function Home() {
   }, [isScanning, isHealing, isTyping, ownershipBlockedRepo, healReport, securityScore, authorship.verified]);
 
   const companionSpeech = useMemo(() => {
-    if (isHealing) return 'Патчу уязвимый код, прогоняю ast.parse() и пересканирую песочницу…';
+    if (isHealing) return 'Патчу уязвимый код, прогоняю ast.parse и пересканирую песочницу…';
     if (isScanning) return `Просвечиваю ${activeTarget || 'репозиторий'} сонаром: AST, Taint, секреты и Git-история…`;
-    if (isTyping) return 'Пингую локальный движок — разбираю твой вопрос…';
+    if (isTyping) return 'Думаю над твоим вопросом — пингую локальный движок…';
+    if (pendingVerify) {
+      return `Жду подтверждение ${pendingVerify.repoName}! Нажми кнопку в чате и кликни Commit на GitHub — я сама проверю и сразу запущу скан!`;
+    }
     if (ownershipBlockedRepo) {
-      return `Стоп! Чужой репозиторий ${ownershipBlockedRepo} без подтверждения авторства не пропущу. Пройди /verify справа!`;
+      return `Стоп! Репозиторий ${ownershipBlockedRepo} без подтверждения авторства не пропущу. Подтверди в 1 клик в чате!`;
+    }
+    if (orcaChatReply) {
+      return orcaChatReply;
     }
     if (healReport) {
-      return `Сожрал ${healReport.fixed_count} уязвимостей: Score ${healReport.before_score} → ${healReport.after_score} (${healReport.after_grade}). Проверенные diffs уже в панели «Находки»!`;
+      return `Готово! Исцелила ${healReport.fixed_count} уязвимостей: Score вырос с ${healReport.before_score} до ${healReport.after_score} (${healReport.after_grade})!`;
     }
     if (securityScore !== null && activeFindingsCount > 0) {
       return securityScore < 70
-        ? `Тревога! Поймал ${activeFindingsCount} проблем в ${activeTarget} (Score ${securityScore}/100). Открой «Находки» или жми Self-Heal!`
-        : `Проверил ${activeTarget}: Score ${securityScore}/100 (${grade}). Есть ${activeFindingsCount} мелких замечаний — по критике чисто.`;
+        ? `Тревога! Нашла ${activeFindingsCount} проблем в ${activeTarget}, Score ${securityScore} из 100. Жми Self-Heal или открой «Находки»!`
+        : `Проверила ${activeTarget}: Score ${securityScore} из 100 (${grade}). Есть ${activeFindingsCount} мелких замечаний — по критике чисто.`;
     }
     if (securityScore !== null && activeFindingsCount === 0) {
-      return `Вода чиста в ${activeTarget}! Score ${securityScore}/100 (${grade}) — ни одной активной угрозы.`;
+      return `Вода чиста в ${activeTarget}! Score ${securityScore} из 100 (${grade}) — ни одной активной угрозы.`;
     }
     if (authorship.verified) {
-      return `Авторство ${authorship.target} подтверждено! Кидай ссылку в чат — сразу проверю.`;
+      return `Авторство ${authorship.target} подтверждено! Запускаю аудит или жду твой вопрос.`;
     }
-    return 'На патруле! Жми «Демо-аудит», кидай .zip или вводи /verify owner/repo для своего проекта.';
+    return 'Привет! Я Aegis Orca. Кидай ссылку на свой GitHub — я сама проверю авторство в 1 клик и найду все дыры, или жми «Демо-аудит»!';
   }, [
     isHealing,
     isScanning,
     isTyping,
     activeTarget,
+    pendingVerify,
     ownershipBlockedRepo,
+    orcaChatReply,
     healReport,
     securityScore,
     activeFindingsCount,
@@ -1250,6 +1481,14 @@ export default function Home() {
             onUploadZip={handleZipUpload}
             onTriggerSelfHeal={handleDemoHeal}
             onOpenFindingsDrawer={() => openDrawerTab('findings')}
+            onOpenAuthorshipDrawer={() => openDrawerTab('authorship')}
+            onCheckVerifyNow={(repo, code) => {
+              void checkOwnershipOnce(repo, code, true);
+            }}
+            pendingVerifyRepo={pendingVerify?.repoName ?? null}
+            pendingVerifyChecks={pendingVerify?.checks ?? 0}
+            isCheckingVerify={isCheckingVerify}
+            companionMood={companionMood}
             isHealing={isHealing}
             isTyping={isTyping}
             isScanning={isScanning}
@@ -1322,7 +1561,16 @@ export default function Home() {
                     authorship={authorship}
                     onAuthorshipChange={(next) => {
                       setAuthorship(next);
-                      if (next.verified) setOwnershipBlockedRepo(null);
+                      if (next.verified) {
+                        setPendingVerify(null);
+                        setOwnershipBlockedRepo(null);
+                      }
+                    }}
+                    pendingVerify={pendingVerify}
+                    onChallengeIssued={(ch) => activatePendingVerify(ch)}
+                    onVerifiedAutoScan={(target, proofToken, ghToken) => {
+                      setDrawerOpen(false);
+                      startScan(target, { proofToken, githubToken: ghToken });
                     }}
                     onAskAi={(q) => sendChatText(q)}
                   />

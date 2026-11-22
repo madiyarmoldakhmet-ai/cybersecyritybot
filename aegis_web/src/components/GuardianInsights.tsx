@@ -243,29 +243,31 @@ export function HealPanel({ report }: { report: HealingReport }) {
         <span>Самоисцеление с доказательством — патч → ast.parse → пересканирование</span>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3.5">
+      <div className="grid grid-cols-2 gap-2.5">
+        <div className="rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 min-w-0">
           <div className="text-[10px] text-[var(--color-muted-soft)] font-mono">SECURITY SCORE</div>
-          <div className={cn('text-2xl sm:text-3xl font-semibold font-mono tabular-nums mt-0.5', scoreColor)}>
+          <div className={cn('text-xl sm:text-2xl font-semibold font-mono tabular-nums mt-0.5', scoreColor)}>
             {report.before_grade} → {Math.round(score)}
           </div>
           <div className="text-[11px] text-[var(--color-muted-soft)] font-mono tabular-nums">
             {report.before_score} → {report.after_score} (Grade {report.after_grade})
           </div>
         </div>
-        <div className="rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3.5">
+        <div className="rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 min-w-0">
           <div className="text-[10px] text-[var(--color-muted-soft)] font-mono">НАХОДКИ</div>
-          <div className="text-2xl sm:text-3xl font-semibold font-mono text-[var(--color-ink)] tabular-nums mt-0.5">
+          <div className="text-xl sm:text-2xl font-semibold font-mono text-[var(--color-ink)] tabular-nums mt-0.5">
             {report.before_findings} → {report.after_findings}
           </div>
           <div className="text-[11px] text-[#3fbf7f] font-mono tabular-nums">
             подтверждённых фиксов: {report.fixed_count}
           </div>
         </div>
-        <div className="rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3.5">
-          <div className="text-[10px] text-[var(--color-muted-soft)] font-mono">РИСК КОАП + ИНЦИДЕНТ</div>
-          <div className="text-xl sm:text-2xl font-semibold font-mono text-[#3fbf7f] tabular-nums mt-1">
-            {formatKzt(risk)}
+        <div className="col-span-2 rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 flex flex-wrap items-baseline justify-between gap-2 min-w-0">
+          <div>
+            <div className="text-[10px] text-[var(--color-muted-soft)] font-mono">РИСК КОАП + ИНЦИДЕНТ</div>
+            <div className="text-lg sm:text-xl font-semibold font-mono text-[#3fbf7f] tabular-nums mt-0.5">
+              {formatKzt(risk)}
+            </div>
           </div>
           <div className="text-[11px] text-[var(--color-muted-soft)] font-mono tabular-nums">
             было {formatKzt(report.before_risk_kzt)}

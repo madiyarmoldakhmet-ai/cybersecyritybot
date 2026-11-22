@@ -385,9 +385,174 @@ dialog::backdrop {
   }
 }
 
+/* Articulated vector Orca skeleton bone keyframes (compositor-only) */
+@keyframes orca-tail-wag {
+  0%, 100% {
+    transform: rotate(-10deg);
+  }
+  50% {
+    transform: rotate(11deg);
+  }
+}
+
+@keyframes orca-tail-wag-fast {
+  0%, 100% {
+    transform: rotate(-14deg);
+  }
+  50% {
+    transform: rotate(15deg);
+  }
+}
+
+@keyframes orca-fin-front {
+  0%, 100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(12deg);
+  }
+}
+
+@keyframes orca-fin-wave {
+  0%, 100% {
+    transform: rotate(-16deg);
+  }
+  50% {
+    transform: rotate(18deg);
+  }
+}
+
+@keyframes orca-fin-back {
+  0%, 100% {
+    transform: rotate(10deg);
+  }
+  50% {
+    transform: rotate(-8deg);
+  }
+}
+
+@keyframes orca-dorsal-flex {
+  0%, 100% {
+    transform: rotate(-2.5deg);
+  }
+  50% {
+    transform: rotate(2.5deg);
+  }
+}
+
+@keyframes orca-sound-arc {
+  0% {
+    transform: translateX(0px) scale(0.86);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateX(9px) scale(1.16);
+    opacity: 0;
+  }
+}
+
+@keyframes orca-eq-bar {
+  0%, 100% {
+    transform: scaleY(0.28);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes orca-shield-pulse {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+    opacity: 0.92;
+  }
+  50% {
+    transform: translateY(-4px) scale(1.06);
+    opacity: 1;
+  }
+}
+
 .orca-swim {
   @media (prefers-reduced-motion: no-preference) {
-    animation: orca-swim 4.4s ease-in-out infinite;
+    animation: orca-swim 4.2s ease-in-out infinite;
+  }
+}
+
+.orca-tail-bone {
+  transform-box: view-box;
+  transform-origin: 82px 150px;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-tail-wag 2.6s ease-in-out infinite;
+  }
+}
+
+.orca-tail-bone-fast {
+  transform-box: view-box;
+  transform-origin: 82px 150px;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-tail-wag-fast 1.25s ease-in-out infinite;
+  }
+}
+
+.orca-fin-front-bone {
+  transform-box: view-box;
+  transform-origin: 146px 156px;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-fin-front 2.9s ease-in-out infinite;
+  }
+}
+
+.orca-fin-front-wave {
+  transform-box: view-box;
+  transform-origin: 146px 156px;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-fin-wave 0.9s ease-in-out infinite;
+  }
+}
+
+.orca-fin-back-bone {
+  transform-box: view-box;
+  transform-origin: 174px 154px;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-fin-back 2.9s ease-in-out infinite;
+  }
+}
+
+.orca-dorsal-bone {
+  transform-box: view-box;
+  transform-origin: 112px 92px;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-dorsal-flex 3.2s ease-in-out infinite;
+  }
+}
+
+.orca-sound-arc {
+  transform-box: fill-box;
+  transform-origin: left center;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-sound-arc 0.72s ease-out infinite;
+  }
+}
+
+.orca-sound-arc-delayed {
+  transform-box: fill-box;
+  transform-origin: left center;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-sound-arc 0.72s ease-out 0.34s infinite;
+  }
+}
+
+.orca-shield-float {
+  transform-box: fill-box;
+  transform-origin: center;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-shield-pulse 2s ease-in-out infinite;
+  }
+}
+
+.orca-eq-bar {
+  transform-origin: bottom center;
+  @media (prefers-reduced-motion: no-preference) {
+    animation: orca-eq-bar 0.48s ease-in-out infinite;
   }
 }
 

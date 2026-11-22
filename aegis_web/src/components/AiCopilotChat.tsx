@@ -4,18 +4,34 @@ import { FormEvent, KeyboardEvent, ReactNode, useEffect, useId, useRef, useState
 import { motion, useReducedMotion } from 'framer-motion';
 import {
   ArrowUp,
+  Check,
+  CheckCircle2,
+  Copy,
+  ExternalLink,
   FileDown,
   FileText,
   GitBranch,
   HeartPulse,
+  KeyRound,
+  Loader2,
   Paperclip,
+  RefreshCw,
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Upload,
 } from 'lucide-react';
+import { OrcaMiniAvatar, OrcaMood } from '@/components/OrcaRigSvg';
 import { cn } from '@/lib/utils';
+
+export type ChatVerifyCard = {
+  repoName: string;
+  challengeCode: string;
+  verifyUrl: string;
+  verifyFilename?: string;
+  verified?: boolean;
+};
 
 export type ChatAuditCard = {
   repoName: string;
@@ -44,6 +60,7 @@ export type ChatMessage = {
   content: string;
   timestamp: string;
   auditCard?: ChatAuditCard;
+  verifyCard?: ChatVerifyCard;
 };
 
 interface AiCopilotChatProps {
@@ -56,6 +73,12 @@ interface AiCopilotChatProps {
   onUploadZip: (file: File) => void;
   onTriggerSelfHeal?: () => void;
   onOpenFindingsDrawer?: () => void;
+  onOpenAuthorshipDrawer?: () => void;
+  onCheckVerifyNow?: (repoName: string, challengeCode: string) => void;
+  pendingVerifyRepo?: string | null;
+  pendingVerifyChecks?: number;
+  isCheckingVerify?: boolean;
+  companionMood?: OrcaMood;
   isHealing?: boolean;
   isTyping: boolean;
   isScanning: boolean;
@@ -305,6 +328,130 @@ function TelegramAuditCard({
   );
 }
 
+function InlineVerifyCard({
+  card,
+  isPolling,
+  checks,
+  isCheckingNow,
+  onCheckNow,
+  onOpenAuthorshipDrawer,
+}: {
+  card: ChatVerifyCard;
+  isPolling: boolean;
+  checks: number;
+  isCheckingNow: boolean;
+  onCheckNow?: () => void;
+  onOpenAuthorshipDrawer?: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(card.challengeCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="mt-1.5 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-canvas)] p-3.5 space-y-3 text-xs">
+      {/* Repo + Code header */}
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--color-line)]">
+        <div className="min-w-0">
+          <div className="font-mono text-[10.5px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+            Авто-подтверждение авторства
+          </div>
+          <div className="font-mono text-xs font-medium text-[var(--color-ink)] truncate">
+            {card.repoName}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleCopy}
+          title="Скопировать код подтверждения"
+          className="min-h-7 px-2 py-1 rounded-md border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-paper)] font-mono text-[11px] text-[#e94a32] inline-flex items-center gap-1.5 cursor-pointer"
+        >
+          <span>{card.challengeCode}</span>
+          {copied ? (
+            <Check className="w-3 h-3 text-[#3fbf7f]" aria-hidden="true" />
+          ) : (
+            <Copy className="w-3 h-3 text-[var(--color-muted-soft)]" aria-hidden="true" />
+          )}
+        </button>
+      </div>
+
+      {card.verified ? (
+        <div className="rounded-lg border border-[#3fbf7f]/45 bg-[#3fbf7f]/12 px-3 py-2 flex items-center gap-2 font-mono text-xs text-[#3fbf7f]">
+          <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <span>Авторство подтверждено! Запускаю аудит репозитория…</span>
+        </div>
+      ) : (
+        <>
+          {/* Step 1: 1-Click GitHub Commit Button (zero terminal!) */}
+          <a
+            href={card.verifyUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full min-h-10 px-3.5 py-2 rounded-xl bg-[#e94a32] hover:bg-[#c83822] text-white font-mono text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors shadow-xs"
+          >
+            <span>1. Открыть GitHub и нажать «Commit changes»</span>
+            <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+          </a>
+
+          <p className="text-[11.5px] text-[var(--color-muted-soft)] leading-relaxed">
+            Терминал не нужен: файл{' '}
+            <code className="font-mono text-[var(--color-ink)]">{card.verifyFilename || 'verify.txt'}</code> и код уже
+            заполнены. Просто нажми зелёную кнопку <strong className="text-[var(--color-ink)]">Commit changes</strong>{' '}
+            на GitHub (или вставь код в описание репо About) и вернись сюда — скан стартует сам.
+          </p>
+
+          {/* Step 2: Live Automatic Background Check Indicator */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--color-line)]">
+            <div className="inline-flex items-center gap-1.5 font-mono text-[11px] text-sky-400">
+              {isPolling || isCheckingNow ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />
+                  <span>
+                    Сама проверяю GitHub…{checks > 0 ? ` (${checks})` : ''}
+                  </span>
+                </>
+              ) : (
+                <span className="text-[var(--color-muted-soft)]">Готово к проверке</span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              {onCheckNow && (
+                <button
+                  type="button"
+                  disabled={isCheckingNow}
+                  onClick={onCheckNow}
+                  className="min-h-7 px-2.5 py-1 rounded-lg border border-[var(--color-line-strong)] hover:border-sky-400 bg-[var(--color-paper)] text-[var(--color-ink)] font-mono text-[11px] inline-flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={cn('w-3 h-3', isCheckingNow && 'animate-spin')} aria-hidden="true" />
+                  <span>Проверить сейчас</span>
+                </button>
+              )}
+              {onOpenAuthorshipDrawer && (
+                <button
+                  type="button"
+                  onClick={onOpenAuthorshipDrawer}
+                  className="min-h-7 px-2.5 py-1 rounded-lg border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] font-mono text-[11px] inline-flex items-center gap-1 transition-colors cursor-pointer"
+                >
+                  <KeyRound className="w-3 h-3" aria-hidden="true" />
+                  <span>Token</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function AiCopilotChat({
   messages,
   input,
@@ -315,6 +462,12 @@ export function AiCopilotChat({
   onUploadZip,
   onTriggerSelfHeal,
   onOpenFindingsDrawer,
+  onOpenAuthorshipDrawer,
+  onCheckVerifyNow,
+  pendingVerifyRepo,
+  pendingVerifyChecks = 0,
+  isCheckingVerify = false,
+  companionMood = 'idle',
   isHealing,
   isTyping,
   isScanning,
@@ -371,14 +524,7 @@ export function AiCopilotChat({
       {/* Slim Chat Header */}
       <div className="px-4 sm:px-5 py-2.5 border-b border-[var(--color-line)] bg-[var(--color-paper)] flex items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/mascot/orca_idle.webp"
-            alt=""
-            width={28}
-            height={28}
-            className="w-7 h-7 rounded-full object-cover border border-[var(--color-line-strong)] shrink-0 bg-[#0f0f12]"
-          />
+          <OrcaMiniAvatar mood={companionMood} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="font-sans text-sm font-medium tracking-tight truncate">
@@ -429,15 +575,26 @@ export function AiCopilotChat({
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
           const isStreaming = msg.id === 'streaming' || msg.id === 'scan-status';
-          const avatarSrc = msg.content.startsWith('⛔')
-            ? '/mascot/orca_alert.webp'
+          const avatarMood: OrcaMood = msg.verifyCard
+            ? msg.verifyCard.verified
+              ? 'happy'
+              : 'blocked'
+            : msg.content.startsWith('⛔')
+            ? 'alert'
             : msg.auditCard && msg.auditCard.critical === 0 && msg.auditCard.high === 0
-            ? '/mascot/orca_happy.webp'
+            ? 'happy'
             : msg.auditCard
-            ? '/mascot/orca_alert.webp'
+            ? 'alert'
             : isStreaming
-            ? '/mascot/orca_scan.webp'
-            : '/mascot/orca_idle.webp';
+            ? 'scanning'
+            : 'idle';
+
+          const isPollingThisCard = Boolean(
+            msg.verifyCard &&
+              !msg.verifyCard.verified &&
+              pendingVerifyRepo &&
+              pendingVerifyRepo.toLowerCase() === msg.verifyCard.repoName.toLowerCase()
+          );
 
           return (
             <motion.div
@@ -447,16 +604,7 @@ export function AiCopilotChat({
               transition={{ duration: 0.2, ease: 'easeOut' }}
               className={cn('flex items-end gap-2.5', isUser ? 'justify-end' : 'justify-start')}
             >
-              {!isUser && (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  src={avatarSrc}
-                  alt=""
-                  width={28}
-                  height={28}
-                  className="w-7 h-7 rounded-full object-cover border border-[var(--color-line-strong)] shrink-0 mb-0.5 bg-[#0f0f12]"
-                />
-              )}
+              {!isUser && <OrcaMiniAvatar mood={avatarMood} className="mb-0.5" />}
               <div
                 className={cn(
                   'max-w-[88%] sm:max-w-[78%] px-4 py-3 flex flex-col gap-1.5 border shadow-xs',
@@ -466,6 +614,20 @@ export function AiCopilotChat({
                 )}
               >
                 {msg.content && <FormattedBubbleContent content={msg.content} />}
+                {msg.verifyCard && (
+                  <InlineVerifyCard
+                    card={msg.verifyCard}
+                    isPolling={isPollingThisCard}
+                    checks={isPollingThisCard ? pendingVerifyChecks : 0}
+                    isCheckingNow={isPollingThisCard && isCheckingVerify}
+                    onCheckNow={
+                      onCheckVerifyNow
+                        ? () => onCheckVerifyNow(msg.verifyCard!.repoName, msg.verifyCard!.challengeCode)
+                        : undefined
+                    }
+                    onOpenAuthorshipDrawer={onOpenAuthorshipDrawer}
+                  />
+                )}
                 {msg.auditCard && (
                   <TelegramAuditCard
                     card={msg.auditCard}
@@ -514,7 +676,7 @@ export function AiCopilotChat({
         <form
           ref={formRef}
           onSubmit={onSubmit}
-          className="flex items-end gap-2 rounded-2xl border border-[var(--color-line-strong)] focus-within:border-[#e94a32] bg-[var(--color-panel)] px-3 py-1.5 transition-colors"
+          className="flex items-end gap-2 rounded-2xl border border-[var(--color-line-strong)] focus-within:border-[#e94a32] focus-within:ring-1 focus-within:ring-[#e94a32] bg-[var(--color-panel)] px-3 py-1.5 transition-colors"
         >
           <label htmlFor={inputId} className="visually-hidden">
             Сообщение для AI-ассистента или ссылка на GitHub
@@ -549,7 +711,7 @@ export function AiCopilotChat({
               onChange={(e) => onInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Спроси AI о коде или вставь github.com/owner/repo..."
-              className="bg-transparent text-[15px] text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none leading-[1.45]"
+              className="bg-transparent text-[15px] text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none focus-visible:outline-none leading-[1.45]"
             />
           </div>
 

@@ -299,9 +299,9 @@ async def trigger_sast_scan(req: SASTScanRequest):
 
 @api_router.post("/api/v1/verify/challenge", tags=["Authorship Verification"])
 async def create_verification_challenge(req: VerifyChallengeRequest):
-    """Issue a time-bound authorship verification challenge for a GitHub repo or domain."""
+    """Issue a time-bound authorship verification challenge (with 1-click GitHub URL) for a repo or domain."""
     try:
-        return OwnershipVerifier.issue_challenge(req.target, req.target_type)
+        return await OwnershipVerifier.issue_challenge_async(req.target, req.target_type)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
 

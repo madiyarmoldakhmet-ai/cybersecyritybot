@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, Copy, KeyRound, Lock, ShieldCheck } from 'lucide-react';
+import { Check, Copy, ExternalLink, KeyRound, Loader2, Lock, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface AuthorshipState {
@@ -17,11 +17,21 @@ export interface AuthorshipState {
   githubToken: string;
 }
 
+export interface PendingVerifyChallenge {
+  repoName: string;
+  challengeCode: string;
+  verifyUrl: string;
+  verifyFilename?: string;
+}
+
 interface AuthorshipPanelProps {
   targetInput: string;
   onTargetInputChange: (val: string) => void;
   authorship: AuthorshipState;
   onAuthorshipChange: (next: AuthorshipState) => void;
+  pendingVerify?: PendingVerifyChallenge | null;
+  onChallengeIssued?: (challenge: PendingVerifyChallenge) => void;
+  onVerifiedAutoScan?: (target: string, proofToken: string, githubToken?: string) => void;
   onAskAi?: (prompt: string) => void;
 }
 
@@ -32,16 +42,23 @@ export function AuthorshipPanel({
   onTargetInputChange,
   authorship,
   onAuthorshipChange,
+  pendingVerify,
+  onChallengeIssued,
+  onVerifiedAutoScan,
   onAskAi,
 }: AuthorshipPanelProps) {
   const [method, setMethod] = useState<VerifyMethod>('challenge');
   const [tokenInput, setTokenInput] = useState(authorship.githubToken || '');
-  const [challengeCode, setChallengeCode] = useState('');
+  const [localChallengeCode, setLocalChallengeCode] = useState('');
+  const [localVerifyUrl, setLocalVerifyUrl] = useState('');
   const [instructions, setInstructions] = useState<string[]>([]);
   const [loadingChallenge, setLoadingChallenge] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [copied, setCopied] = useState(false);
+
+  const challengeCode = localChallengeCode || pendingVerify?.challengeCode || '';
+  const verifyUrl = localVerifyUrl || pendingVerify?.verifyUrl || '';
 
   const handleIssueChallenge = async () => {
     const cleanTarget = targetInput.trim();
@@ -63,8 +80,19 @@ export function AuthorshipPanel({
         setErrorMsg(data.detail || 'Не удалось сгенерировать код подтверждения.');
         return;
       }
-      setChallengeCode(data.challenge_code || '');
+      const nextCode = data.challenge_code || '';
+      const nextUrl = data.verify_url || '';
+      setLocalChallengeCode(nextCode);
+      setLocalVerifyUrl(nextUrl);
       setInstructions(Array.isArray(data.instructions) ? data.instructions : []);
+      if (targetType === 'github' && nextCode && nextUrl && onChallengeIssued) {
+        onChallengeIssued({
+          repoName: data.target || cleanTarget,
+          challengeCode: nextCode,
+          verifyUrl: nextUrl,
+          verifyFilename: data.verify_filename || 'verify.txt',
+        });
+      }
     } catch (err) {
       setErrorMsg(`Ошибка сети: ${err}`);
     } finally {
@@ -79,11 +107,11 @@ export function AuthorshipPanel({
       return;
     }
     if (method === 'token' && !tokenInput.trim()) {
-      setErrorMsg('Вставьте GitHub Personal Access Token (или выберите Commit Challenge без токена).');
+      setErrorMsg('Вставьте GitHub Personal Access Token (или выберите 1-клик проверку без токена).');
       return;
     }
     if (method !== 'token' && !challengeCode.trim()) {
-      setErrorMsg('Сначала нажмите «Получить код», добавьте его в репо/DNS и затем проверьте.');
+      setErrorMsg('Сначала нажмите «Получить кнопку», нажмите Commit на GitHub и затем проверьте.');
       return;
     }
 
@@ -105,7 +133,7 @@ export function AuthorshipPanel({
         setErrorMsg(data.detail || 'Ошибка проверки авторства.');
         return;
       }
-      onAuthorshipChange({
+      const nextState: AuthorshipState = {
         verified: Boolean(data.verified),
         target: data.target || cleanTarget,
         targetType: data.target_type === 'domain' ? 'domain' : 'github',
@@ -116,7 +144,11 @@ export function AuthorshipPanel({
         message: data.message || '',
         proofToken: data.proof_token || '',
         githubToken: method === 'token' ? tokenInput.trim() : authorship.githubToken,
-      });
+      };
+      onAuthorshipChange(nextState);
+      if (data.verified && nextState.targetType === 'github' && onVerifiedAutoScan) {
+        onVerifiedAutoScan(nextState.target, nextState.proofToken, nextState.githubToken);
+      }
       if (!data.verified && data.message) {
         setErrorMsg(data.message);
       }
@@ -160,7 +192,7 @@ export function AuthorshipPanel({
       <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Способ подтверждения авторства">
         {(
           [
-            { id: 'challenge', label: 'Commit / File' },
+            { id: 'challenge', label: '1-клик GitHub' },
             { id: 'token', label: 'GitHub Token' },
             { id: 'dns_txt', label: 'DNS TXT' },
           ] as const
@@ -203,14 +235,14 @@ export function AuthorshipPanel({
       {method === 'token' ? (
         <div className="space-y-2">
           <label htmlFor="cg-gh-token" className="block font-mono text-[11px] text-[var(--color-muted-soft)]">
-            Personal Access Token (не сохраняется на сервере)
+            Personal Access Token (подходит и для приватных репо, не хранится на сервере)
           </label>
           <input
             id="cg-gh-token"
             type="password"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="Token c правами repo (Owner / Write)"
+            placeholder="ghp_... или github_pat_..."
             className="w-full min-h-9 px-3 py-1.5 rounded-lg bg-[var(--color-paper)] border border-[var(--color-line)] focus:border-[#e94a32] text-sm font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
           />
           <button
@@ -220,7 +252,7 @@ export function AuthorshipPanel({
             className="w-full min-h-9 px-3.5 py-2 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs uppercase tracking-wider inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
           >
             <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>{verifying ? 'Проверяю права...' : 'Проверить авторство по Token'}</span>
+            <span>{verifying ? 'Проверяю права…' : 'Проверить и запустить аудит'}</span>
           </button>
         </div>
       ) : (
@@ -232,7 +264,7 @@ export function AuthorshipPanel({
               onClick={handleIssueChallenge}
               className="flex-1 min-h-9 px-3 py-1.5 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-raised)] hover:border-[var(--color-ink)] font-mono text-xs text-[var(--color-ink)] transition-colors cursor-pointer"
             >
-              {loadingChallenge ? 'Генерирую...' : challengeCode ? 'Обновить код' : '1. Получить код'}
+              {loadingChallenge ? 'Готовлю…' : challengeCode ? 'Обновить код' : '1. Получить кнопку'}
             </button>
             <button
               type="button"
@@ -240,12 +272,24 @@ export function AuthorshipPanel({
               onClick={handleVerify}
               className="flex-1 min-h-9 px-3 py-1.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs transition-colors cursor-pointer disabled:opacity-45"
             >
-              {verifying ? 'Проверка...' : '2. Проверить сейчас'}
+              {verifying ? 'Проверка…' : 'Проверить сейчас'}
             </button>
           </div>
 
           {challengeCode && (
-            <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] p-3 space-y-2">
+            <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] p-3 space-y-2.5">
+              {method === 'challenge' && verifyUrl && (
+                <a
+                  href={verifyUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full min-h-9 px-3 py-2 rounded-lg bg-[#e94a32] hover:bg-[#c83822] text-white font-mono text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <span>Открыть GitHub и нажать Commit</span>
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                </a>
+              )}
+
               <div className="flex items-center justify-between gap-2">
                 <code className="font-mono text-xs text-[#e94a32] break-all">{challengeCode}</code>
                 <button
@@ -258,6 +302,14 @@ export function AuthorshipPanel({
                   <span>{copied ? 'Скопировано' : 'Копия'}</span>
                 </button>
               </div>
+
+              {pendingVerify && method === 'challenge' && (
+                <div className="flex items-center gap-1.5 font-mono text-[11px] text-sky-400">
+                  <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
+                  <span>Авто-проверка активна — скан стартует сам после Commit</span>
+                </div>
+              )}
+
               {instructions.length > 0 && (
                 <ul className="space-y-1 font-mono text-[11px] text-[var(--color-muted-soft)] leading-relaxed">
                   {instructions.map((line, i) => (
@@ -270,7 +322,7 @@ export function AuthorshipPanel({
         </div>
       )}
 
-      {/* Structured Inspection Rows echoing prtner.ai card */}
+      {/* Structured Inspection Rows */}
       <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] p-3 font-mono text-xs space-y-1.5">
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-[var(--color-muted-soft)]">target</span>
@@ -314,12 +366,8 @@ export function AuthorshipPanel({
       {onAskAi && (
         <button
           type="button"
-          onClick={() =>
-            onAskAi(
-              `Как работает проверка авторства репозитория и домена в Commit Guardian для ${targetInput || 'моего проекта'}?`
-            )
-          }
-          className="text-xs font-mono text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] underline underline-offset-4 cursor-pointer"
+          onClick={() => onAskAi('Как работает проверка авторства и почему нельзя сканировать чужие репозитории?')}
+          className="text-xs font-mono text-[var(--color-muted-soft)] hover:text-[#e94a32] transition-colors cursor-pointer"
         >
           Спросить ИИ про защиту от несанкционированных сканов →
         </button>

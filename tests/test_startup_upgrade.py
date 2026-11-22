@@ -625,12 +625,14 @@ async def test_mandatory_ownership_blocks_third_party_repos_even_on_bypass_attem
 
     monkeypatch.setattr(settings, "environment", "production")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
-        # 1. Default request without proof_token or github_token MUST be blocked with 403
+        # 1. Default request without proof_token or github_token MUST be blocked with 403 + 1-click verify URL
         r1 = await client.post("/api/scan/repo", json={"github_url": "https://github.com/vxrn0/exterayond"})
         assert r1.status_code == 403
         d1 = r1.json()
         assert d1["code"] == "OWNERSHIP_REQUIRED"
-        assert "cybersec-verify-" in d1["error"]
+        assert d1["challenge_code"].startswith("cybersec-verify-")
+        assert d1["verify_url"].startswith("https://github.com/vxrn0/exterayond/new/")
+        assert d1["challenge_code"] in d1["verify_url"]
 
         # 2. Client attempting require_ownership=False bypass in production MUST STILL be blocked
         r2 = await client.post(
@@ -661,5 +663,71 @@ async def test_mandatory_ownership_blocks_third_party_repos_even_on_bypass_attem
             json={"github_url": "https://github.com/vxrn0/exterayond", "proof_token": va["proof_token"]},
         )
         assert r3.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_zero_terminal_verify_contents_api_and_repo_description():
+    import base64
+    from aegis.core import verifier as verifier_mod
+    from aegis.core.verifier import OwnershipVerifier
+
+    verifier_mod._GITHUB_ETAG_CACHE.clear()
+    code = "cybersec-verify-deadbeef99"
+
+    class MockResp:
+        def __init__(self, status_code, payload=None, text="", headers=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+    # Case 1: Match via GitHub About / Description
+    class DescClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None):
+            if "/commits" in url:
+                return MockResp(200, [{"sha": "abc1234", "commit": {"message": "init", "author": {"name": "dev"}}}])
+            if url.endswith("/repos/alice/app"):
+                return MockResp(200, {"default_branch": "main", "description": f"Demo app {code}"})
+            return MockResp(404)
+
+    with patch("aegis.core.verifier.httpx.AsyncClient", return_value=DescClient()):
+        ok, msg = await OwnershipVerifier.verify_commit_challenge("alice/app", code)
+    assert ok is True
+    assert "описании репозитория" in msg
+
+    # Case 2: Match via instant GitHub Contents API (base64 verify.txt)
+    verifier_mod._GITHUB_ETAG_CACHE.clear()
+    b64_content = base64.b64encode(f"{code}\n".encode("utf-8")).decode("ascii")
+
+    class ContentsClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, headers=None):
+            if "/commits" in url:
+                return MockResp(200, [{"sha": "abc1234", "commit": {"message": "add file", "author": {"name": "dev"}}}])
+            if url.endswith("/repos/bob/portal"):
+                return MockResp(200, {"default_branch": "main", "description": ""})
+            if url.endswith("/contents/verify.txt"):
+                return MockResp(200, {"content": b64_content})
+            return MockResp(404)
+
+    with patch("aegis.core.verifier.httpx.AsyncClient", return_value=ContentsClient()):
+        ok2, msg2 = await OwnershipVerifier.verify_commit_challenge("bob/portal", code)
+    assert ok2 is True
+    assert "verify.txt" in msg2
+
 
 

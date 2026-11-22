@@ -213,15 +213,15 @@ async def handle_verify_command(message: types.Message):
         return
 
     try:
-        ch = OwnershipVerifier.issue_challenge(target, "github")
+        ch = await OwnershipVerifier.issue_challenge_async(target, "github")
         code = html.escape(ch["challenge_code"])
         repo = html.escape(ch["target"])
+        vurl = html.escape(ch.get("verify_url") or OwnershipVerifier.build_github_verify_url(ch["target"], ch["challenge_code"]))
         await message.reply(
-            f"🔐 <b>Код подтверждения авторства для</b> <code>{repo}</code>:\n"
-            f"<code>{code}</code>\n\n"
-            f"Выполните в репозитории:\n"
-            f"<code>git commit --allow-empty -m \"{code}\" &amp;&amp; git push</code>\n\n"
-            f"Затем проверьте командой:\n"
+            f"🔐 <b>Подтверждение авторства для</b> <code>{repo}</code>\n\n"
+            f"1) Откройте ссылку и нажмите <b>Commit changes</b> на GitHub (терминал не нужен):\n"
+            f"<a href=\"{vurl}\">Открыть GitHub и подтвердить ↗</a>\n\n"
+            f"2) Затем отправьте сюда:\n"
             f"<code>/verify {repo} {code}</code>",
             parse_mode=ParseMode.HTML,
         )
@@ -247,17 +247,17 @@ async def handle_repo_url(message: types.Message):
         ownership_ok = bool(strict.get("verified"))
 
     if not ownership_ok:
-        ch = OwnershipVerifier.issue_challenge(repo_name, "github")
+        ch = await OwnershipVerifier.issue_challenge_async(repo_name, "github")
         code = html.escape(ch["challenge_code"])
         esc_repo = html.escape(repo_name)
+        vurl = html.escape(ch.get("verify_url") or OwnershipVerifier.build_github_verify_url(repo_name, ch["challenge_code"]))
         await message.reply(
             f"⛔ <b>Сканирование чужих репозиториев запрещено.</b>\n"
-            f"Сначала подтвердите, что вы автор <code>{esc_repo}</code>:\n\n"
-            f"1) Выполните в репозитории:\n"
-            f"<code>git commit --allow-empty -m \"{code}\" &amp;&amp; git push</code>\n\n"
+            f"Подтвердите, что вы автор <code>{esc_repo}</code> в 1 клик (без терминала):\n\n"
+            f"1) <a href=\"{vurl}\">Открыть GitHub и нажать Commit changes ↗</a>\n\n"
             f"2) Подтвердите командой:\n"
             f"<code>/verify {esc_repo} {code}</code>\n\n"
-            f"После подтверждения отправьте ссылку снова (или загрузите свой <code>.zip</code>).",
+            f"Или просто отправьте свой <code>.zip</code>-архив.",
             parse_mode=ParseMode.HTML,
         )
         return

@@ -18,7 +18,7 @@ import shutil
 import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from github import Auth, Github, GithubException
@@ -28,6 +28,7 @@ logger = logging.getLogger("aegis.verifier")
 _PROOF_SECRET = os.environ.get("AEGIS_PROOF_SECRET", "").encode("utf-8") or secrets.token_bytes(32)
 _CHALLENGE_TTL_SECONDS = 1800
 _CHALLENGES: Dict[str, Tuple[str, float]] = {}
+_GITHUB_ETAG_CACHE: Dict[str, Tuple[str, Any]] = {}
 
 
 class OwnershipVerifier:
@@ -85,8 +86,31 @@ class OwnershipVerifier:
         unique_id = uuid.uuid4().hex[:10]
         return f"cybersec-verify-{unique_id}"
 
+    @staticmethod
+    def build_github_verify_url(
+        repo_full_name: str,
+        challenge_code: str,
+        branch: str = "main",
+        filename: str = "verify.txt",
+    ) -> str:
+        """Build a 1-click GitHub New File URL with filename, challenge code, and commit message pre-filled."""
+        safe_branch = quote((branch or "main").strip(), safe="/")
+        safe_filename = quote((filename or "verify.txt").strip())
+        safe_value = quote(challenge_code.strip())
+        safe_msg = quote(f"Verify Commit Guardian ownership: {challenge_code.strip()}")
+        return (
+            f"https://github.com/{repo_full_name}/new/{safe_branch}"
+            f"?filename={safe_filename}&value={safe_value}&message={safe_msg}"
+        )
+
     @classmethod
-    def issue_challenge(cls, target: str, target_type: str = "auto") -> Dict[str, Any]:
+    def issue_challenge(
+        cls,
+        target: str,
+        target_type: str = "auto",
+        branch: str = "main",
+        filename: str = "verify.txt",
+    ) -> Dict[str, Any]:
         """Create and cache a time-bound authorship challenge for a GitHub repo or domain."""
         now = time.time()
         expired = [k for k, (_, exp) in _CHALLENGES.items() if exp < now]
@@ -95,9 +119,11 @@ class OwnershipVerifier:
 
         resolved_type = target_type
         normalized: Optional[str] = None
+        display_repo: Optional[str] = None
         if target_type in ("auto", "github"):
             repo_name = cls.parse_github_repo(target)
             if repo_name:
+                display_repo = repo_name
                 normalized = repo_name.lower()
                 resolved_type = "github"
 
@@ -117,10 +143,13 @@ class OwnershipVerifier:
             code = cls.generate_commit_challenge()
             _CHALLENGES[normalized] = (code, now + _CHALLENGE_TTL_SECONDS)
 
+        verify_url: Optional[str] = None
         if resolved_type == "github":
+            repo_for_url = display_repo or normalized
+            verify_url = cls.build_github_verify_url(repo_for_url, code, branch=branch, filename=filename)
             instructions = [
-                f"Способ 1 (без изменения кода): `git commit --allow-empty -m \"{code}\" && git push`",
-                f"Способ 2 (файл в корне): создайте `verify.txt` с текстом `{code}` в ветке `main` или `master`",
+                f"1 клик в браузере (без терминала): откройте ссылку и нажмите «Commit changes» — `{filename}` заполнен автоматически",
+                f"Или вставьте код `{code}` в описание репозитория (GitHub → About → Description)",
             ]
         else:
             instructions = [
@@ -131,9 +160,56 @@ class OwnershipVerifier:
             "target": normalized,
             "target_type": resolved_type,
             "challenge_code": code,
+            "verify_url": verify_url,
+            "default_branch": branch if resolved_type == "github" else None,
+            "verify_filename": filename if resolved_type == "github" else None,
             "expires_in_seconds": _CHALLENGE_TTL_SECONDS,
             "instructions": instructions,
         }
+
+    @classmethod
+    async def issue_challenge_async(
+        cls,
+        target: str,
+        target_type: str = "auto",
+        token: str = "",
+    ) -> Dict[str, Any]:
+        """Async variant of issue_challenge that detects the repo's real default branch and avoids filename collision."""
+        base = cls.issue_challenge(target, target_type=target_type)
+        if base.get("target_type") != "github":
+            return base
+
+        repo_name = cls.parse_github_repo(target) or base["target"]
+        code = base["challenge_code"]
+        branch = "main"
+        filename = "verify.txt"
+
+        headers = {
+            "User-Agent": "CommitGuardian-Verifier/2.1",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        gh_token = (token or os.environ.get("GITHUB_TOKEN", "")).strip()
+        if gh_token and not gh_token.startswith("your_"):
+            headers["Authorization"] = f"Bearer {gh_token}"
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+                repo_resp = await client.get(f"https://api.github.com/repos/{repo_name}", headers=headers)
+                if repo_resp.status_code == 200:
+                    meta = repo_resp.json()
+                    branch = (meta.get("default_branch") or "main").strip() or "main"
+                    # Avoid GitHub "A file with the same name already exists" if verify.txt already exists
+                    exists_resp = await client.get(
+                        f"https://api.github.com/repos/{repo_name}/contents/verify.txt",
+                        headers=headers,
+                    )
+                    if exists_resp.status_code == 200:
+                        suffix = code.rsplit("-", 1)[-1][:8]
+                        filename = f"verify-{suffix}.txt"
+        except Exception as exc:
+            logger.debug(f"GitHub metadata lookup skipped for {repo_name}: {exc}")
+
+        return cls.issue_challenge(target, target_type="github", branch=branch, filename=filename)
 
     @classmethod
     def has_active_challenge(cls, target: str, code: str) -> bool:
@@ -198,9 +274,12 @@ class OwnershipVerifier:
         repo_identifier: str, challenge_code: str
     ) -> Tuple[bool, str]:
         """
-        Verify repository ownership by checking:
-        1. Presence of challenge_code in 'verify.txt' at repository root.
-        2. Presence of challenge_code in any of the last 10 commit messages.
+        Verify repository ownership via zero-terminal GitHub signals (with ETag caching
+        so automatic browser polling uses 0 quota on 304 Not Modified):
+        1. Last 10 commit messages (covers 1-click GitHub New File commit & git commit --allow-empty).
+        2. GitHub repository About / Description field.
+        3. Instant GitHub Contents API for verify.txt / verify-<suffix>.txt / .well-known/aegis-verify.txt.
+        4. raw.githubusercontent.com fallback if GitHub API rate limit is reached.
         """
         clean_code = challenge_code.strip()
         repo_full_name = OwnershipVerifier.parse_github_repo(repo_identifier)
@@ -209,30 +288,46 @@ class OwnershipVerifier:
         if not clean_code:
             return False, "Код подтверждения пустой."
 
-        headers = {
-            "User-Agent": "CommitGuardian-Verifier/2.0",
+        base_headers: Dict[str, str] = {
+            "User-Agent": "CommitGuardian-Verifier/2.1",
             "Accept": "application/vnd.github.v3+json",
+            "Cache-Control": "no-cache",
         }
+        gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
+        if gh_token and not gh_token.startswith("your_"):
+            base_headers["Authorization"] = f"Bearer {gh_token}"
+
+        suffix = clean_code.rsplit("-", 1)[-1][:8] if "-" in clean_code else clean_code[:8]
+        candidate_files = [f"verify-{suffix}.txt", "verify.txt", ".well-known/aegis-verify.txt"]
+
+        async def _get_with_etag(client: httpx.AsyncClient, url: str) -> Tuple[int, Any, bool]:
+            """Returns (status_code, json_payload, was_304)."""
+            req_headers = dict(base_headers)
+            cached = _GITHUB_ETAG_CACHE.get(url)
+            if cached:
+                req_headers["If-None-Match"] = cached[0]
+            resp = await client.get(url, headers=req_headers)
+            if resp.status_code == 304 and cached:
+                return 200, cached[1], True
+            if resp.status_code == 200:
+                payload = resp.json()
+                etag = (getattr(resp, "headers", None) or {}).get("etag") or (
+                    getattr(resp, "headers", None) or {}
+                ).get("ETag")
+                if etag:
+                    if len(_GITHUB_ETAG_CACHE) > 256:
+                        _GITHUB_ETAG_CACHE.clear()
+                    _GITHUB_ETAG_CACHE[url] = (etag, payload)
+                return 200, payload, False
+            return resp.status_code, None, False
 
         try:
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                for branch in ("main", "master"):
-                    raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/{branch}/verify.txt"
-                    try:
-                        raw_resp = await client.get(raw_url)
-                        if raw_resp.status_code == 200 and clean_code in raw_resp.text:
-                            return (
-                                True,
-                                f"Код подтверждения найден в `verify.txt` (ветка `{branch}`). Авторство {repo_full_name} подтверждено.",
-                            )
-                    except Exception as raw_ex:
-                        logger.debug(f"Could not fetch {raw_url}: {raw_ex}")
-
+                # 1. Check recent commits (ETag-cached -> 304 consumes 0 GitHub API quota)
                 commits_url = f"https://api.github.com/repos/{repo_full_name}/commits?per_page=10"
-                resp = await client.get(commits_url, headers=headers)
-                if resp.status_code == 200:
-                    commits = resp.json()
-                    for commit in commits:
+                commits_status, commits_data, commits_304 = await _get_with_etag(client, commits_url)
+                if commits_status == 200 and isinstance(commits_data, list):
+                    for commit in commits_data:
                         commit_msg = commit.get("commit", {}).get("message", "")
                         if clean_code in commit_msg:
                             author = commit.get("commit", {}).get("author", {}).get("name", "Author")
@@ -241,18 +336,72 @@ class OwnershipVerifier:
                                 True,
                                 f"Код подтверждения найден в коммите `{sha}` от {author}. Авторство {repo_full_name} подтверждено.",
                             )
+
+                # 2. Check repository About / Description + capture default_branch (ETag-cached)
+                default_branch = "main"
+                repo_url = f"https://api.github.com/repos/{repo_full_name}"
+                repo_status, repo_data, _ = await _get_with_etag(client, repo_url)
+                if repo_status == 200 and isinstance(repo_data, dict):
+                    default_branch = (repo_data.get("default_branch") or "main").strip() or "main"
+                    desc = str(repo_data.get("description") or "")
+                    if clean_code in desc:
+                        return (
+                            True,
+                            f"Код подтверждения найден в описании репозитория (About). Авторство {repo_full_name} подтверждено.",
+                        )
+                elif repo_status == 404 or commits_status == 404:
                     return (
                         False,
-                        f"Код '{clean_code}' не найден в `verify.txt` или последних 10 коммитах {repo_full_name}. Проверьте `git push`.",
+                        f"Репозиторий '{repo_full_name}' не найден или он приватный (для приватных репо вставьте GitHub Token).",
                     )
-                if resp.status_code == 404:
-                    return False, f"Репозиторий '{repo_full_name}' не найден или он приватный (для приватных репо используйте GitHub Token)."
-                if resp.status_code == 403:
-                    return False, "Превышен лимит запросов GitHub API. Используйте проверку через GitHub Token."
-                return False, f"GitHub API вернул статус {resp.status_code} при проверке коммитов."
+
+                # 3. Instant GitHub Contents API check (only when commits changed or first check — avoids rate limit burn)
+                if commits_status == 200 and not commits_304:
+                    for rel_path in candidate_files:
+                        content_url = f"https://api.github.com/repos/{repo_full_name}/contents/{rel_path}"
+                        try:
+                            c_resp = await client.get(content_url, headers=base_headers)
+                            if c_resp.status_code == 200:
+                                c_json = c_resp.json()
+                                raw_b64 = c_json.get("content") or ""
+                                if raw_b64:
+                                    decoded = base64.b64decode(raw_b64).decode("utf-8", errors="ignore")
+                                    if clean_code in decoded:
+                                        return (
+                                            True,
+                                            f"Код подтверждения найден в `{rel_path}`. Авторство {repo_full_name} подтверждено.",
+                                        )
+                        except Exception as content_err:
+                            logger.debug(f"Could not fetch contents {content_url}: {content_err}")
+
+                # 4. raw.githubusercontent.com fallback (no 60/hr API rate limit)
+                branches = list(dict.fromkeys([default_branch, "main", "master"]))
+                cache_bust = int(time.time())
+                for branch in branches:
+                    for rel_path in (f"verify-{suffix}.txt", "verify.txt"):
+                        raw_url = f"https://raw.githubusercontent.com/{repo_full_name}/{branch}/{rel_path}?t={cache_bust}"
+                        try:
+                            raw_resp = await client.get(raw_url)
+                            if raw_resp.status_code == 200 and clean_code in raw_resp.text:
+                                return (
+                                    True,
+                                    f"Код подтверждения найден в `{rel_path}` (ветка `{branch}`). Авторство {repo_full_name} подтверждено.",
+                                )
+                        except Exception as raw_ex:
+                            logger.debug(f"Could not fetch {raw_url}: {raw_ex}")
+
+                if commits_status == 403 and repo_status == 403:
+                    return False, "Превышен лимит запросов GitHub API. Вставьте GitHub Token для мгновенной проверки."
+                if commits_status not in (200, 403) and repo_status not in (200, 403):
+                    return False, f"GitHub API вернул статус {commits_status} при проверке репозитория."
+
+                return (
+                    False,
+                    f"Ожидаю подтверждение `{clean_code}` в `{repo_full_name}` — нажмите «Commit changes» на GitHub или добавьте код в описание репо.",
+                )
         except Exception as e:
             logger.warning(f"Error checking commit challenge for {repo_full_name}: {e}")
-            return False, f"Сетевая ошибка при проверке коммитов: {str(e)}"
+            return False, f"Сетевая ошибка при проверке репозитория: {str(e)}"
 
     @staticmethod
     async def verify_repo_ownership_strict(
