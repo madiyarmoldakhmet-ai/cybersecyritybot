@@ -658,7 +658,7 @@ export function OrcaRigSvg({
   );
 }
 
-/** Crisp lightweight 28x28 vector Orca head badge for chat headers & message bubbles (zero raster images). */
+/** Crisp 28x28 studio Orca face avatar badge for chat headers & message bubbles. */
 export function OrcaMiniAvatar({
   mood = 'idle',
   className,
@@ -666,51 +666,35 @@ export function OrcaMiniAvatar({
   mood?: OrcaMood;
   className?: string;
 }) {
-  const pal = MOOD_PALETTE[mood];
-  const angry = mood === 'alert' || mood === 'blocked';
-  const happy = mood === 'happy';
-  const scanning = mood === 'scanning' || mood === 'thinking';
+  const ringClass =
+    mood === 'alert' || mood === 'blocked'
+      ? 'border-[#e94a32]/75'
+      : mood === 'happy'
+      ? 'border-[#3fbf7f]/75'
+      : mood === 'scanning'
+      ? 'border-sky-400/75'
+      : mood === 'thinking'
+      ? 'border-[#e8a33d]/75'
+      : 'border-[var(--color-line-strong)]';
 
   return (
     <span
       aria-hidden="true"
       className={cn(
-        'inline-flex items-center justify-center w-7 h-7 rounded-full border border-[var(--color-line-strong)] bg-[#090d16] shrink-0 overflow-hidden',
+        'inline-flex items-center justify-center w-7 h-7 rounded-full border bg-[#06111d] shrink-0 overflow-hidden',
+        ringClass,
         className
       )}
     >
-      <svg viewBox="0 0 36 36" className="w-full h-full">
-        <circle cx="18" cy="18" r="18" fill={pal.backdrop} />
-        {/* Tiny dorsal fin */}
-        <path d="M 13 11 C 12 6, 9 4, 8 3 C 12 4, 16 7, 18 11 Z" fill="#0f172a" />
-        <path d="M 9.5 4.5 C 11.5 6.5, 13.5 8.5, 15 10.5" stroke={pal.accent} strokeWidth="1.2" fill="none" strokeLinecap="round" />
-        {/* Head dome */}
-        <path
-          d="M 6 23 C 7 13, 14 9, 22 10 C 28 11, 31 16, 30 22 C 28 28, 20 31, 12 30 C 8 29, 6 26, 6 23 Z"
-          fill="#0f172a"
-          stroke="#24334b"
-          strokeWidth="0.9"
-        />
-        {/* White belly jaw */}
-        <path d="M 12 28 C 19 29, 26 26, 29 21 C 27 27, 20 31, 12 30 Z" fill="#f8fafc" />
-        {/* White eye patch */}
-        <ellipse cx="14.5" cy="16.5" rx="4.2" ry="2.2" transform="rotate(-14 14.5 16.5)" fill="#f8fafc" />
-        {/* Eye */}
-        {happy ? (
-          <path d="M 20 19 Q 23 15 26 19" fill="none" stroke="#3fbf7f" strokeWidth="2" strokeLinecap="round" />
-        ) : (
-          <>
-            <circle cx="22.8" cy="18.2" r="2.8" fill={pal.irisTop} />
-            <circle cx="23" cy="18.3" r="1.4" fill="#030712" />
-            <circle cx="21.9" cy="17.2" r="0.85" fill="#ffffff" />
-            {angry && <path d="M 19.5 14.2 L 26 16" stroke="#ff5a3c" strokeWidth="1.6" strokeLinecap="round" />}
-          </>
-        )}
-        {/* Cyber-visor on scanning */}
-        {scanning && (
-          <rect x="19" y="15.5" width="9" height="4.8" rx="1.4" fill={pal.accent} opacity="0.4" stroke={pal.accent} strokeWidth="0.8" />
-        )}
-      </svg>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/orca/avatar.webp"
+        alt=""
+        width={28}
+        height={28}
+        className="w-full h-full object-cover select-none"
+        draggable={false}
+      />
     </span>
   );
 }

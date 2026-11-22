@@ -576,6 +576,20 @@ export default function Home() {
           if (saved.financialRisk) setFinancialRisk(saved.financialRisk);
           if (saved.healReport) setHealReport(saved.healReport);
           if (saved.appealedMap && typeof saved.appealedMap === 'object') setAppealedMap(saved.appealedMap);
+          if (saved.authorship && typeof saved.authorship === 'object' && saved.authorship.proofToken) {
+            setAuthorship({
+              ...EMPTY_AUTHORSHIP,
+              verified: Boolean(saved.authorship.verified),
+              target: String(saved.authorship.target || ''),
+              targetType: saved.authorship.targetType === 'domain' ? 'domain' : 'github',
+              method: String(saved.authorship.method || 'challenge'),
+              actor: String(saved.authorship.actor || ''),
+              role: String(saved.authorship.role || 'VerifiedAuthor'),
+              message: String(saved.authorship.message || ''),
+              proofToken: String(saved.authorship.proofToken || ''),
+              githubToken: '',
+            });
+          }
         }
       }
     } catch {
@@ -604,6 +618,19 @@ export default function Home() {
           financialRisk,
           healReport,
           appealedMap,
+          // Persist only short-lived signed proof_token (never persist raw githubToken PAT!)
+          authorship: authorship.verified && authorship.proofToken
+            ? {
+                verified: true,
+                target: authorship.target,
+                targetType: authorship.targetType,
+                method: authorship.method,
+                actor: authorship.actor,
+                role: authorship.role,
+                message: authorship.message,
+                proofToken: authorship.proofToken,
+              }
+            : null,
         })
       );
     } catch {
@@ -624,6 +651,7 @@ export default function Home() {
     financialRisk,
     healReport,
     appealedMap,
+    authorship,
   ]);
 
   const resetScanState = (targetLabel: string) => {
@@ -1042,12 +1070,42 @@ export default function Home() {
       { id: 'scan-status', role: 'assistant', content: `Проверяю авторство и запускаю аудит \`${clean}\`...`, timestamp: now },
     ]);
 
+    // If WebSocket transport isn't active in this tunnel/proxy (e.g. ngrok HTTP/2), skip WS immediately -> instant HTTPS!
+    if (!chatWsRef.current || chatWsRef.current.readyState !== WebSocket.OPEN) {
+      void runRepoScanHttpFallback(clean, overrideAuth);
+      return;
+    }
+
     let finished = false;
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/scan`;
     const ws = new WebSocket(wsUrl);
     scanWsRef.current = ws;
 
+    const fallbackToHttp = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(connectTimer);
+      try {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        ws.close();
+      } catch {
+        // ignore
+      }
+      void runRepoScanHttpFallback(clean, overrideAuth);
+    };
+
+    // Hard 1.8s connect timeout so a stalled WS Upgrade can NEVER freeze verification/scanning
+    const connectTimer = setTimeout(() => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        fallbackToHttp();
+      }
+    }, 1800);
+
     ws.onopen = () => {
+      clearTimeout(connectTimer);
       ws.send(
         JSON.stringify({
           github_url: clean,
@@ -1062,6 +1120,7 @@ export default function Home() {
       const data = JSON.parse(event.data);
       if (data.event_type === 'ScanResult') {
         finished = true;
+        clearTimeout(connectTimer);
         setMessages((prev) => [
           ...prev.filter((m) => m.id !== 'scan-status'),
           {
@@ -1080,6 +1139,7 @@ export default function Home() {
         setVulnerabilities((prev) => prev + 1);
       } else if (data.event_type === 'SystemError') {
         finished = true;
+        clearTimeout(connectTimer);
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
         const verifyCard: ChatVerifyCard | undefined =
@@ -1115,20 +1175,8 @@ export default function Home() {
       }
     };
 
-    ws.onerror = () => {
-      if (!finished) {
-        finished = true;
-        ws.close();
-        runRepoScanHttpFallback(clean, overrideAuth);
-      }
-    };
-
-    ws.onclose = () => {
-      if (!finished) {
-        finished = true;
-        runRepoScanHttpFallback(clean, overrideAuth);
-      }
-    };
+    ws.onerror = () => fallbackToHttp();
+    ws.onclose = () => fallbackToHttp();
   };
 
   useEffect(() => {
