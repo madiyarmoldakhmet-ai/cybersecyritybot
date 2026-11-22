@@ -8,14 +8,18 @@ RUN npm run build
 
 FROM python:3.12-slim
 WORKDIR /app
+ARG INSTALL_OLLAMA=false
 ENV PYTHONUNBUFFERED=1 \
     HOME=/home/guardian \
     SEMGREP_SEND_METRICS=off \
-    PORT=7860
-# git: repo cloning · fonts-dejavu-core: Cyrillic PDF reports · curl/zstd: self-hosted Ollama binary
+    PORT=8000
+# git: repo cloning · fonts-dejavu-core: Cyrillic PDF reports
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git fonts-dejavu-core curl ca-certificates zstd \
-    && curl -fsSL https://ollama.com/install.sh | sh \
+    && apt-get install -y --no-install-recommends git fonts-dejavu-core ca-certificates \
+    && if [ "$INSTALL_OLLAMA" = "true" ]; then \
+         apt-get install -y --no-install-recommends curl zstd \
+         && curl -fsSL https://ollama.com/install.sh | sh; \
+       fi \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements-prod.txt ./
 RUN pip install --no-cache-dir -r requirements-prod.txt
@@ -32,5 +36,5 @@ RUN chmod +x /app/scripts/start_space.sh \
     && mkdir -p /app/reports /app/data /app/temp_scans /home/guardian/.cache /home/guardian/.ollama/models \
     && chown -R guardian:guardian /app/reports /app/data /app/temp_scans /home/guardian
 USER guardian
-EXPOSE 7860
+EXPOSE 8000
 CMD ["/app/scripts/start_space.sh"]

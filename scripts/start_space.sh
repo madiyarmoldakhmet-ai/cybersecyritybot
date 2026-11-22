@@ -20,4 +20,4 @@ if command -v ollama >/dev/null 2>&1; then
   ) &
 fi
 
-exec uvicorn aegis_server.main:app --host 0.0.0.0 --port "${PORT:-7860}"
+exec uvicorn aegis_server.main:app --host 0.0.0.0 --port "${PORT:-8000}"

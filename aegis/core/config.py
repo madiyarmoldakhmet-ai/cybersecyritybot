@@ -268,6 +268,12 @@ class Settings(BaseSettings):
         space_host = (os.environ.get("SPACE_HOST") or "").strip().strip("/")
         if space_host:
             origins.append(f"https://{space_host}")
+        render_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+        if render_url:
+            origins.append(render_url)
+        railway_domain = (os.environ.get("RAILWAY_PUBLIC_DOMAIN") or "").strip().strip("/")
+        if railway_domain:
+            origins.append(f"https://{railway_domain}")
         return [o for o in dict.fromkeys(origins) if o and o != "*"]
 
     @property
