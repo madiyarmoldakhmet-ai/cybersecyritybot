@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, KeyboardEvent, ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import {
   ArrowUp,
   FileDown,
@@ -11,6 +12,7 @@ import {
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -53,6 +55,7 @@ interface AiCopilotChatProps {
   onResetChat: () => void;
   onUploadZip: (file: File) => void;
   onTriggerSelfHeal?: () => void;
+  onOpenFindingsDrawer?: () => void;
   isHealing?: boolean;
   isTyping: boolean;
   isScanning: boolean;
@@ -162,10 +165,12 @@ function formatKztInline(n: number): string {
 function TelegramAuditCard({
   card,
   onTriggerSelfHeal,
+  onOpenFindingsDrawer,
   isHealing,
 }: {
   card: ChatAuditCard;
   onTriggerSelfHeal?: () => void;
+  onOpenFindingsDrawer?: () => void;
   isHealing?: boolean;
 }) {
   const isClean = card.critical === 0 && card.high === 0;
@@ -285,6 +290,16 @@ function TelegramAuditCard({
             <span>{isHealing ? 'Исцеляю...' : 'Self-Heal'}</span>
           </button>
         )}
+        {onOpenFindingsDrawer && card.totalFindings > 0 && (
+          <button
+            type="button"
+            onClick={onOpenFindingsDrawer}
+            className="min-h-8 px-3 py-1.5 rounded-lg border border-[var(--color-line-strong)] hover:border-[#e94a32] bg-[var(--color-panel)] text-[var(--color-ink)] font-mono text-[11px] inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Разбор ({card.totalFindings})</span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -299,6 +314,7 @@ export function AiCopilotChat({
   onResetChat,
   onUploadZip,
   onTriggerSelfHeal,
+  onOpenFindingsDrawer,
   isHealing,
   isTyping,
   isScanning,
@@ -307,6 +323,7 @@ export function AiCopilotChat({
   activeTarget,
   className,
 }: AiCopilotChatProps) {
+  const prefersReducedMotion = useReducedMotion();
   const inputId = useId();
   const fileInputId = useId();
   const formRef = useRef<HTMLFormElement>(null);
@@ -316,8 +333,8 @@ export function AiCopilotChat({
   useEffect(() => {
     const container = logContainerRef.current;
     if (!container) return;
-    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-  }, [messages, isTyping]);
+    container.scrollTo({ top: container.scrollHeight, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+  }, [messages, isTyping, prefersReducedMotion]);
 
   // IME-safe Enter-to-submit (modern-web-guidance: ime-safe-enter-submit)
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -334,9 +351,9 @@ export function AiCopilotChat({
 
   return (
     <section
-      aria-label="AI-ассистент безопасности"
+      aria-label="Чат с Aegis-chan"
       className={cn(
-        'bg-[var(--color-paper)] text-[var(--color-ink)] flex flex-col relative min-h-[520px] max-h-[680px]',
+        'bg-[var(--color-canvas)] text-[var(--color-ink)] flex flex-col relative h-full min-h-0',
         className
       )}
       onDragOver={(e) => {
@@ -351,34 +368,41 @@ export function AiCopilotChat({
         if (file) onUploadZip(file);
       }}
     >
-      {/* Minimal Header echoing prtner card bar */}
-      <div className="px-5 py-3.5 border-b border-[var(--color-line)] flex items-center justify-between gap-3 shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          {/* Geometric 2x2 mark */}
-          <div className="grid grid-cols-2 gap-0.5 w-3.5 h-3.5 shrink-0" aria-hidden="true">
-            <span className="bg-[#e94a32]" />
-            <span className="bg-[var(--color-ink)]" />
-            <span className="bg-[var(--color-ink)]" />
-            <span className="bg-[var(--color-ink)] opacity-45" />
+      {/* Slim Chat Header */}
+      <div className="px-4 sm:px-5 py-2.5 border-b border-[var(--color-line)] bg-[var(--color-paper)] flex items-center justify-between gap-3 shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/mascot/maid_idle.webp"
+            alt=""
+            width={28}
+            height={28}
+            className="w-7 h-7 rounded-full object-cover border border-[var(--color-line-strong)] shrink-0"
+          />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-sans text-sm font-medium tracking-tight truncate">
+                Aegis-chan
+              </span>
+              <span className="inline-flex items-center gap-1 font-mono text-[10.5px] text-[var(--color-muted-soft)]">
+                <span
+                  className={cn(
+                    'w-1.5 h-1.5 rounded-full',
+                    ollamaOnline ? 'bg-[#3fbf7f]' : 'bg-[#e8a33d]'
+                  )}
+                  aria-hidden="true"
+                />
+                <span className="truncate">
+                  {ollamaOnline ? ollamaModel : 'on-prem engine'}
+                </span>
+              </span>
+            </div>
           </div>
-          <span className="font-sans text-sm font-medium tracking-tight truncate">
-            commit.guardian
-          </span>
-          <span className="hidden sm:inline-flex items-center gap-1.5 font-mono text-[11px] text-[var(--color-muted-soft)]">
-            <span
-              className={cn(
-                'w-1.5 h-1.5 rounded-full',
-                ollamaOnline ? 'bg-[#3fbf7f]' : 'bg-[#e8a33d]'
-              )}
-              aria-hidden="true"
-            />
-            {ollamaOnline ? `online · ${ollamaModel}` : `appsec-engine · standby`}
-          </span>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
           {activeTarget && (
-            <span className="hidden md:inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-[var(--color-panel)] border border-[var(--color-line)] text-[var(--color-muted-soft)] truncate max-w-[160px]">
+            <span className="hidden md:inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-[var(--color-panel)] border border-[var(--color-line)] text-[var(--color-muted-soft)] truncate max-w-[180px]">
               {activeTarget}
             </span>
           )}
@@ -399,23 +423,46 @@ export function AiCopilotChat({
         role="log"
         aria-live="polite"
         aria-relevant="additions"
-        aria-label="Переписка с локальным AI-ассистентом"
-        className="cg-scroll flex-1 overflow-y-auto px-5 py-4 space-y-3.5"
+        aria-label="Переписка с Aegis-chan"
+        className="cg-scroll flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4 space-y-3.5 prtner-dots"
       >
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
           const isStreaming = msg.id === 'streaming' || msg.id === 'scan-status';
+          const avatarSrc = msg.content.startsWith('⛔')
+            ? '/mascot/maid_alert.webp'
+            : msg.auditCard && msg.auditCard.critical === 0 && msg.auditCard.high === 0
+            ? '/mascot/maid_happy.webp'
+            : msg.auditCard
+            ? '/mascot/maid_alert.webp'
+            : isStreaming
+            ? '/mascot/maid_scan.webp'
+            : '/mascot/maid_idle.webp';
+
           return (
-            <div
+            <motion.div
               key={msg.id}
-              className={cn('flex', isUser ? 'justify-end' : 'justify-start')}
+              initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className={cn('flex items-end gap-2.5', isUser ? 'justify-end' : 'justify-start')}
             >
+              {!isUser && (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={avatarSrc}
+                  alt=""
+                  width={28}
+                  height={28}
+                  className="w-7 h-7 rounded-full object-cover border border-[var(--color-line-strong)] shrink-0 mb-0.5 bg-[#0f0f12]"
+                />
+              )}
               <div
                 className={cn(
-                  'max-w-[90%] sm:max-w-[82%] px-4 py-3 flex flex-col gap-1.5 border',
+                  'max-w-[88%] sm:max-w-[78%] px-4 py-3 flex flex-col gap-1.5 border shadow-xs',
                   isUser
                     ? 'bg-[var(--color-raised)] border-[var(--color-line-strong)] text-[var(--color-ink)] rounded-2xl rounded-br-sm'
-                    : 'bg-[var(--color-panel)] border-[var(--color-line)] text-[var(--color-body-text)] rounded-2xl rounded-bl-sm'
+                    : 'bg-[var(--color-paper)] border-[var(--color-line)] text-[var(--color-body-text)] rounded-2xl rounded-bl-sm'
                 )}
               >
                 {msg.content && <FormattedBubbleContent content={msg.content} />}
@@ -423,6 +470,7 @@ export function AiCopilotChat({
                   <TelegramAuditCard
                     card={msg.auditCard}
                     onTriggerSelfHeal={onTriggerSelfHeal}
+                    onOpenFindingsDrawer={onOpenFindingsDrawer}
                     isHealing={isHealing}
                   />
                 )}
@@ -432,7 +480,7 @@ export function AiCopilotChat({
                     isUser ? 'justify-end' : 'justify-start'
                   )}
                 >
-                  <span>{isUser ? 'you' : 'ai'} · {msg.timestamp}</span>
+                  <span>{isUser ? 'you' : 'aegis-chan'} · {msg.timestamp}</span>
                   {isStreaming && (
                     <span
                       className="inline-block w-1.5 h-3 bg-[#e94a32] animate-pulse"
@@ -441,7 +489,7 @@ export function AiCopilotChat({
                   )}
                 </div>
               </div>
-            </div>
+            </motion.div>
           );
         })}
       </div>

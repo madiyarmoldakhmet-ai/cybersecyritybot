@@ -315,3 +315,82 @@ dialog::backdrop {
     font-family: var(--font-mono);
   }
 }
+
+/* Maid-Guardian live companion animations (compositor-only, opt-in for reduced motion) */
+@keyframes maid-float {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-6px) scale(1.012);
+  }
+}
+
+@keyframes maid-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes maid-scanline {
+  0% {
+    transform: translateY(-110%);
+    opacity: 0;
+  }
+  15%, 85% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: translateY(110%);
+    opacity: 0;
+  }
+}
+
+@keyframes maid-sparkle {
+  0%, 100% {
+    transform: scale(0.85) translateY(0px);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scale(1.15) translateY(-4px);
+    opacity: 1;
+  }
+}
+
+.maid-float {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: maid-float 4.2s ease-in-out infinite;
+  }
+}
+
+.maid-orbit {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: maid-orbit 18s linear infinite;
+  }
+}
+
+.maid-orbit-fast {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: maid-orbit 5.5s linear infinite;
+  }
+}
+
+.maid-scanline {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: maid-scanline 2.2s ease-in-out infinite;
+  }
+}
+
+.maid-sparkle {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: maid-sparkle 2.4s ease-in-out infinite;
+  }
+}
+
+.maid-paused,
+.maid-paused * {
+  animation-play-state: paused !important;
+}
