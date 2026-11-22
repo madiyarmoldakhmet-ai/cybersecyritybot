@@ -64,16 +64,18 @@ class AuditSummarizer:
         model: Optional[str] = None,
         timeout_seconds: Optional[float] = None,
     ) -> None:
+        self._custom_client = client is not None
         self.model = model or settings.ollama_model
+        self.timeout_seconds = float(timeout_seconds or min(settings.ai_summary_timeout_seconds, 18))
         self.client = client or AsyncOpenAI(
             base_url=settings.ollama_base_url.rstrip("/") + "/v1",
             api_key="ollama",  # Ollama ignores the key, the SDK requires one
-            timeout=float(timeout_seconds or min(settings.ai_summary_timeout_seconds, 18)),
+            timeout=self.timeout_seconds,
             max_retries=0,
         )
 
     async def summarize(self, scan_result: SASTScanResult, repo_name: str, commit_sha: str) -> AuditSummary:
-        """Summarize a scan result. Falls back to a deterministic summary if Ollama is unavailable."""
+        """Summarize a scan result using active runtime LLM (local Ollama or cloud BYOK/OpenRouter)."""
         if not scan_result.findings:
             return AuditSummary(
                 text="Уязвимостей не обнаружено: SAST-сканеры не выявили проблем безопасности в этом коммите.",
@@ -84,6 +86,28 @@ class AuditSummarizer:
 
         prompt = self._build_prompt(scan_result, repo_name, commit_sha)
         try:
+            if not self._custom_client:
+                from aegis.core.llm_runtime import chat_completion, resolve_active_llm
+
+                provider, active_model, _, is_local = await resolve_active_llm()
+                if not is_local:
+                    started = time.perf_counter()
+                    text = await chat_completion(
+                        SUMMARY_SYSTEM_PROMPT,
+                        prompt,
+                        temperature=0.2,
+                        max_tokens=320,
+                        timeout=self.timeout_seconds,
+                        task_label=f"AuditSummary:{repo_name}:{commit_sha[:8]}",
+                    )
+                    if text:
+                        duration = round(time.perf_counter() - started, 2)
+                        logger.info(
+                            f"Cloud AI summary ({provider.value}/{active_model}) for {repo_name}@{commit_sha[:8]} in {duration}s"
+                        )
+                        return AuditSummary(text=text, model=active_model, duration_seconds=duration, ai_generated=True)
+                    raise ValueError(f"Cloud LLM ({provider.value}/{active_model}) returned empty summary")
+
             async with ollama_limiter.acquire_slot(f"AuditSummary:{repo_name}:{commit_sha[:8]}"):
                 # Time only the inference itself, not the wait for a free Ollama slot
                 started = time.perf_counter()
