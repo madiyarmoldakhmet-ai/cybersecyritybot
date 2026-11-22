@@ -573,12 +573,14 @@ class SASTScanner:
         timeout_seconds: Optional[int] = None,
         min_secret_entropy: float = 3.6,
         event_bus: Optional['ScanEventBus'] = None,
+        enable_ai_logic_llm: Optional[bool] = None,
     ) -> None:
         self.semgrep_config = semgrep_config or settings.semgrep_config
         self.timeout_seconds = timeout_seconds or settings.scan_timeout_seconds
         self.mobile_scanner = MobileSecurityScanner()
         self.sanitizer = FalsePositiveSanitizer(min_secret_entropy=min_secret_entropy)
         self.event_bus = event_bus
+        self.enable_ai_logic_llm = enable_ai_logic_llm
 
     async def _run_command(
         self, cmd: List[str], cwd: Optional[Path] = None
@@ -1079,38 +1081,90 @@ class SASTScanner:
         from aegis.scanners.secret_scanner import SecretScanner
         from aegis.scanners.flutter_rules import FlutterSecurityScanner
         from aegis.scanners.sca_scanner import SCAScanner
-        
+        from aegis.scanners.nextjs_scanner import NextJSSecurityScanner
+        from aegis.scanners.business_logic_auditor import BusinessLogicAuditor
+
         secret_scanner = SecretScanner()
         flutter_scanner = FlutterSecurityScanner()
         sca_scanner = SCAScanner()
-        
+        nextjs_scanner = NextJSSecurityScanner()
+        logic_auditor = BusinessLogicAuditor(enable_llm=self.enable_ai_logic_llm)
+
         # Pass event_bus to other scanners if they support it
         if hasattr(secret_scanner, 'event_bus'):
             secret_scanner.event_bus = self.event_bus
         if hasattr(flutter_scanner, 'event_bus'):
             flutter_scanner.event_bus = self.event_bus
 
-        # Run built-in multi-language analyzer, mobile scanner, taint engine, SCA, and CLI tools concurrently
+        # Run built-in multi-language analyzer, mobile scanner, taint engine, Next.js/JS taint,
+        # business-logic auditor, SCA, and CLI tools concurrently
         ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
         mobile_task = asyncio.create_task(self.mobile_scanner.scan(path))
         taint_task = asyncio.create_task(self.run_taint_analysis(path))
+        nextjs_task = asyncio.create_task(nextjs_scanner.scan(path))
+        logic_task = asyncio.create_task(logic_auditor.scan(path))
         sca_task = asyncio.create_task(sca_scanner.scan(path))
         semgrep_task = asyncio.create_task(self.run_semgrep(path))
         bandit_task = asyncio.create_task(self.run_bandit(path))
         pip_audit_task = asyncio.create_task(self.run_pip_audit(path))
         secret_task = asyncio.create_task(secret_scanner.scan(path))
 
-        ml_findings, mobile_findings, taint_findings, sca_findings, (semgrep_findings, semgrep_err), (bandit_findings, bandit_err), (pip_findings, pip_err), secret_findings = await asyncio.gather(
-            ml_task, mobile_task, taint_task, sca_task, semgrep_task, bandit_task, pip_audit_task, secret_task, return_exceptions=False
+        (
+            ml_findings,
+            mobile_findings,
+            taint_findings,
+            nextjs_findings,
+            logic_findings,
+            sca_findings,
+            (semgrep_findings, semgrep_err),
+            (bandit_findings, bandit_err),
+            (pip_findings, pip_err),
+            secret_findings,
+        ) = await asyncio.gather(
+            ml_task,
+            mobile_task,
+            taint_task,
+            nextjs_task,
+            logic_task,
+            sca_task,
+            semgrep_task,
+            bandit_task,
+            pip_audit_task,
+            secret_task,
+            return_exceptions=False,
         )
-        
+
+        # Emit real-time stream alerts for Next.js / JS Taint & Business-Logic Auditor findings
+        for f in nextjs_findings + logic_findings:
+            await self._emit(
+                VulnerabilityFound(
+                    severity=f.severity.value,
+                    title=f.title,
+                    file_path=f.file_path,
+                    line=f.line_start,
+                    explanation=f.description,
+                )
+            )
+
         # Flutter scan runs asynchronously now
         flutter_findings = await flutter_scanner.scan(path)
         custom_findings = self._run_custom_rules(path, project_cfg)
         history_findings = await self.run_git_history(path)
 
         raw_findings: List[VulnerabilityFinding] = (
-            mobile_findings + bandit_findings + semgrep_findings + ml_findings + taint_findings + sca_findings + (pip_findings or []) + secret_findings + flutter_findings + custom_findings + history_findings
+            mobile_findings
+            + bandit_findings
+            + semgrep_findings
+            + ml_findings
+            + taint_findings
+            + nextjs_findings
+            + logic_findings
+            + sca_findings
+            + (pip_findings or [])
+            + secret_findings
+            + flutter_findings
+            + custom_findings
+            + history_findings
         )
 
         # Normalize paths relative to target_path for consistent deduplication and reports
@@ -1145,6 +1199,8 @@ class SASTScanner:
         scanners_run = [
             ScannerType.MOBILE,
             ScannerType.CUSTOM,
+            ScannerType.NEXTJS,
+            ScannerType.AI_LOGIC,
             ScannerType.SCA,
             ScannerType.SEMGREP,
             ScannerType.BANDIT,

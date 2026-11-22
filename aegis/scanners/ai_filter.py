@@ -1,13 +1,10 @@
 import asyncio
 import json
 import logging
-from typing import List, Optional
+from typing import List
 
-from openai import AsyncOpenAI
-
-from aegis.core.config import LLMProvider, settings
-from aegis.core.queue_manager import ollama_limiter
-from aegis.scanners.models import VulnerabilityFinding, Severity
+from aegis.core.llm_runtime import chat_completion, resolve_active_llm
+from aegis.scanners.models import VulnerabilityFinding
 
 logger = logging.getLogger("aegis.ai_filter")
 
@@ -15,7 +12,7 @@ AI_FILTER_SYSTEM_PROMPT = """\
 You are an expert Application Security Engineer. Your job is to review a potential vulnerability finding produced by a static analysis tool (SAST) and determine if it is a REAL threat or a FALSE POSITIVE.
 You must consider local data flow, variable sanitization, and context.
 
-CRITICAL RULE FOR SECRETS: 
+CRITICAL RULE FOR SECRETS:
 If the finding is related to a hardcoded secret, token, or password, analyze the string value. If it is obviously a placeholder, mock token, or dummy string (e.g. 'YOUR_API_KEY_HERE', 'test-token', '123456', 'example_key'), you MUST classify it as a FALSE POSITIVE (is_real: false).
 
 Respond ONLY with a valid JSON object in this format:
@@ -25,129 +22,84 @@ Respond ONLY with a valid JSON object in this format:
 }
 """
 
+
 class AIFalsePositiveFilter:
     """
-    AI-Assisted SAST Filter: Uses LLM to semantically analyze findings 
-    and drop false positives that AST or regex couldn't resolve.
+    AI-Assisted SAST Filter: Uses the active runtime LLM (Local Ollama or BYOK)
+    to semantically analyze findings and drop false positives that AST/regex couldn't resolve.
     """
-    def __init__(self, timeout_seconds: int = 30) -> None:
-        self.client: Optional[AsyncOpenAI] = None
-        self.model_name = ""
-        self.enabled = False
 
-        if settings.air_gapped or settings.llm_provider == LLMProvider.OLLAMA:
-            self.model_name = settings.ollama_model or "qwen2.5-coder:14b"
-            self.client = AsyncOpenAI(
-                base_url=settings.ollama_base_url.rstrip("/") + "/v1",
-                api_key="ollama", # Ollama doesn't require an API key
-                timeout=float(timeout_seconds),
-                max_retries=1,
-            )
-            self.enabled = True
-        elif settings.llm_provider == LLMProvider.OPENROUTER and settings.openrouter_api_key:
-            self.model_name = settings.openrouter_model or "anthropic/claude-3.5-sonnet"
-            self.client = AsyncOpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=settings.openrouter_api_key,
-                timeout=float(timeout_seconds),
-                max_retries=1,
-            )
-            self.enabled = True
-        elif settings.llm_provider == "gemini" and settings.gemini_api_key:
-            self.model_name = settings.gemini_model or "gemini-2.5-flash"
-            self.client = AsyncOpenAI(
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-                api_key=settings.gemini_api_key,
-                timeout=float(timeout_seconds),
-                max_retries=1,
-            )
-            self.enabled = True
+    def __init__(self, timeout_seconds: int = 25) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.enabled = True
 
     async def _check_finding(self, finding: VulnerabilityFinding) -> bool:
-        """Asks the LLM if the finding is real. Returns True if real, False if false positive."""
-        if not self.enabled or not self.client:
-            return True  # If LLM is not configured, keep the finding to be safe
+        """Asks the active LLM if the finding is real. Returns True if real, False if false positive."""
+        if not self.enabled:
+            return True
 
         prompt = (
             f"Vulnerability Title: {finding.title}\n"
             f"CWE: {finding.cwe}\n"
             f"Description: {finding.description}\n"
             f"File Path: {finding.file_path}\n\n"
-            f"### CODE SNIPPET:\n```\n{finding.code_snippet}\n```\n\n"
+            f"### CODE SNIPPET:\n```\n{finding.code_snippet or ''}\n```\n\n"
             "Analyze the data flow and context. Is this a true positive vulnerability or a false positive?\n"
             "Respond strictly in JSON format with 'is_real' (boolean) and 'reason'."
         )
 
-        try:
-            async def _call():
-                return await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "system", "content": AI_FILTER_SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.1,
-                    max_tokens=200,
-                )
+        raw_text = await chat_completion(
+            AI_FILTER_SYSTEM_PROMPT,
+            prompt,
+            temperature=0.1,
+            max_tokens=200,
+            timeout=float(self.timeout_seconds),
+            task_label=f"AIFilter:{finding.file_path}",
+        )
+        if not raw_text:
+            return True
 
-            if settings.air_gapped:
-                async with ollama_limiter.acquire_slot(f"AIFilter:{finding.file_path}"):
-                    resp = await _call()
-            else:
-                resp = await _call()
-            raw_text = resp.choices[0].message.content or ""
-            
-            # Extract JSON block
+        try:
             if "```json" in raw_text:
-                raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+                raw_text = raw_text.split("```json", 1)[1].split("```", 1)[0].strip()
             elif "```" in raw_text:
-                raw_text = raw_text.split("```")[1].strip()
+                raw_text = raw_text.split("```", 1)[1].split("```", 1)[0].strip()
 
             start_idx = raw_text.find("{")
             end_idx = raw_text.rfind("}")
             if start_idx != -1 and end_idx != -1:
-                json_str = raw_text[start_idx:end_idx+1]
-                data = json.loads(json_str)
-                is_real = data.get("is_real", True)
-                reason = data.get("reason", "")
-                
+                data = json.loads(raw_text[start_idx : end_idx + 1])
+                is_real = bool(data.get("is_real", True))
+                reason = str(data.get("reason", ""))
                 if not is_real:
-                    logger.info(f"AI Filter dropped False Positive '{finding.title}' in {finding.file_path}. Reason: {reason}")
-                
+                    logger.info(
+                        f"AI Filter dropped False Positive '{finding.title}' in {finding.file_path}. Reason: {reason}"
+                    )
                 return is_real
-
-        except Exception as e:
-            logger.debug(f"AI Filter failed for finding '{finding.title}': {e}")
-            return True  # Fallback: keep the finding if LLM fails
-
+        except Exception as exc:
+            logger.debug(f"AI Filter parse skipped for '{finding.title}': {exc}")
         return True
 
     async def filter_findings(self, findings: List[VulnerabilityFinding]) -> List[VulnerabilityFinding]:
-        """Runs all findings through the AI filter concurrently, respecting API rate limits."""
+        """Run findings through the AI filter concurrently with provider-aware rate limits."""
         if not self.enabled or not findings:
             return findings
 
-        is_openrouter = settings.llm_provider == "openrouter"
-        concurrency = 2 if is_openrouter else 10
+        provider, _, _, is_local = await resolve_active_llm()
+        concurrency = 2 if (not is_local and provider.value == "openrouter") else 4
         sem = asyncio.Semaphore(concurrency)
 
-        async def bounded_check(f):
+        async def bounded_check(f: VulnerabilityFinding) -> bool:
             async with sem:
                 res = await self._check_finding(f)
-                if is_openrouter:
-                    await asyncio.sleep(1.5) # Rate limit: prevent bursting 429
+                if not is_local and provider.value == "openrouter":
+                    await asyncio.sleep(0.8)
                 return res
 
-        # Run concurrently with bounds
-        tasks = [bounded_check(f) for f in findings]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*(bounded_check(f) for f in findings), return_exceptions=True)
 
-        filtered_findings = []
+        filtered: List[VulnerabilityFinding] = []
         for finding, is_real in zip(findings, results):
-            if isinstance(is_real, Exception):
-                logger.debug(f"AI Filter task exception: {is_real}")
-                filtered_findings.append(finding) # Keep on failure
-            elif is_real is True:
-                filtered_findings.append(finding)
-                
-        return filtered_findings
+            if isinstance(is_real, Exception) or is_real is True:
+                filtered.append(finding)
+        return filtered

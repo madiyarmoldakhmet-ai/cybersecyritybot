@@ -14,6 +14,8 @@ class LLMProvider(str, Enum):
     OLLAMA = "ollama"
     GEMINI = "gemini"
     OPENROUTER = "openrouter"
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
 
 
 class Settings(BaseSettings):
@@ -116,8 +118,8 @@ class Settings(BaseSettings):
         description="Ollama API base URL"
     )
     ollama_model: str = Field(
-        default="qwen2.5-coder:14b",
-        description="Local Ollama model name"
+        default="qwen2.5-coder:7b",
+        description="Local Ollama model name (auto-resolves installed coding model)"
     )
     gemini_api_key: Optional[str] = Field(
         default=None,
@@ -146,8 +148,8 @@ class Settings(BaseSettings):
         description="Ollama OpenAI-compatible API base URL for Aegis"
     )
     aegis_model: str = Field(
-        default="qwen2.5-coder:14b",
-        description="Local LLM model for Aegis Engine (qwen2.5-coder:14b or 7b)"
+        default="qwen2.5-coder:7b",
+        description="Local LLM model for Aegis Engine (qwen2.5-coder:7b or 14b)"
     )
 
     # Scanner Settings

@@ -873,3 +873,264 @@ async def test_autofix_js_ts_and_atomic_github_commit(tmp_path: Path):
 
 
 
+
+@pytest.mark.asyncio
+async def test_nextjs_js_taint_and_monorepo_sca_offline_cves(tmp_path: Path):
+    from aegis.scanners.nextjs_scanner import NextJSSecurityScanner
+    from aegis.scanners.sca_scanner import SCAScanner
+
+    # 1. Vulnerable Next.js Server Action + NEXT_PUBLIC secret + JS Taint (SQLi, SSRF, Path Traversal, Prototype Pollution, JWT decode)
+    (tmp_path / ".env.local").write_text("NEXT_PUBLIC_STRIPE_SECRET_KEY=sk_live_demo1234567890abcdef\n", encoding="utf-8")
+
+    actions = tmp_path / "src" / "app" / "actions.ts"
+    actions.parent.mkdir(parents=True, exist_ok=True)
+    actions.write_text(
+        "'use server';\n"
+        "export async function deleteOrder(orderId: string) {\n"
+        "  await prisma.order.delete({ where: { id: orderId } });\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    api_route = tmp_path / "src" / "app" / "api" / "proxy" / "route.ts"
+    api_route.parent.mkdir(parents=True, exist_ok=True)
+    api_route.write_text(
+        "import fs from 'fs';\n"
+        "import jwt from 'jsonwebtoken';\n"
+        "import _ from 'lodash';\n"
+        "export async function POST(req: any) {\n"
+        "  const { targetUrl, fileName, userId } = await req.json();\n"
+        "  const user = jwt.decode(req.headers.get('authorization'));\n"
+        "  _.merge({}, req.body);\n"
+        "  const upstream = await fetch(targetUrl);\n"
+        "  const safeLocal = await fetch(`/api/internal/${userId}`);\n"
+        "  const rows = await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE id = '${userId}'`);\n"
+        "  const content = fs.readFileSync(`/tmp/uploads/${fileName}`);\n"
+        "  return Response.json({ upstream, safeLocal, rows, content, user });\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    # 2. Monorepo nested package.json + package-lock.json with known Next.js CVE-2025-29927 and transitive lodash
+    fe_dir = tmp_path / "frontend"
+    fe_dir.mkdir(parents=True, exist_ok=True)
+    (fe_dir / "package.json").write_text(
+        '{"name": "fe", "dependencies": {"next": "^14.1.0"}}\n',
+        encoding="utf-8",
+    )
+    (fe_dir / "package-lock.json").write_text(
+        '{"lockfileVersion": 3, "packages": {"node_modules/lodash": {"version": "4.17.19"}}}\n',
+        encoding="utf-8",
+    )
+
+    nextjs_findings = await NextJSSecurityScanner().scan(tmp_path)
+    found_ids = {f.id for f in nextjs_findings}
+    assert "nextjs-public-env-secret" in found_ids
+    assert "nextjs-unauth-server-action" in found_ids
+    assert "js-prototype-pollution" in found_ids
+    assert "js-insecure-jwt-decode" in found_ids
+    assert "js-taint-ssrf" in found_ids
+    assert "js-taint-sqli" in found_ids
+    assert "js-taint-path-traversal" in found_ids
+    # Relative fetch(`/api/internal/...`) must NOT produce a second SSRF false positive
+    ssrf_hits = [f for f in nextjs_findings if f.id == "js-taint-ssrf"]
+    assert len(ssrf_hits) == 1
+
+    # Offline SCA catches both nested package.json CVE-2025-29927 and transitive lockfile CVE-2021-23337
+    with (
+        patch("aegis.scanners.sca_scanner.httpx.AsyncClient", side_effect=RuntimeError("offline")),
+        patch("aegis.scanners.sca_scanner.shutil.which", return_value=None),
+    ):
+        sca_findings = await SCAScanner().scan(tmp_path)
+    cves = {c for f in sca_findings for c in f.cve}
+    assert "CVE-2025-29927" in cves
+    assert "CVE-2021-23337" in cves
+
+
+@pytest.mark.asyncio
+async def test_business_logic_auditor_structural_and_llm_anti_hallucination(tmp_path: Path):
+    import json as _json
+    from aegis.scanners.business_logic_auditor import BusinessLogicAuditor
+
+    order_route = tmp_path / "app" / "api" / "orders" / "[id]" / "route.ts"
+    order_route.parent.mkdir(parents=True, exist_ok=True)
+    order_route.write_text(
+        "export async function DELETE(req: any, { params }: any) {\n"
+        "  const id = params.id;\n"
+        "  await prisma.order.delete({ where: { id } });\n"
+        "  return Response.json({ ok: true });\n"
+        "}\n"
+        "export async function POST(req: any) {\n"
+        "  const body = await req.json();\n"
+        "  if (wallet.balance >= body.amount) {\n"
+        "    wallet.balance -= body.amount;\n"
+        "    await prisma.user.update({ data: req.body });\n"
+        "  }\n"
+        "  return Response.json({ ok: true });\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    webhook_route = tmp_path / "app" / "api" / "webhook" / "route.ts"
+    webhook_route.parent.mkdir(parents=True, exist_ok=True)
+    webhook_route.write_text(
+        "export async function POST(req: any) {\n"
+        "  const evt = await req.json();\n"
+        "  await prisma.subscription.update({ where: { id: evt.subId }, data: { active: true } });\n"
+        "  return Response.json({ received: true });\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    # Mock LLM returning 1 grounded finding + 1 hallucinated finding (fake line & code)
+    mock_llm_json = _json.dumps(
+        {
+            "findings": [
+                {
+                    "category": "DATA_EXPOSURE",
+                    "severity": "HIGH",
+                    "line_number": 3,
+                    "title": "Unscoped order deletion leaks confirmation",
+                    "description": "Handler deletes order without verifying session ownership.",
+                    "attack_scenario": "Send DELETE /api/orders/123 without auth to delete victim order.",
+                    "evidence_code": "await prisma.order.delete({ where: { id } });",
+                    "cwe": "CWE-639",
+                    "recommendation": "Check session.user.id before deleting.",
+                },
+                {
+                    "category": "SSRF",
+                    "severity": "CRITICAL",
+                    "line_number": 999,
+                    "title": "Hallucinated SSRF",
+                    "description": "Invented bug",
+                    "attack_scenario": "Invented exploit",
+                    "evidence_code": "fetch(thisDoesNotExistAnywhereInFile)",
+                    "cwe": "CWE-918",
+                    "recommendation": "N/A",
+                },
+            ]
+        }
+    )
+
+    with patch("aegis.scanners.business_logic_auditor.chat_completion", AsyncMock(return_value=mock_llm_json)):
+        findings = await BusinessLogicAuditor(enable_llm=True, max_llm_routes=2).scan(tmp_path)
+
+    ids = {f.id for f in findings}
+    assert "logic-idor-missing-ownership" in ids
+    assert "logic-missing-auth-mutation" in ids
+    assert "logic-mass-assignment" in ids
+    assert "logic-race-condition-balance" in ids
+    assert "logic-unverified-webhook" in ids
+    assert "ai-logic-data-exposure" in ids
+    # Hallucinated SSRF must be dropped by Anti-Hallucination Gate!
+    assert "ai-logic-ssrf" not in ids
+
+
+@pytest.mark.asyncio
+async def test_self_healer_llm_fallback_verifies_and_reverts_bad_patches(tmp_path: Path):
+    from aegis.core.self_heal import SelfHealer
+    from aegis.scanners.models import SASTScanResult, ScannerType, Severity, VulnerabilityFinding
+
+    vuln_file = tmp_path / "server.py"
+    vuln_file.write_text(
+        "def delete_order(db, order_id, current_user):\n"
+        "    return db.delete_by_id(order_id)\n",
+        encoding="utf-8",
+    )
+
+    async def fake_scan(root: Path) -> SASTScanResult:
+        txt = (root / "server.py").read_text(encoding="utf-8")
+        findings = []
+        if "owner_id=current_user.id" not in txt:
+            findings.append(
+                VulnerabilityFinding(
+                    id="logic-idor-missing-ownership",
+                    scanner=ScannerType.AI_LOGIC,
+                    title="IDOR in delete_order",
+                    description="Missing ownership check",
+                    severity=Severity.CRITICAL,
+                    file_path="server.py",
+                    line_start=2,
+                    cwe=["CWE-639"],
+                )
+            )
+        return SASTScanResult(
+            target_path=str(root),
+            total_findings=len(findings),
+            findings_by_severity={Severity.CRITICAL: len(findings)},
+            findings=findings,
+        )
+
+    # Case 1: Good LLM patch eliminates finding -> verified & kept!
+    async def good_llm(rel, cur, rem):
+        return (
+            "```python\n"
+            "def delete_order(db, order_id, current_user):\n"
+            "    return db.delete_by_id(order_id, owner_id=current_user.id)\n"
+            "```\n"
+        )
+
+    healer_ok = SelfHealer(scan_fn=fake_scan, enable_llm_fallback=True, llm_fix_fn=good_llm)
+    rep_ok = await healer_ok.heal(tmp_path)
+    assert rep_ok.after_findings == 0
+    assert len(rep_ok.fixes) == 1
+    assert rep_ok.fixes[0].verified is True
+    assert "AI-патч" in rep_ok.fixes[0].fixers[0]
+    assert "owner_id=current_user.id" in (rep_ok.fixes[0].patched_content or "")
+
+    # Case 2: Bad LLM patch fails to remove finding -> automatically reverted!
+    async def bad_llm(rel, cur, rem):
+        return (
+            "```python\n"
+            "def delete_order(db, order_id, current_user):\n"
+            "    # comment only, still vulnerable\n"
+            "    return db.delete_by_id(order_id)\n"
+            "```\n"
+        )
+
+    healer_bad = SelfHealer(scan_fn=fake_scan, enable_llm_fallback=True, llm_fix_fn=bad_llm)
+    rep_bad = await healer_bad.heal(tmp_path)
+    assert rep_bad.after_findings == 1
+    assert len(rep_bad.fixes) == 0
+    assert "server.py" in rep_bad.reverted_files
+
+
+@pytest.mark.asyncio
+async def test_ai_runtime_config_api_local_and_byok_never_leaks_key():
+    import httpx
+    from aegis.core.llm_runtime import reset_runtime_override
+    from aegis_server.main import app
+
+    reset_runtime_override()
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+            r0 = await client.get("/api/ai/config")
+            assert r0.status_code == 200
+            d0 = r0.json()
+            assert d0["is_local"] is True
+            assert d0["provider"] == "ollama"
+
+            # Reject BYOK without API key
+            r_err = await client.post("/api/ai/config", json={"provider": "anthropic"})
+            assert r_err.status_code == 400
+
+            # Switch to BYOK Anthropic Claude -> key stored only in memory, never returned
+            secret_key = "sk-ant-test-super-secret-value-999"
+            r_byok = await client.post(
+                "/api/ai/config",
+                json={"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": secret_key},
+            )
+            assert r_byok.status_code == 200
+            d_byok = r_byok.json()
+            assert d_byok["is_local"] is False
+            assert d_byok["provider"] == "anthropic"
+            assert d_byok["has_api_key"] is True
+            assert secret_key not in r_byok.text
+
+            # Reset back to strict 100% On-Prem Ollama
+            r_reset = await client.post("/api/ai/config", json={"provider": "ollama", "reset": True})
+            assert r_reset.status_code == 200
+            assert r_reset.json()["is_local"] is True
+            assert r_reset.json()["has_api_key"] is False
+    finally:
+        reset_runtime_override()

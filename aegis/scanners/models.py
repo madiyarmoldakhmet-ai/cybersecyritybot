@@ -28,6 +28,8 @@ class ScannerType(str, Enum):
     FLUTTER = "flutter"
     CUSTOM = "custom"
     GIT_HISTORY = "git-history"
+    NEXTJS = "nextjs"
+    AI_LOGIC = "ai-logic"
 
 
 class VulnerabilityFinding(BaseModel):

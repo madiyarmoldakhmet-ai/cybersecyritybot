@@ -26,6 +26,14 @@ from aegis.core.audit_pipeline import AuditArtifacts, finalize_scan_audit
 from aegis.core.demo_history import materialize_demo_repo
 from aegis.core.event_bus import ScanEventBus
 from aegis.core.git_clone import clone_repo_resilient, extract_git_metadata
+from aegis.core.llm_runtime import (
+    build_openai_client,
+    chat_completion,
+    get_runtime_status,
+    reset_runtime_override,
+    resolve_active_llm,
+    set_runtime_override,
+)
 from aegis.core.pr_creator import PullRequestCreator
 from aegis.core.self_heal import SelfHealer
 from aegis.core.verifier import OwnershipVerifier
@@ -330,7 +338,7 @@ async def autofix_and_commit_repo(req: RepoAutoFixRequest):
                 content={"error": outcome.error or f"Не удалось клонировать репозиторий {repo_name}."},
             )
 
-        report = await SelfHealer().heal(repo_dir)
+        report = await SelfHealer(enable_llm_fallback=True).heal(repo_dir)
         verified_fixes = [f for f in report.fixes if f.verified and f.patched_content is not None]
 
         commit_result: Dict[str, Any] = {
@@ -708,6 +716,35 @@ class ChatHttpRequest(BaseModel):
     scan_context: Optional[Dict[str, Any]] = None
 
 
+class AIConfigUpdateRequest(BaseModel):
+    provider: str = "ollama"  # ollama | openrouter | anthropic | gemini | openai
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    reset: bool = False
+
+
+@app.get("/api/ai/config")
+async def get_ai_config():
+    """Return active AI engine status and discovered local Ollama models (never returns API keys)."""
+    return await get_runtime_status()
+
+
+@app.post("/api/ai/config")
+async def update_ai_config(req: AIConfigUpdateRequest):
+    """Switch active AI model between strict local Ollama (0 bytes cloud) and session-only BYOK."""
+    try:
+        if req.reset or req.provider.strip().lower() == "ollama":
+            if req.reset:
+                reset_runtime_override()
+            else:
+                set_runtime_override("ollama", model=req.model, api_key=None)
+        else:
+            set_runtime_override(req.provider, model=req.model, api_key=req.api_key)
+    except ValueError as err:
+        return JSONResponse(status_code=400, content={"error": str(err)})
+    return await get_runtime_status()
+
+
 async def _try_handle_bot_command(data: str) -> Optional[Dict[str, Any]]:
     """Mirror Telegram bot commands (/verify and GitHub repo URL/slug scanning) directly in web chat."""
     text = data.strip()
@@ -814,6 +851,22 @@ async def _try_handle_bot_command(data: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+_GROUNDED_PRODUCT_FAQ_PROMPTS = {
+    "самоисцеление и git-секреты",
+    "как работает проверка авторства?",
+    "как работает проверка авторства",
+    "оцени риск в тенге (коап рк)",
+}
+
+_APPSEC_CHAT_SYSTEM_PROMPT = (
+    "Ты Commit Guardian (Aegis Orca) — ИИ-аудитор безопасности кода (12 сканеров: Semgrep, Bandit, "
+    "pip-audit, AST Taint Engine, JS/TS/Next.js Taint & Server Actions, OSV/npm SCA, AI Business-Logic Auditor "
+    "на IDOR/Auth/SSRF/Race Conditions, «Машина времени Git» для секретов в удалённых коммитах, Self-Healing Auto-Fix "
+    "с SAST-перепроверкой и атомарным коммитом в GitHub, оценка риска по КоАП РК ст. 79 в ₸, Strict Ownership Gate "
+    "с HMAC proof_token). Отвечай чётко, технически и по делу на русском языке."
+)
+
+
 @app.post("/api/chat")
 async def http_chat(req: ChatHttpRequest):
     """HTTP fallback for AI AppSec chat when WebSocket transport is unavailable."""
@@ -826,32 +879,34 @@ async def http_chat(req: ChatHttpRequest):
         return cmd_result
 
     ctx_dict = req.scan_context if isinstance(req.scan_context, dict) and req.scan_context.get("repo_name") else None
+    _, resolved_model, _, _ = await resolve_active_llm()
+
+    # Serve exact built-in Commit Guardian FAQ quick-prompts deterministically (exact KZ law & feature facts)
+    if data.lower() in _GROUNDED_PRODUCT_FAQ_PROMPTS and not ctx_dict:
+        return {
+            "reply": build_offline_appsec_reply(data, ctx_dict, resolved_model),
+            "ai_generated": False,
+            "model": resolved_model,
+        }
+
     scan_context_note = format_scan_context_note(ctx_dict)
     user_content = f"{scan_context_note}\n\nВопрос пользователя: {data}" if scan_context_note else data
-    client, model = _build_chat_client()
 
-    system_prompt = (
-        "You are Commit Guardian, an on-premise AI AppSec assistant. Help developers analyze GitHub repositories, "
-        "explain vulnerabilities concisely with safe fixes, and verify on-premise privacy (no code leaves the server). "
-        "Reply clearly in Russian."
+    reply = await chat_completion(
+        _APPSEC_CHAT_SYSTEM_PROMPT,
+        user_content,
+        temperature=0.2,
+        max_tokens=1200,
+        timeout=25.0,
+        task_label="HTTPChat",
     )
-    try:
-        completion = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-        )
-        reply = (completion.choices[0].message.content or "").strip() if completion.choices else ""
-        if reply:
-            return {"reply": reply, "ai_generated": True}
-    except Exception as llm_err:
-        logger.debug(f"HTTP chat LLM unavailable, serving deterministic AppSec reply: {llm_err}")
+    if reply:
+        return {"reply": reply, "ai_generated": True, "model": resolved_model}
 
     return {
-        "reply": build_offline_appsec_reply(data, ctx_dict, settings.ollama_model),
+        "reply": build_offline_appsec_reply(data, ctx_dict, resolved_model),
         "ai_generated": False,
+        "model": resolved_model,
     }
 
 
@@ -859,13 +914,7 @@ async def http_chat(req: ChatHttpRequest):
 async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
 
-    client, model = _build_chat_client()
-
-    system_prompt = (
-        "You are Commit Guardian, an on-premise AI AppSec assistant. Help developers analyze GitHub repositories, "
-        "explain vulnerabilities concisely with safe fixes, and verify on-premise privacy (no code leaves the server). "
-        "Reply clearly in Russian."
-    )
+    system_prompt = _APPSEC_CHAT_SYSTEM_PROMPT
     chat_history = [{"role": "system", "content": system_prompt}]
 
     try:
@@ -919,24 +968,43 @@ async def websocket_chat(websocket: WebSocket):
             if len(chat_history) > 17:
                 chat_history = [chat_history[0]] + chat_history[-16:]
 
+            provider, model, api_key, _is_local = await resolve_active_llm()
             try:
-                stream = await client.chat.completions.create(
-                    model=model,
-                    messages=chat_history,
-                    stream=True,
-                )
                 full_response = ""
-                async for chunk in stream:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        full_response += content
-                        await websocket.send_json({"type": "chunk", "content": content})
+                if provider == LLMProvider.ANTHROPIC and api_key:
+                    combined = "\n\n".join(
+                        f"{m['role'].upper()}: {m['content']}" for m in chat_history[1:]
+                    )
+                    full_response = (
+                        await chat_completion(
+                            system_prompt,
+                            combined,
+                            temperature=0.2,
+                            max_tokens=1400,
+                            timeout=30.0,
+                            task_label="WSChat:Anthropic",
+                        )
+                    ) or ""
+                    if full_response:
+                        await websocket.send_json({"type": "chunk", "content": full_response})
+                else:
+                    client = build_openai_client(provider, api_key, timeout=25.0)
+                    stream = await client.chat.completions.create(
+                        model=model,
+                        messages=chat_history,
+                        stream=True,
+                    )
+                    async for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            full_response += content
+                            await websocket.send_json({"type": "chunk", "content": content})
                 if not full_response.strip():
-                    full_response = build_offline_appsec_reply(data, ctx_dict, settings.ollama_model)
+                    full_response = build_offline_appsec_reply(data, ctx_dict, model)
                     await websocket.send_json({"type": "chunk", "content": full_response})
             except Exception as llm_err:
-                logger.warning(f"Local LLM chat unavailable, serving AppSec fallback: {llm_err}")
-                full_response = build_offline_appsec_reply(data, ctx_dict, settings.ollama_model)
+                logger.warning(f"LLM chat ({provider.value}/{model}) unavailable, serving AppSec fallback: {llm_err}")
+                full_response = build_offline_appsec_reply(data, ctx_dict, model)
                 await websocket.send_json({"type": "chunk", "content": full_response})
 
             await websocket.send_json({"type": "done"})

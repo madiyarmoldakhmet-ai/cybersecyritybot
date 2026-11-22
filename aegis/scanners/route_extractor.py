@@ -56,16 +56,20 @@ class RouteExtractor:
     AUTH_KEYWORDS = {
         "auth", "login_required", "authenticate", "jwt", "bearer", "token",
         "permission", "authorize", "get_current_user", "require_user",
-        "is_authenticated", "has_role", "admin_required", "guard", "useguards"
+        "is_authenticated", "has_role", "admin_required", "guard", "useguards",
+        "getserversession", "getsession", "currentuser", "requireauth",
+        "supabase.auth.getuser", "verify_token", "verifytoken",
     }
 
     # Dangerous patterns within handler functions
     DANGEROUS_OPERATIONS = [
-        (re.compile(r"(cursor\.execute|execute_query|\.raw\(|session\.execute)\s*\("), "raw_sql"),
-        (re.compile(r"(subprocess\.(Popen|run|call|check_output)|os\.system|os\.popen|exec\(|eval\()\s*"), "shell_exec"),
+        (re.compile(r"(cursor\.execute|execute_query|\.raw\(|session\.execute|\$queryRawUnsafe|knex\.raw)\s*\("), "raw_sql"),
+        (re.compile(r"(subprocess\.(Popen|run|call|check_output)|os\.system|os\.popen|exec\(|eval\(|execSync\()\s*"), "shell_exec"),
         (re.compile(r"(open\(|fs\.read|fs\.write|res\.sendFile|send_file|send_from_directory)\s*\("), "file_io"),
-        (re.compile(r"(requests\.(get|post|put)|httpx\.(get|post)|fetch\(|axios\.(get|post))\s*\("), "outbound_http_ssrf"),
+        (re.compile(r"(requests\.(get|post|put)|httpx\.(get|post)|fetch\(|axios\.(get|post|request))\s*\("), "outbound_http_ssrf"),
         (re.compile(r"(pickle\.loads?|yaml\.load\(|unserialize)\s*\("), "deserialization"),
+        (re.compile(r"(prisma\.\w+\.(?:create|update|delete|upsert|updateMany|deleteMany)|supabase\.from\([^)]+\)\.(?:insert|update|delete|upsert)|db\.(?:add|delete|commit|insert|update)|\.save\(\)|\.delete\(\)|DELETE\s+FROM|UPDATE\s+\w+\s+SET|INSERT\s+INTO)", re.IGNORECASE), "db_mutation"),
+        (re.compile(r"\b(balance|wallet|credits?|payout|withdraw|transfer|refund|subscription|invoice|stripe)\b", re.IGNORECASE), "balance_or_payment"),
     ]
 
     def scan_repository(self, repo_dir: Path) -> List[DiscoveredEndpoint]:
@@ -142,7 +146,7 @@ class RouteExtractor:
                                 has_auth_guard=has_auth,
                                 auth_detail=auth_detail,
                                 sensitive_operations=sensitive_ops,
-                                code_snippet=(func_code or "")[:400]
+                                code_snippet=(func_code or "")[:3000]
                             )
                         )
 
@@ -249,9 +253,10 @@ class RouteExtractor:
             method = match.group(1).upper()
             path = match.group(2)
             line_no = content[:match.start()].count("\n") + 1
-            surrounding = content[max(0, match.start() - 100):min(len(content), match.end() + 400)]
-            has_auth = any(ak in surrounding.lower() for ak in self.AUTH_KEYWORDS)
+            surrounding = content[max(0, match.start() - 100):min(len(content), match.end() + 2200)]
+            has_auth = any(ak in surrounding[:1000].lower() for ak in self.AUTH_KEYWORDS)
             sensitive_ops = self._detect_sensitive_ops(surrounding)
+            params = re.findall(r":([A-Za-z_][A-Za-z0-9_]*)", path)
 
             endpoints.append(
                 DiscoveredEndpoint(
@@ -260,29 +265,83 @@ class RouteExtractor:
                     file_path=rel_path,
                     line_number=line_no,
                     framework="express",
+                    parameters=params,
                     has_auth_guard=has_auth,
-                    sensitive_operations=sensitive_ops
+                    sensitive_operations=sensitive_ops,
+                    code_snippet=content[match.start():min(len(content), match.start() + 2600)],
                 )
             )
 
         # 2. Next.js App Router API Routes: export async function GET(req), etc.
         if "api/" in rel_path or "route." in rel_path:
-            nextjs_methods = re.findall(r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH)\s*\(', content)
-            for m in nextjs_methods:
-                # Derive path from file path (e.g. app/api/auth/route.ts -> /api/auth)
-                inferred_path = "/" + rel_path.replace("app/", "").replace("pages/", "").replace("/route.ts", "").replace("/route.js", "")
-                has_auth = any(ak in content.lower() for ak in self.AUTH_KEYWORDS)
-                sensitive_ops = self._detect_sensitive_ops(content)
+            for m in re.finditer(r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH)\s*\(', content):
+                method = m.group(1).upper()
+                line_no = content[:m.start()].count("\n") + 1
+                inferred_path = "/" + re.sub(
+                    r"^(?:src/)?(?:app|pages)/", "", rel_path
+                ).replace("/route.ts", "").replace("/route.js", "").replace("/route.tsx", "")
+                block = content[m.start():min(len(content), m.start() + 2800)]
+                has_auth = any(ak in block.lower() for ak in self.AUTH_KEYWORDS)
+                sensitive_ops = self._detect_sensitive_ops(block)
+                params = re.findall(r"\[([A-Za-z0-9_.]+)\]", inferred_path)
 
                 endpoints.append(
                     DiscoveredEndpoint(
                         path=inferred_path,
-                        method=m.upper(),
+                        method=method,
                         file_path=rel_path,
-                        line_number=1,
+                        line_number=line_no,
                         framework="nextjs",
+                        parameters=params,
                         has_auth_guard=has_auth,
-                        sensitive_operations=sensitive_ops
+                        sensitive_operations=sensitive_ops,
+                        code_snippet=block,
+                    )
+                )
+
+        # 3. Next.js Pages Router API: pages/api/**/*.ts|js (export default async function handler(req, res))
+        if ("pages/api/" in rel_path or "src/pages/api/" in rel_path) and not endpoints:
+            m_def = re.search(r"export\s+default\s+(?:async\s+)?function\s*(\w*)\s*\(", content)
+            if m_def:
+                line_no = content[:m_def.start()].count("\n") + 1
+                inferred_path = "/" + re.sub(r"^(?:src/)?pages/", "", rel_path)
+                inferred_path = re.sub(r"\.(?:ts|tsx|js|jsx)$", "", inferred_path)
+                block = content[m_def.start():min(len(content), m_def.start() + 2800)]
+                has_auth = any(ak in block.lower() for ak in self.AUTH_KEYWORDS)
+                params = re.findall(r"\[([A-Za-z0-9_.]+)\]", inferred_path)
+                endpoints.append(
+                    DiscoveredEndpoint(
+                        path=inferred_path,
+                        method="ANY",
+                        file_path=rel_path,
+                        line_number=line_no,
+                        framework="nextjs-pages",
+                        parameters=params,
+                        has_auth_guard=has_auth,
+                        sensitive_operations=self._detect_sensitive_ops(block),
+                        code_snippet=block,
+                    )
+                )
+
+        # 4. Next.js Server Actions ('use server')
+        if re.search(r"""^\s*['"]use server['"]\s*;?""", content, re.MULTILINE):
+            for fn_m in re.finditer(r"export\s+(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)", content):
+                fn_name = fn_m.group(1)
+                line_no = content[:fn_m.start()].count("\n") + 1
+                block = content[fn_m.start():min(len(content), fn_m.start() + 2600)]
+                has_auth = any(ak in block.lower() for ak in self.AUTH_KEYWORDS)
+                params = [p.split(":")[0].strip() for p in fn_m.group(2).split(",") if p.strip()]
+                endpoints.append(
+                    DiscoveredEndpoint(
+                        path=f"action://{fn_name}",
+                        method="SERVER_ACTION",
+                        file_path=rel_path,
+                        line_number=line_no,
+                        framework="nextjs-action",
+                        parameters=params,
+                        has_auth_guard=has_auth,
+                        sensitive_operations=self._detect_sensitive_ops(block),
+                        code_snippet=block,
                     )
                 )
 

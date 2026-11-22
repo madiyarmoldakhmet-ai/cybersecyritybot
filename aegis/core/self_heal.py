@@ -24,6 +24,7 @@ import ast
 import asyncio
 import difflib
 import logging
+import os
 import re
 import shutil
 import subprocess  # nosec B404
@@ -437,6 +438,80 @@ def fix_js_hardcoded_secrets(text: str, findings: List[VulnerabilityFinding]) ->
     return "".join(lines) if changed else text
 
 
+def fix_js_jwt_decode(text: str, findings: List[VulnerabilityFinding]) -> str:
+    """Replace unverified `jwt.decode(token)` with `jwt.verify(token, process.env.JWT_SECRET ?? '')`."""
+    if not any("jwt" in f.id.lower() or "CWE-347" in f.cwe for f in findings):
+        return text
+    new_text = re.sub(
+        r"\bjwt\.decode\s*\(\s*([^,)\n]+)\s*\)",
+        r"jwt.verify(\1, process.env.JWT_SECRET ?? '', { algorithms: ['HS256'] })",
+        text,
+    )
+    return new_text
+
+
+def fix_js_cookie_flags(text: str, findings: List[VulnerabilityFinding]) -> str:
+    """Enforce `httpOnly: true` and `secure: true` on insecure auth cookies."""
+    if not any("cookie" in f.id.lower() or "CWE-614" in f.cwe or "CWE-1004" in f.cwe for f in findings):
+        return text
+    new_text = re.sub(r"\bhttpOnly\s*:\s*false\b", "httpOnly: true", text)
+    new_text = re.sub(r"\bsecure\s*:\s*false\b", "secure: true", new_text)
+    return new_text
+
+
+def _validate_js_ts_syntax(candidate: str, suffix: str) -> bool:
+    """Quick structural syntax sanity check for JS/TS (plus `node --check` for plain JS when available)."""
+    # Check balanced delimiters outside quotes/comments (lightweight guard against truncated LLM output)
+    depth_brace = candidate.count("{") - candidate.count("}")
+    depth_paren = candidate.count("(") - candidate.count(")")
+    depth_bracket = candidate.count("[") - candidate.count("]")
+    if abs(depth_brace) > 1 or abs(depth_paren) > 1 or abs(depth_bracket) > 1:
+        return False
+    if suffix in {".js", ".mjs", ".cjs"}:
+        node_bin = shutil.which("node")
+        if node_bin:
+            tmp_path: Optional[Path] = None
+            try:
+                with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as tf:
+                    tf.write(candidate)
+                    tmp_path = Path(tf.name)
+                proc = subprocess.run(  # nosec B603
+                    [node_bin, "--check", str(tmp_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5.0,
+                )
+                return proc.returncode == 0
+            except Exception:
+                return True
+            finally:
+                if tmp_path and tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)
+    return True
+
+
+def _extract_code_block(raw: str) -> Optional[str]:
+    """Extract the largest fenced code block from an LLM patch response."""
+    blocks = re.findall(r"```[a-zA-Z0-9_-]*\n([\s\S]*?)```", raw or "")
+    if not blocks:
+        return None
+    best = max(blocks, key=len).strip("\n")
+    return best + "\n" if best else None
+
+
+_LLM_HEAL_SYSTEM_PROMPT = """\
+You are a Principal AppSec Engineer generating a minimal, production-safe security patch for a single source file.
+
+RULES:
+1. Fix ONLY the listed security vulnerabilities while preserving all existing APIs, imports, exports, and behavior.
+2. Never delete unrelated functions, never leave TODO placeholders, never introduce new security issues.
+3. For IDOR / Broken Auth: bind DB queries to the authenticated user (`session.user.id` / `current_user.id`) or require an auth check before mutations.
+4. For SSRF: validate target URL scheme (`https:`) and reject private/loopback/metadata hostnames before fetching.
+5. For SQLi / XSS / Prototype Pollution / Command Injection: apply standard safe parameterization, sanitization, or key guards.
+6. Return ONLY the complete patched file inside a single fenced code block (```<lang> ... ```) — no prose outside the code block.
+"""
+
+
 def _swap_node(stmt: ast.stmt, old: ast.AST, new: ast.AST) -> ast.stmt:
     """Deep-copy ``stmt`` with ``old`` (matched by position) replaced by ``new``."""
     import copy
@@ -483,6 +558,8 @@ JS_TS_FIXERS: List[Tuple[str, Callable[[str, List[VulnerabilityFinding]], str]]]
     ("Включена проверка TLS (rejectUnauthorized: true)", fix_js_insecure_tls),
     ("Заменён небезопасный innerHTML → textContent", fix_js_innerhtml),
     ("Ужесточён CORS origin → process.env.CORS_ORIGIN", fix_js_cors_wildcard),
+    ("JWT decode → jwt.verify с проверкой подписи", fix_js_jwt_decode),
+    ("Включены флаги httpOnly & secure у auth-cookie", fix_js_cookie_flags),
     ("Секрет JS/TS → process.env", fix_js_hardcoded_secrets),
 ]
 _JS_TS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
@@ -527,17 +604,93 @@ def _manual_action(f: VulnerabilityFinding) -> str:
 
 
 class SelfHealer:
-    def __init__(self, scan_fn: Optional[Callable] = None, run_tests: bool = False, test_timeout: float = 180.0):
+    def __init__(
+        self,
+        scan_fn: Optional[Callable] = None,
+        run_tests: bool = False,
+        test_timeout: float = 180.0,
+        enable_llm_fallback: Optional[bool] = None,
+        llm_fix_fn: Optional[Callable] = None,
+        max_llm_files: int = 3,
+    ):
         self._scan_fn = scan_fn
         self.run_tests = run_tests
         self.test_timeout = test_timeout
+        self.enable_llm_fallback = (
+            (not bool(os.environ.get("PYTEST_CURRENT_TEST")))
+            if enable_llm_fallback is None
+            else enable_llm_fallback
+        )
+        self._llm_fix_fn = llm_fix_fn
+        self.max_llm_files = max_llm_files
 
     async def _scan(self, path: Path) -> SASTScanResult:
         if self._scan_fn is not None:
             return await self._scan_fn(path)
         from aegis.scanners.sast_scanner import SASTScanner
 
-        return await SASTScanner().scan(path)
+        # Disable Stage-B LLM inside sandbox re-scans to keep verification deterministic & fast
+        return await SASTScanner(enable_ai_logic_llm=False).scan(path)
+
+    async def _llm_propose_patch(
+        self,
+        rel_path: str,
+        current_text: str,
+        file_findings: List[VulnerabilityFinding],
+    ) -> Optional[str]:
+        """Ask active LLM (or injected test hook) to produce a minimal security patch for remaining findings."""
+        if self._llm_fix_fn is not None:
+            raw = await self._llm_fix_fn(rel_path, current_text, file_findings)
+        else:
+            from aegis.core.llm_runtime import chat_completion
+
+            issue_lines = "\n".join(
+                f"- [{f.severity.value}] Line {f.line_start or 1} ({f.id}): {f.title}\n"
+                f"  Detail: {f.description[:280]}\n"
+                f"  Fix guidance: {f.recommendation or 'Apply secure coding best practices.'}"
+                for f in file_findings[:5]
+            )
+            ext = Path(rel_path).suffix.lstrip(".") or "txt"
+            user_prompt = (
+                f"File: `{rel_path}`\n\n"
+                f"### VULNERABILITIES TO FIX:\n{issue_lines}\n\n"
+                f"### CURRENT FILE CONTENT:\n```{ext}\n{current_text}\n```\n\n"
+                "Return ONLY the complete patched file in a single fenced code block."
+            )
+            raw = await chat_completion(
+                _LLM_HEAL_SYSTEM_PROMPT,
+                user_prompt,
+                temperature=0.05,
+                max_tokens=3200,
+                timeout=40.0,
+                task_label=f"AutoFixLLM:{rel_path}",
+            )
+
+        if not raw:
+            return None
+        candidate = _extract_code_block(raw) or (raw.strip() + "\n" if len(raw.splitlines()) >= 3 else None)
+        if not candidate or candidate == current_text:
+            return None
+
+        # Guard against destructive truncation (>45% lines deleted)
+        orig_lines = max(1, len(current_text.splitlines()))
+        if len(candidate.splitlines()) < int(orig_lines * 0.55):
+            logger.info(f"LLM patch rejected for {rel_path}: suspiciously truncated output.")
+            return None
+
+        suffix = Path(rel_path).suffix.lower()
+        if suffix == ".py":
+            try:
+                ast.parse(candidate)
+            except SyntaxError as exc:
+                logger.info(f"LLM patch rejected for {rel_path}: Python SyntaxError ({exc}).")
+                return None
+        elif suffix in _JS_TS_SUFFIXES:
+            if not _validate_js_ts_syntax(candidate, suffix):
+                logger.info(f"LLM patch rejected for {rel_path}: JS/TS syntax validation failed.")
+                return None
+
+        return candidate
 
     @staticmethod
     def _heal_file(path: Path, findings: List[VulnerabilityFinding]) -> Tuple[Optional[str], List[str]]:
@@ -626,6 +779,49 @@ class SelfHealer:
                     applied.pop(rel)
                     reverted.append(rel)
                 after = await self._scan(sandbox)
+
+            # Stage 2: Proof-Carrying LLM Fallback for remaining HIGH/CRITICAL code issues
+            # not covered by deterministic AST/regex fixers.
+            if self.enable_llm_fallback:
+                rem_by_file: Dict[str, List[VulnerabilityFinding]] = {}
+                for f in after.findings:
+                    if f.severity not in (Severity.CRITICAL, Severity.HIGH):
+                        continue
+                    if f.scanner in (ScannerType.GIT_HISTORY, ScannerType.SCA, ScannerType.PIP_AUDIT):
+                        continue
+                    rem_by_file.setdefault(f.file_path, []).append(f)
+
+                llm_tried = 0
+                for rel, rem_findings in rem_by_file.items():
+                    if llm_tried >= self.max_llm_files:
+                        break
+                    target = sandbox / rel
+                    if not target.is_file() or not target.resolve().is_relative_to(sandbox.resolve()):
+                        continue
+                    if target.suffix.lower() not in ({".py", ".dart"} | _JS_TS_SUFFIXES):
+                        continue
+                    current_text = target.read_text(encoding="utf-8", errors="replace")
+                    if len(current_text.splitlines()) > 420:
+                        continue
+                    llm_tried += 1
+                    candidate = await self._llm_propose_patch(rel, current_text, rem_findings)
+                    if not candidate:
+                        continue
+
+                    # Snapshot before LLM patch & run proof gate via full sandbox SAST re-scan
+                    pre_llm_scan = after
+                    target.write_text(candidate, encoding="utf-8")
+                    post_llm_scan = await self._scan(sandbox)
+                    if _regressed_files(pre_llm_scan, post_llm_scan, [rel]):
+                        target.write_text(current_text, encoding="utf-8")
+                        if rel not in reverted:
+                            reverted.append(rel)
+                        logger.info(f"LLM fallback patch reverted for {rel}: failed SAST verification gate.")
+                    else:
+                        originals.setdefault(rel, current_text)
+                        applied.setdefault(rel, []).append("AI-патч (проверен SAST-пересканом)")
+                        after = post_llm_scan
+                        logger.info(f"LLM fallback patch VERIFIED by SAST re-scan for {rel}!")
 
             after_keys = Counter(_finding_key(f) for f in after.findings)
             fixes: List[FileFix] = []

@@ -21,6 +21,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { TerminalWindow, ScanEvent } from '@/components/TerminalWindow';
 import { SecurityScore } from '@/components/SecurityScore';
 import { AiCopilotChat, ChatAuditCard, ChatCommitCard, ChatMessage, ChatVerifyCard } from '@/components/AiCopilotChat';
+import { AiModelSwitcher } from '@/components/AiModelSwitcher';
 import { AuthorshipPanel, AuthorshipState, PendingVerifyChallenge } from '@/components/AuthorshipPanel';
 import { CommitsReportsPanel, RepoCommit, ReportsFeedData } from '@/components/CommitsReportsPanel';
 import { CompanionMood, OrcaCompanion } from '@/components/OrcaCompanion';
@@ -1627,10 +1628,12 @@ export default function Home() {
               commit<span className="text-[#e94a32]">.</span>guardian
             </span>
           </div>
-          <span className="hidden md:inline-flex items-center gap-1.5 font-mono text-[10.5px] px-2 py-0.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-muted-soft)]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#3fbf7f]" aria-hidden="true" />
-            <span>on-prem · 0 bytes cloud</span>
-          </span>
+          <AiModelSwitcher
+            onStatusChange={(cfg) => {
+              setOllamaOnline(cfg.is_local ? cfg.ollama_reachable : true);
+              setOllamaModel(cfg.is_local ? cfg.model : `${cfg.provider}:${cfg.model}`);
+            }}
+          />
         </div>
 
         <div className="flex items-center gap-2 shrink-0">

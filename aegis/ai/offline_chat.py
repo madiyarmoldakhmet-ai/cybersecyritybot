@@ -37,22 +37,16 @@ def is_configured_model_available(tags_payload: Any, target_model: str) -> bool:
 
 async def probe_ai_status(timeout_seconds: float = 0.8) -> Tuple[str, bool, str]:
     """Probe effective AI runtime status (mode label, online flag, and UI hint)."""
-    if not settings.air_gapped:
-        model = settings.openrouter_model if settings.llm_provider.value == "openrouter" else settings.gemini_model
-        return f"{settings.llm_provider.value} · {model}", True, "облачный провайдер (ALLOW_CLOUD_LLM=true)"
+    from aegis.core.llm_runtime import list_ollama_models, resolve_active_llm
 
-    ollama_online = False
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            resp = await client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
-            if resp.status_code == 200:
-                ollama_online = is_configured_model_available(resp.json(), settings.ollama_model)
-    except Exception:
-        ollama_online = False
+    provider, model, _, is_local = await resolve_active_llm()
+    if not is_local:
+        return f"{provider.value} · {model} (BYOK)", True, "облачный BYOK-провайдер (сессионный ключ)"
 
-    if ollama_online:
-        return f"Ollama · {settings.ollama_model} (online)", True, "локальная модель, без облака"
-    return f"Ollama · {settings.ollama_model} (standby)", False, "rule-based AppSec движок, без облака"
+    installed = await list_ollama_models(force_refresh=True)
+    if installed:
+        return f"Ollama · {model} (online)", True, "локальная модель, 0 байт в облако"
+    return f"Ollama · {model} (standby)", False, "rule-based AppSec движок, без облака"
 
 
 def format_scan_context_note(ctx: Optional[Dict[str, Any]]) -> str:
