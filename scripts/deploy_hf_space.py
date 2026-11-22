@@ -92,6 +92,7 @@ def main() -> int:
     # Configure non-secret runtime env vars on the Space
     api.add_space_variable(repo_id=repo_id, key="ENVIRONMENT", value="production")
     api.add_space_variable(repo_id=repo_id, key="ALLOW_CLOUD_LLM", value="true")
+    api.add_space_variable(repo_id=repo_id, key="OLLAMA_MODEL", value="qwen2.5-coder:1.5b")
 
     # Forward any cloud AI key present in local environment into Space Secrets (encrypted by HF)
     for provider, key_name, model_name, default_model in (

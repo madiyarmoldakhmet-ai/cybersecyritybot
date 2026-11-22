@@ -12,9 +12,10 @@ ENV PYTHONUNBUFFERED=1 \
     HOME=/home/guardian \
     SEMGREP_SEND_METRICS=off \
     PORT=7860
-# git: repository cloning for audits · fonts-dejavu-core: Cyrillic text in PDF audit reports
+# git: repo cloning · fonts-dejavu-core: Cyrillic PDF reports · curl/zstd: self-hosted Ollama binary
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends git fonts-dejavu-core curl ca-certificates zstd \
+    && curl -fsSL https://ollama.com/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements-prod.txt ./
 RUN pip install --no-cache-dir -r requirements-prod.txt
@@ -26,10 +27,10 @@ COPY web/ ./web/
 COPY demo_targets/ ./demo_targets/
 COPY scripts/ ./scripts/
 COPY .aegis.yml ./
-# UID 1000 matches Hugging Face Spaces non-root Docker requirement
-RUN useradd --create-home --uid 1000 guardian \
-    && mkdir -p /app/reports /app/data /app/temp_scans /home/guardian/.cache \
+RUN chmod +x /app/scripts/start_space.sh \
+    && useradd --create-home --uid 1000 guardian \
+    && mkdir -p /app/reports /app/data /app/temp_scans /home/guardian/.cache /home/guardian/.ollama/models \
     && chown -R guardian:guardian /app/reports /app/data /app/temp_scans /home/guardian
 USER guardian
 EXPOSE 7860
-CMD uvicorn aegis_server.main:app --host 0.0.0.0 --port ${PORT:-7860}
+CMD ["/app/scripts/start_space.sh"]

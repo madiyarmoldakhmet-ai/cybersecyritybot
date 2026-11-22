@@ -31,6 +31,7 @@ _PREFERRED_OLLAMA_MODELS: Tuple[str, ...] = (
     "qwen2.5-coder:14b",
     "qwen2.5-coder:latest",
     "qwen2.5-coder:3b",
+    "qwen2.5-coder:1.5b",
     "deepseek-coder-v2:latest",
     "deepseek-coder:6.7b",
     "codellama:latest",
