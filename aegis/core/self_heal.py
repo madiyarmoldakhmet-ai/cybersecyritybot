@@ -55,6 +55,7 @@ class FileFix(BaseModel):
     diff: str
     fixed_findings: List[str] = Field(default_factory=list)
     verified: bool = False
+    patched_content: Optional[str] = Field(default=None, exclude=True)
 
 
 class ManualAction(BaseModel):
@@ -377,6 +378,65 @@ def fix_dart_tls(text: str, findings: List[VulnerabilityFinding]) -> str:
     return pattern.sub("", text)
 
 
+def fix_js_postmessage_origin(text: str, findings: List[VulnerabilityFinding]) -> str:
+    """Replace wildcard '*' targetOrigin in postMessage(...) with explicit window.location.origin."""
+    return re.sub(
+        r"(\.postMessage\s*\([^,\n]+,\s*)(['\"])\*\2(\s*\))",
+        r"\1window.location.origin\3",
+        text,
+    )
+
+
+def fix_js_insecure_tls(text: str, findings: List[VulnerabilityFinding]) -> str:
+    """Enforce TLS certificate validation in Node.js HTTPS/Agent options."""
+    return re.sub(r"\brejectUnauthorized\s*:\s*false\b", "rejectUnauthorized: true", text)
+
+
+def fix_js_innerhtml(text: str, findings: List[VulnerabilityFinding]) -> str:
+    """Replace unsafe DOM .innerHTML = <var> assignments with .textContent = <var> when not HTML literal."""
+    def _repl(match: re.Match) -> str:
+        rhs = match.group(2).strip()
+        # Keep intentional static HTML strings untouched; fix dynamic expressions
+        if rhs.startswith(("'<", '"<', "`<")):
+            return match.group(0)
+        return f"{match.group(1)}.textContent = {match.group(2)}"
+
+    return re.sub(r"(\b\w+)\.innerHTML\s*=\s*([^\n;]+)", _repl, text)
+
+
+def fix_js_cors_wildcard(text: str, findings: List[VulnerabilityFinding]) -> str:
+    """Tighten permissive CORS origin: '*' to environment-configured origin."""
+    if "credentials" not in text:
+        return text
+    return re.sub(
+        r"\borigin\s*:\s*(['\"])\*\1",
+        "origin: process.env.CORS_ORIGIN || false",
+        text,
+    )
+
+
+def fix_js_hardcoded_secrets(text: str, findings: List[VulnerabilityFinding]) -> str:
+    """Move hardcoded JS/TS secrets in variable declarations to process.env.<NAME>."""
+    if not any(f.scanner == ScannerType.SECRET or "CWE-798" in f.cwe for f in findings):
+        return text
+    lines = text.splitlines(keepends=True)
+    changed = False
+    decl_re = re.compile(
+        r"^([ \t]*(?:export[ \t]+)?(?:const|let|var)[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)(?:[ \t]*:[ \t]*string)?[ \t]*=[ \t]*)(['\"])([^'\"\n]{8,})\3([ \t]*;?[\r\n]*)$"
+    )
+    for idx, line in enumerate(lines):
+        if not any(is_plausible_secret(t, v) for t, v in detect_secrets(line)):
+            continue
+        m = decl_re.match(line)
+        if not m:
+            continue
+        var_name = m.group(2)
+        env_key = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", var_name).upper()
+        lines[idx] = f"{m.group(1)}process.env.{env_key} ?? ''{m.group(5)}"
+        changed = True
+    return "".join(lines) if changed else text
+
+
 def _swap_node(stmt: ast.stmt, old: ast.AST, new: ast.AST) -> ast.stmt:
     """Deep-copy ``stmt`` with ``old`` (matched by position) replaced by ``new``."""
     import copy
@@ -418,6 +478,14 @@ PYTHON_FIXERS: List[Tuple[str, Callable[[str, List[VulnerabilityFinding]], str]]
     ("Секрет → переменная окружения", fix_hardcoded_secrets),
 ]
 DART_FIXERS = [("Включена проверка TLS-сертификата", fix_dart_tls)]
+JS_TS_FIXERS: List[Tuple[str, Callable[[str, List[VulnerabilityFinding]], str]]] = [
+    ("Ограничен targetOrigin в postMessage()", fix_js_postmessage_origin),
+    ("Включена проверка TLS (rejectUnauthorized: true)", fix_js_insecure_tls),
+    ("Заменён небезопасный innerHTML → textContent", fix_js_innerhtml),
+    ("Ужесточён CORS origin → process.env.CORS_ORIGIN", fix_js_cors_wildcard),
+    ("Секрет JS/TS → process.env", fix_js_hardcoded_secrets),
+]
+_JS_TS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 
 
 # --------------------------------------------------------------------------------------
@@ -477,7 +545,16 @@ class SelfHealer:
             original = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return None, []
-        fixers = PYTHON_FIXERS if path.suffix == ".py" else DART_FIXERS if path.suffix == ".dart" else []
+        suffix = path.suffix.lower()
+        fixers = (
+            PYTHON_FIXERS
+            if suffix == ".py"
+            else DART_FIXERS
+            if suffix == ".dart"
+            else JS_TS_FIXERS
+            if suffix in _JS_TS_SUFFIXES
+            else []
+        )
         text, applied = original, []
         for label, fixer in fixers:
             try:
@@ -565,7 +642,16 @@ class SelfHealer:
                     originals[rel].splitlines(keepends=True), new_text.splitlines(keepends=True),
                     fromfile=f"a/{rel}", tofile=f"b/{rel}",
                 ))
-                fixes.append(FileFix(file_path=rel, fixers=labels, diff=diff, fixed_findings=fixed, verified=bool(fixed)))
+                fixes.append(
+                    FileFix(
+                        file_path=rel,
+                        fixers=labels,
+                        diff=diff,
+                        fixed_findings=fixed,
+                        verified=bool(fixed),
+                        patched_content=new_text,
+                    )
+                )
 
             tests_passed, tests_output = await asyncio.to_thread(self._run_tests, sandbox) if applied else (None, "")
 

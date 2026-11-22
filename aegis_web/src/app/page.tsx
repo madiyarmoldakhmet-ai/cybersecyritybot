@@ -20,7 +20,7 @@ import {
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { TerminalWindow, ScanEvent } from '@/components/TerminalWindow';
 import { SecurityScore } from '@/components/SecurityScore';
-import { AiCopilotChat, ChatAuditCard, ChatMessage, ChatVerifyCard } from '@/components/AiCopilotChat';
+import { AiCopilotChat, ChatAuditCard, ChatCommitCard, ChatMessage, ChatVerifyCard } from '@/components/AiCopilotChat';
 import { AuthorshipPanel, AuthorshipState, PendingVerifyChallenge } from '@/components/AuthorshipPanel';
 import { CommitsReportsPanel, RepoCommit, ReportsFeedData } from '@/components/CommitsReportsPanel';
 import { CompanionMood, OrcaCompanion } from '@/components/OrcaCompanion';
@@ -184,6 +184,7 @@ function buildAuditChatCard(data: {
       location: `${f.file_path}:${f.line_start || 1}`,
     }));
   const repoName = data.repo_name || 'workspace';
+  const isRealRepo = repoName !== 'demo/kz-fintech-app' && !repoName.startsWith('upload/') && repoName.includes('/');
   return {
     repoName,
     commitSha: data.commit_sha || undefined,
@@ -202,7 +203,8 @@ function buildAuditChatCard(data: {
     pdfUrl: data.report_pdf_url ?? null,
     mdUrl: data.report_md_url ?? null,
     topFindings,
-    canSelfHeal: repoName === 'demo/kz-fintech-app' && list.length > 0,
+    canSelfHeal: (repoName === 'demo/kz-fintech-app' || isRealRepo) && list.length > 0,
+    isRealRepo,
   };
 }
 
@@ -324,6 +326,7 @@ export default function Home() {
   const scanWsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startScanRef = useRef<(repoUrl: string, overrideAuth?: { proofToken?: string; githubToken?: string }) => void>(() => {});
+  const autoFixActionRef = useRef<(directCommit?: boolean) => void>(() => {});
   const verifyInFlightRef = useRef(false);
   const lastFocusPollRef = useRef(0);
 
@@ -499,6 +502,10 @@ export default function Home() {
               timestamp: formatNowTime(),
             },
           ]);
+        } else if (data.type === 'action' && data.action === 'AUTOFIX') {
+          setIsTyping(false);
+          setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
+          autoFixActionRef.current(Boolean(data.direct_commit));
         } else if (data.type === 'action' && data.action === 'SCAN') {
           setIsTyping(false);
           setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
@@ -814,6 +821,11 @@ export default function Home() {
                 timestamp: formatNowTime(),
               },
             ]);
+            return;
+          }
+          if (data.action === 'AUTOFIX') {
+            setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
+            autoFixActionRef.current(Boolean(data.direct_commit));
             return;
           }
           if (data.action === 'SCAN' && data.github_url) {
@@ -1183,6 +1195,174 @@ export default function Home() {
     startScanRef.current = startScan;
   });
 
+  const handleAutoFixRepo = async (
+    repoName: string,
+    opts?: { githubToken?: string; directCommit?: boolean; messageId?: string }
+  ) => {
+    if (isHealing) return;
+    const clean = repoName.trim();
+    if (!clean) return;
+    const effectiveToken = (opts?.githubToken || authorship.githubToken || '').trim();
+    if (opts?.githubToken) {
+      setAuthorship((prev) => ({ ...prev, githubToken: opts.githubToken!.trim() }));
+    }
+
+    setIsHealing(true);
+    setOrcaChatReply('');
+    const now = formatNowTime();
+    if (!opts?.messageId) {
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== 'scan-status'),
+        {
+          id: 'scan-status',
+          role: 'assistant',
+          content: effectiveToken
+            ? `Исправляю уязвимости в \`${clean}\` → пересканирую SAST → коммичу патчи в GitHub…`
+            : `Исправляю уязвимости в \`${clean}\` и проверяю патчи пересканированием…`,
+          timestamp: now,
+        },
+      ]);
+    }
+
+    try {
+      const res = await fetch('/api/repo/autofix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          github_url: clean,
+          proof_token: authorship.proofToken || undefined,
+          github_token: effectiveToken || undefined,
+          commit_to_github: true,
+          direct_commit: Boolean(opts?.directCommit),
+          require_ownership: requireOwnership,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        const verifyCard: ChatVerifyCard | undefined =
+          data.code === 'OWNERSHIP_REQUIRED' && data.challenge_code && data.verify_url
+            ? {
+                repoName: data.repo_name || clean,
+                challengeCode: data.challenge_code,
+                verifyUrl: data.verify_url,
+                verifyFilename: data.verify_filename || 'verify.txt',
+              }
+            : undefined;
+        if (verifyCard) activatePendingVerify(verifyCard);
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== 'scan-status'),
+          {
+            id: `${Date.now()}`,
+            role: 'assistant',
+            content: verifyCard ? data.error : `⛔ ${data.error || 'Не удалось выполнить авто-исправление.'}`,
+            verifyCard,
+            timestamp: formatNowTime(),
+          },
+        ]);
+        return;
+      }
+
+      const commitCard: ChatCommitCard = {
+        repoName: data.repo_name || clean,
+        beforeScore: data.before_score ?? 0,
+        beforeGrade: data.before_grade ?? '—',
+        afterScore: data.after_score ?? 0,
+        afterGrade: data.after_grade ?? '—',
+        beforeFindings: data.before_findings ?? 0,
+        afterFindings: data.after_findings ?? 0,
+        fixedCount: data.fixed_count ?? 0,
+        fixes: Array.isArray(data.fixes) ? data.fixes : [],
+        committed: Boolean(data.committed),
+        needsToken: Boolean(data.needs_token),
+        directCommit: Boolean(data.direct_commit),
+        branchName: data.branch_name ?? null,
+        commitSha: data.commit_sha ?? null,
+        commitUrl: data.commit_url ?? null,
+        pullRequestUrl: data.pull_request_url ?? null,
+        filesCommitted: Array.isArray(data.files_committed) ? data.files_committed : [],
+        tokenCreateUrl: data.token_create_url,
+        commitMessage: data.commit_message || '',
+      };
+
+      const headline = commitCard.committed
+        ? `Готово! Исправила **${commitCard.fixedCount}** проблем (Score **${commitCard.beforeScore} → ${commitCard.afterScore}**) и сама запушила коммит в GitHub:`
+        : commitCard.fixes.length > 0
+        ? `Проверенные патчи готовы: Score **${commitCard.beforeScore} (${commitCard.beforeGrade}) → ${commitCard.afterScore} (${commitCard.afterGrade})**, находок **${commitCard.beforeFindings} → ${commitCard.afterFindings}**. Вставь GitHub Token ниже — сразу сделаю коммит!`
+        : `Проверила \`${commitCard.repoName}\`: безопасных авто-фиксов не нашлось (${commitCard.commitMessage || 'требуется ручной разбор'}).`;
+
+      setOrcaChatReply(
+        commitCard.committed
+          ? `Готово! Исправила ${commitCard.fixedCount} проблем и сама закоммитила в GitHub!`
+          : commitCard.fixes.length > 0
+          ? `Патчи готовы и проверены: Score вырос с ${commitCard.beforeScore} до ${commitCard.afterScore}! Вставь токен — закоммичу в GitHub.`
+          : 'Безопасных авто-фиксов для этих находок нет — нужен ручной разбор.'
+      );
+
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== 'scan-status');
+        if (opts?.messageId) {
+          return filtered.map((m) =>
+            m.id === opts.messageId
+              ? { ...m, content: headline, commitCard, timestamp: formatNowTime() }
+              : m
+          );
+        }
+        return [
+          ...filtered,
+          {
+            id: `${Date.now()}`,
+            role: 'assistant',
+            content: headline,
+            commitCard,
+            timestamp: formatNowTime(),
+          },
+        ];
+      });
+
+      if (commitCard.fixes.length > 0) {
+        setHealReport(data);
+        setSecurityScore(data.after_score);
+        setGrade(data.after_grade);
+      }
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== 'scan-status'),
+        {
+          id: `${Date.now()}`,
+          role: 'assistant',
+          content: `⛔ Ошибка сети при авто-исправлении: ${err}`,
+          timestamp: formatNowTime(),
+        },
+      ]);
+    } finally {
+      setIsHealing(false);
+    }
+  };
+
+  useEffect(() => {
+    autoFixActionRef.current = (directCommit = false) => {
+      if (activeTarget === 'demo/kz-fintech-app') {
+        void handleDemoHeal();
+        return;
+      }
+      if (activeTarget && !activeTarget.startsWith('upload/') && activeTarget.includes('/')) {
+        void handleAutoFixRepo(activeTarget, { directCommit });
+        return;
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}`,
+          role: 'assistant',
+          content:
+            'Сначала вставь ссылку на свой GitHub-репозиторий (например `https://github.com/owner/repo`) или нажми **«Демо-аудит»**, чтобы я нашла баги, исправила их и сделала коммит!',
+          timestamp: formatNowTime(),
+        },
+      ]);
+    };
+  });
+
   const handleDemoHeal = async () => {
     if (isHealing) return;
     setIsHealing(true);
@@ -1406,7 +1586,13 @@ export default function Home() {
     authorship.target,
   ]);
 
-  const canSelfHealDemo = activeTarget === 'demo/kz-fintech-app' && findings.length > 0 && !healReport;
+  const isRealActiveRepo =
+    Boolean(activeTarget) &&
+    activeTarget !== 'demo/kz-fintech-app' &&
+    !activeTarget.startsWith('upload/') &&
+    activeTarget.includes('/');
+  const canSelfHealDemo =
+    (activeTarget === 'demo/kz-fintech-app' || isRealActiveRepo) && findings.length > 0 && !healReport;
 
   return (
     <div className="h-dvh w-full overflow-hidden bg-[var(--color-canvas)] text-[var(--color-ink)] font-sans flex flex-col">
@@ -1511,7 +1697,13 @@ export default function Home() {
             authorshipVerified={authorship.verified}
             canSelfHeal={canSelfHealDemo}
             onDemoScan={handleDemoScan}
-            onTriggerSelfHeal={handleDemoHeal}
+            onTriggerSelfHeal={() => {
+              if (isRealActiveRepo) {
+                void handleAutoFixRepo(activeTarget);
+              } else {
+                void handleDemoHeal();
+              }
+            }}
             onUploadZipClick={() => document.getElementById(zipInputId)?.click()}
             onOpenDrawer={openDrawerTab}
           />
@@ -1528,6 +1720,9 @@ export default function Home() {
             onResetChat={handleResetChat}
             onUploadZip={handleZipUpload}
             onTriggerSelfHeal={handleDemoHeal}
+            onAutoFixRepo={(repo, opts) => {
+              void handleAutoFixRepo(repo, opts);
+            }}
             onOpenFindingsDrawer={() => openDrawerTab('findings')}
             onOpenAuthorshipDrawer={() => openDrawerTab('authorship')}
             onCheckVerifyNow={(repo, code) => {

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -25,6 +26,7 @@ from aegis.core.audit_pipeline import AuditArtifacts, finalize_scan_audit
 from aegis.core.demo_history import materialize_demo_repo
 from aegis.core.event_bus import ScanEventBus
 from aegis.core.git_clone import clone_repo_resilient, extract_git_metadata
+from aegis.core.pr_creator import PullRequestCreator
 from aegis.core.self_heal import SelfHealer
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.models import SASTScanResult
@@ -273,6 +275,132 @@ async def heal_demo():
         }
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+class RepoAutoFixRequest(BaseModel):
+    github_url: str
+    proof_token: Optional[str] = None
+    github_token: Optional[str] = None
+    commit_to_github: bool = True
+    direct_commit: bool = False
+    commit_message: Optional[str] = None
+    require_ownership: bool = True
+
+
+_GH_TOKEN_CREATE_URL = (
+    "https://github.com/settings/tokens/new?scopes=repo&description=Commit+Guardian+Auto-Commit"
+)
+
+
+@app.post("/api/repo/autofix")
+async def autofix_and_commit_repo(req: RepoAutoFixRequest):
+    """
+    Claude-Code-style Auto-Fix & Atomic GitHub Commit/PR pipeline for a verified GitHub repository:
+    1. Strictly verifies repository ownership (proof_token or github_token).
+    2. Clones repo into isolated temp dir, runs SelfHealer (AST/JS/TS/Python/Dart fixers + SAST re-scan).
+    3. If verified patches exist and github_token is provided, pushes 1 atomic commit (new branch + PR, or direct commit).
+    4. Always deletes cloned source code immediately after completion.
+    """
+    repo_name = OwnershipVerifier.parse_github_repo(req.github_url.strip())
+    if not repo_name:
+        return JSONResponse(status_code=400, content={"error": "Неверный формат GitHub URL или owner/repo."})
+
+    allowed, _, _, _, _, auth_msg, challenge_info = await _authorize_ws_scan(
+        repo_name, req.github_token, req.proof_token, req.require_ownership
+    )
+    if not allowed:
+        err_body: Dict[str, Any] = {
+            "error": auth_msg,
+            "code": "OWNERSHIP_REQUIRED",
+            "repo_name": repo_name,
+        }
+        if challenge_info:
+            err_body.update(challenge_info)
+        return JSONResponse(status_code=403, content=err_body)
+
+    work_dir = SCANS_DIR / f"autofix_{uuid.uuid4().hex[:12]}"
+    repo_dir = work_dir / "repo"
+    try:
+        user_token = (req.github_token or "").strip()
+        clone_token = user_token or (settings.github_token or "")
+        outcome = await clone_repo_resilient(repo_name, repo_dir, token=clone_token)
+        if not outcome.success:
+            return JSONResponse(
+                status_code=502,
+                content={"error": outcome.error or f"Не удалось клонировать репозиторий {repo_name}."},
+            )
+
+        report = await SelfHealer().heal(repo_dir)
+        verified_fixes = [f for f in report.fixes if f.verified and f.patched_content is not None]
+
+        commit_result: Dict[str, Any] = {
+            "committed": False,
+            "needs_token": False,
+            "direct_commit": req.direct_commit,
+            "branch_name": None,
+            "base_branch": None,
+            "commit_sha": None,
+            "commit_url": None,
+            "pull_request_url": None,
+            "files_committed": [],
+            "token_create_url": _GH_TOKEN_CREATE_URL,
+            "commit_message": "",
+        }
+
+        if not verified_fixes:
+            commit_result["commit_message"] = (
+                "Авто-фиксер проверил код: безопасных автоматических патчей не найдено "
+                "(оставшиеся пункты требуют ручного ревью — смотри детали ниже)."
+            )
+        elif req.commit_to_github and user_token:
+            file_updates = [(f.file_path, f.patched_content or "") for f in verified_fixes]
+            summary_lines = [
+                f"{f.file_path}: {', '.join(f.fixers)} ({len(f.fixed_findings)} испр.)"
+                for f in verified_fixes
+            ]
+            gh_res = await PullRequestCreator.commit_multi_file_fixes(
+                token=user_token,
+                repo_identifier=repo_name,
+                file_updates=file_updates,
+                summary_lines=summary_lines,
+                before_score=report.before_score,
+                after_score=report.after_score,
+                before_grade=report.before_grade,
+                after_grade=report.after_grade,
+                fixed_count=report.fixed_count,
+                direct_commit=req.direct_commit,
+                commit_message=req.commit_message,
+            )
+            commit_result.update({
+                "committed": bool(gh_res.get("committed")),
+                "needs_token": not bool(gh_res.get("committed")),
+                "direct_commit": bool(gh_res.get("direct_commit", req.direct_commit)),
+                "branch_name": gh_res.get("branch_name"),
+                "base_branch": gh_res.get("base_branch"),
+                "commit_sha": gh_res.get("commit_sha"),
+                "commit_url": gh_res.get("commit_url"),
+                "pull_request_url": gh_res.get("pull_request_url"),
+                "files_committed": gh_res.get("files_committed") or [],
+                "commit_message": gh_res.get("message") or "",
+            })
+        else:
+            commit_result["needs_token"] = True
+            commit_result["commit_message"] = (
+                f"Найдено и подтверждено пересканированием {report.fixed_count} исправлений "
+                f"в {len(verified_fixes)} файл(ах). Вставь GitHub Token (scope repo) — "
+                f"я сама запушу атомарный коммит в `{repo_name}`!"
+            )
+
+        return {
+            "status": "success",
+            "repo_name": repo_name,
+            "fixed_count": report.fixed_count,
+            **report.model_dump(),
+            **commit_result,
+        }
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        logger.info("Код удалён с сервера (autofix)")
 
 
 @app.post("/api/scan/upload")
@@ -640,6 +768,28 @@ async def _try_handle_bot_command(data: str) -> Optional[Dict[str, Any]]:
         except ValueError as err:
             return {"reply": f"⛔ {err}", "ai_generated": False}
 
+    # 1.5. /autofix or natural Russian intent ("исправь и закоммить", "пофикси и запушь")
+    low = text.lower()
+    autofix_intent = (
+        low.startswith(("/autofix", "/fix", "/heal", "/commit"))
+        or bool(re.search(r"\bавтофикс", low))
+        or (
+            re.search(r"(исправ|пофикс|почин|самоисцел|запатч|фикс)", low)
+            and re.search(
+                r"(коммит|закоммит|commit|пуш|запуш|push|\bpr\b|\bпр\b|pull\s*request|github|гитхаб)",
+                low,
+            )
+        )
+    )
+    if autofix_intent:
+        direct = bool(re.search(r"(прямо в main|сразу в main|--direct|direct)", low))
+        return {
+            "action": "AUTOFIX",
+            "direct_commit": direct,
+            "reply": "Запускаю Auto-Fix & Commit (как Claude Code): исправляю баги → пересканирую → готовлю атомарный коммит в GitHub…",
+            "ai_generated": False,
+        }
+
     # 2. GitHub URL anywhere in message OR clean bare owner/repo message
     repo_candidate = next((w for w in text.split() if "github.com/" in w), None)
     if repo_candidate:
@@ -743,6 +893,14 @@ async def websocket_chat(websocket: WebSocket):
                         "type": "verify_challenge",
                         "message": reply,
                         **cmd_result["verify_challenge"],
+                    })
+                    await websocket.send_json({"type": "done"})
+                    continue
+                if cmd_result.get("action") == "AUTOFIX":
+                    await websocket.send_json({
+                        "type": "action",
+                        "action": "AUTOFIX",
+                        "direct_commit": bool(cmd_result.get("direct_commit")),
                     })
                     await websocket.send_json({"type": "done"})
                     continue

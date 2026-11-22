@@ -11,6 +11,8 @@ import {
   FileDown,
   FileText,
   GitBranch,
+  GitCommitHorizontal,
+  GitPullRequest,
   HeartPulse,
   KeyRound,
   Loader2,
@@ -21,6 +23,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Upload,
+  Wrench,
 } from 'lucide-react';
 import { OrcaMiniAvatar, OrcaMood } from '@/components/OrcaRigSvg';
 import { cn } from '@/lib/utils';
@@ -31,6 +34,36 @@ export type ChatVerifyCard = {
   verifyUrl: string;
   verifyFilename?: string;
   verified?: boolean;
+};
+
+export type ChatCommitFixItem = {
+  file_path: string;
+  fixers: string[];
+  diff: string;
+  fixed_findings: string[];
+  verified: boolean;
+};
+
+export type ChatCommitCard = {
+  repoName: string;
+  beforeScore: number;
+  beforeGrade: string;
+  afterScore: number;
+  afterGrade: string;
+  beforeFindings: number;
+  afterFindings: number;
+  fixedCount: number;
+  fixes: ChatCommitFixItem[];
+  committed: boolean;
+  needsToken?: boolean;
+  directCommit?: boolean;
+  branchName?: string | null;
+  commitSha?: string | null;
+  commitUrl?: string | null;
+  pullRequestUrl?: string | null;
+  filesCommitted?: string[];
+  tokenCreateUrl?: string;
+  commitMessage?: string;
 };
 
 export type ChatAuditCard = {
@@ -52,6 +85,7 @@ export type ChatAuditCard = {
   mdUrl?: string | null;
   topFindings?: { severity: string; title: string; location: string }[];
   canSelfHeal?: boolean;
+  isRealRepo?: boolean;
 };
 
 export type ChatMessage = {
@@ -61,6 +95,7 @@ export type ChatMessage = {
   timestamp: string;
   auditCard?: ChatAuditCard;
   verifyCard?: ChatVerifyCard;
+  commitCard?: ChatCommitCard;
 };
 
 interface AiCopilotChatProps {
@@ -72,6 +107,7 @@ interface AiCopilotChatProps {
   onResetChat: () => void;
   onUploadZip: (file: File) => void;
   onTriggerSelfHeal?: () => void;
+  onAutoFixRepo?: (repoName: string, opts?: { githubToken?: string; directCommit?: boolean; messageId?: string }) => void;
   onOpenFindingsDrawer?: () => void;
   onOpenAuthorshipDrawer?: () => void;
   onCheckVerifyNow?: (repoName: string, challengeCode: string) => void;
@@ -89,9 +125,9 @@ interface AiCopilotChatProps {
 }
 
 const QUICK_PROMPTS = [
+  'Исправь и закоммить в GitHub',
   'Объясни критичные баги',
   'Оцени риск в тенге (КоАП РК)',
-  'Самоисцеление и Git-секреты',
   'Как работает проверка авторства?',
 ];
 
@@ -188,11 +224,13 @@ function formatKztInline(n: number): string {
 function TelegramAuditCard({
   card,
   onTriggerSelfHeal,
+  onAutoFixRepo,
   onOpenFindingsDrawer,
   isHealing,
 }: {
   card: ChatAuditCard;
   onTriggerSelfHeal?: () => void;
+  onAutoFixRepo?: (repoName: string, opts?: { githubToken?: string; directCommit?: boolean; messageId?: string }) => void;
   onOpenFindingsDrawer?: () => void;
   isHealing?: boolean;
 }) {
@@ -302,15 +340,31 @@ function TelegramAuditCard({
             <span>Markdown (.md)</span>
           </a>
         )}
-        {card.canSelfHeal && onTriggerSelfHeal && (
+        {card.canSelfHeal && (card.isRealRepo ? onAutoFixRepo : onTriggerSelfHeal) && (
           <button
             type="button"
             disabled={isHealing}
-            onClick={onTriggerSelfHeal}
+            onClick={() => {
+              if (card.isRealRepo && onAutoFixRepo) {
+                onAutoFixRepo(card.repoName);
+              } else if (onTriggerSelfHeal) {
+                onTriggerSelfHeal();
+              }
+            }}
             className="min-h-8 px-3 py-1.5 rounded-lg bg-[#3fbf7f] hover:bg-[#34a96e] text-[#09120d] disabled:opacity-60 font-mono text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
           >
-            <HeartPulse className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>{isHealing ? 'Исцеляю...' : 'Self-Heal'}</span>
+            {card.isRealRepo ? (
+              <Wrench className="w-3.5 h-3.5" aria-hidden="true" />
+            ) : (
+              <HeartPulse className="w-3.5 h-3.5" aria-hidden="true" />
+            )}
+            <span>
+              {isHealing
+                ? 'Патчу и коммичу…'
+                : card.isRealRepo
+                ? 'Исправить и закоммитить'
+                : 'Self-Heal'}
+            </span>
           </button>
         )}
         {onOpenFindingsDrawer && card.totalFindings > 0 && (
@@ -452,6 +506,199 @@ function InlineVerifyCard({
   );
 }
 
+function InlineCommitCard({
+  card,
+  messageId,
+  isHealing,
+  onCommitWithToken,
+}: {
+  card: ChatCommitCard;
+  messageId: string;
+  isHealing?: boolean;
+  onCommitWithToken?: (repoName: string, opts?: { githubToken?: string; directCommit?: boolean; messageId?: string }) => void;
+}) {
+  const [token, setToken] = useState('');
+  const [directCommit, setDirectCommit] = useState(Boolean(card.directCommit));
+
+  return (
+    <div className="mt-1.5 rounded-xl border border-[#3fbf7f]/45 bg-[var(--color-canvas)] p-3.5 space-y-3 text-xs">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--color-line)]">
+        <div className="min-w-0">
+          <div className="font-mono text-[10px] uppercase tracking-wider text-[#3fbf7f] inline-flex items-center gap-1.5">
+            <Wrench className="w-3 h-3 shrink-0" aria-hidden="true" />
+            <span>Auto-Fix &amp; Commit</span>
+          </div>
+          <div className="font-mono text-xs font-medium text-[var(--color-ink)] truncate">
+            {card.repoName}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 font-mono text-[11px] tabular-nums shrink-0">
+          <span className="px-2 py-0.5 rounded bg-[#3fbf7f]/15 text-[#3fbf7f] border border-[#3fbf7f]/35 font-semibold">
+            {card.beforeScore} ({card.beforeGrade}) → {card.afterScore} ({card.afterGrade})
+          </span>
+          <span className="px-2 py-0.5 rounded bg-[var(--color-panel)] border border-[var(--color-line)] text-[var(--color-muted-soft)]">
+            фикс: {card.fixedCount}
+          </span>
+        </div>
+      </div>
+
+      {/* Verified Claude-Code-style Diffs */}
+      {card.fixes.length > 0 && (
+        <div className="space-y-2">
+          {card.fixes.slice(0, 4).map((fix) => (
+            <details
+              key={fix.file_path}
+              open={card.fixes.length <= 2}
+              className="rounded-lg border border-[var(--color-line)] bg-[#0a0a0d] overflow-hidden"
+            >
+              <summary className="px-3 py-1.5 font-mono text-[11px] text-[#ededed] flex items-center justify-between gap-2 cursor-pointer select-none bg-[#121216]">
+                <span className="truncate">{fix.file_path}</span>
+                <span className="text-[10px] text-[#3fbf7f] shrink-0">{fix.fixers.join(' · ')}</span>
+              </summary>
+              <pre className="p-2.5 overflow-x-auto font-mono text-[10.5px] leading-relaxed max-h-48">
+                {fix.diff.split('\n').slice(0, 32).map((line, idx) => (
+                  <div
+                    key={idx}
+                    className={
+                      line.startsWith('+') && !line.startsWith('+++')
+                        ? 'text-[#3fbf7f] bg-[#3fbf7f]/10'
+                        : line.startsWith('-') && !line.startsWith('---')
+                        ? 'text-[#ff735d] bg-[#e94a32]/10'
+                        : line.startsWith('@@')
+                        ? 'text-sky-300'
+                        : 'text-[#8e8d88]'
+                    }
+                  >
+                    {line || ' '}
+                  </div>
+                ))}
+              </pre>
+            </details>
+          ))}
+        </div>
+      )}
+
+      {/* Commit Result OR 1-click GitHub Token Commit Action */}
+      {card.committed ? (
+        <div className="rounded-lg border border-[#3fbf7f]/45 bg-[#3fbf7f]/12 p-3 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs text-[#3fbf7f]">
+            <span className="inline-flex items-center gap-1.5 font-semibold">
+              <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span>Закоммичено в GitHub</span>
+            </span>
+            <span className="text-[11px] text-[var(--color-ink)]">
+              {card.branchName && <code>{card.branchName}</code>}
+              {card.commitSha && <> · <code>{card.commitSha.slice(0, 7)}</code></>}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {card.pullRequestUrl && (
+              <a
+                href={card.pullRequestUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="min-h-8 px-3 py-1.5 rounded-lg bg-[#3fbf7f] hover:bg-[#34a96e] text-[#09120d] font-mono text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors"
+              >
+                <GitPullRequest className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Открыть Pull Request</span>
+                <ExternalLink className="w-3 h-3" aria-hidden="true" />
+              </a>
+            )}
+            {card.commitUrl && (
+              <a
+                href={card.commitUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="min-h-8 px-3 py-1.5 rounded-lg border border-[var(--color-line-strong)] hover:border-[#3fbf7f] bg-[var(--color-paper)] text-[var(--color-ink)] font-mono text-[11px] inline-flex items-center gap-1.5 transition-colors"
+              >
+                <GitCommitHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Открыть коммит</span>
+                <ExternalLink className="w-3 h-3" aria-hidden="true" />
+              </a>
+            )}
+          </div>
+        </div>
+      ) : card.needsToken && card.fixes.length > 0 && onCommitWithToken ? (
+        <div className="rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-paper)] p-3 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-mono text-[11px] text-[var(--color-ink)] font-medium">
+              Запушить эти патчи коммитом в GitHub
+            </span>
+            <a
+              href={
+                card.tokenCreateUrl ||
+                'https://github.com/settings/tokens/new?scopes=repo&description=Commit+Guardian+Auto-Commit'
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-[10.5px] text-sky-400 hover:underline inline-flex items-center gap-1"
+            >
+              <span>Создать Token (1 клик)</span>
+              <ExternalLink className="w-3 h-3" aria-hidden="true" />
+            </a>
+          </div>
+
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Вставь GitHub Token (ghp_... с правом repo) — не сохраняется на сервере"
+            className="w-full min-h-8 px-2.5 py-1.5 rounded-lg bg-[var(--color-canvas)] border border-[var(--color-line)] focus:border-[#3fbf7f] text-xs font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="inline-flex rounded-lg border border-[var(--color-line)] p-0.5 bg-[var(--color-canvas)] font-mono text-[10.5px]">
+              <button
+                type="button"
+                onClick={() => setDirectCommit(false)}
+                className={cn(
+                  'px-2 py-1 rounded-md transition-colors cursor-pointer',
+                  !directCommit
+                    ? 'bg-[var(--color-panel)] text-[var(--color-ink)] font-medium'
+                    : 'text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                )}
+              >
+                Ветка + PR
+              </button>
+              <button
+                type="button"
+                onClick={() => setDirectCommit(true)}
+                className={cn(
+                  'px-2 py-1 rounded-md transition-colors cursor-pointer',
+                  directCommit
+                    ? 'bg-[var(--color-panel)] text-[var(--color-ink)] font-medium'
+                    : 'text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                )}
+              >
+                Сразу в main
+              </button>
+            </div>
+
+            <button
+              type="button"
+              disabled={!token.trim() || isHealing}
+              onClick={() =>
+                onCommitWithToken(card.repoName, {
+                  githubToken: token.trim(),
+                  directCommit,
+                  messageId,
+                })
+              }
+              className="min-h-8 px-3 py-1.5 rounded-lg bg-[#3fbf7f] hover:bg-[#34a96e] disabled:opacity-45 text-[#09120d] font-mono text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <GitCommitHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{isHealing ? 'Коммичу…' : 'Закоммитить в GitHub'}</span>
+            </button>
+          </div>
+        </div>
+      ) : card.commitMessage ? (
+        <p className="font-mono text-[11px] text-[var(--color-muted-soft)] leading-relaxed">{card.commitMessage}</p>
+      ) : null}
+    </div>
+  );
+}
+
 export function AiCopilotChat({
   messages,
   input,
@@ -461,6 +708,7 @@ export function AiCopilotChat({
   onResetChat,
   onUploadZip,
   onTriggerSelfHeal,
+  onAutoFixRepo,
   onOpenFindingsDrawer,
   onOpenAuthorshipDrawer,
   onCheckVerifyNow,
@@ -575,7 +823,11 @@ export function AiCopilotChat({
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
           const isStreaming = msg.id === 'streaming' || msg.id === 'scan-status';
-          const avatarMood: OrcaMood = msg.verifyCard
+          const avatarMood: OrcaMood = msg.commitCard
+            ? msg.commitCard.committed
+              ? 'happy'
+              : 'idle'
+            : msg.verifyCard
             ? msg.verifyCard.verified
               ? 'happy'
               : 'blocked'
@@ -628,10 +880,19 @@ export function AiCopilotChat({
                     onOpenAuthorshipDrawer={onOpenAuthorshipDrawer}
                   />
                 )}
+                {msg.commitCard && (
+                  <InlineCommitCard
+                    card={msg.commitCard}
+                    messageId={msg.id}
+                    isHealing={isHealing}
+                    onCommitWithToken={onAutoFixRepo}
+                  />
+                )}
                 {msg.auditCard && (
                   <TelegramAuditCard
                     card={msg.auditCard}
                     onTriggerSelfHeal={onTriggerSelfHeal}
+                    onAutoFixRepo={onAutoFixRepo}
                     onOpenFindingsDrawer={onOpenFindingsDrawer}
                     isHealing={isHealing}
                   />

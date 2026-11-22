@@ -763,4 +763,113 @@ async def test_zero_terminal_verify_contents_api_and_repo_description():
     assert "madiyar-patch-2" in msg3
 
 
+@pytest.mark.asyncio
+async def test_autofix_js_ts_and_atomic_github_commit(tmp_path: Path):
+    from aegis.core.self_heal import (
+        FileFix,
+        HealingReport,
+        SelfHealer,
+        fix_js_innerhtml,
+        fix_js_insecure_tls,
+        fix_js_postmessage_origin,
+    )
+    from aegis.core.verifier import OwnershipVerifier
+    from aegis.core.pr_creator import PullRequestCreator
+    from aegis.core import git_clone
+    from aegis_server.main import app
+
+    # 1. JS/TS deterministic fixers
+    assert "window.location.origin" in fix_js_postmessage_origin("window.parent.postMessage(data, '*');", [])
+    assert "rejectUnauthorized: true" in fix_js_insecure_tls("const agent = new Agent({ rejectUnauthorized: false });", [])
+    assert "el.textContent = userBio" in fix_js_innerhtml("el.innerHTML = userBio;", [])
+
+    # 2. Chat intent triggers AUTOFIX
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        chat_res = await client.post("/api/chat", json={"message": "исправь баги и закоммить в репо"})
+        assert chat_res.status_code == 200
+        assert chat_res.json()["action"] == "AUTOFIX"
+
+        # 3. Unverified repo MUST be blocked on /api/repo/autofix
+        blocked = await client.post(
+            "/api/repo/autofix",
+            json={"github_url": "https://github.com/other/repo"},
+        )
+        assert blocked.status_code == 403
+        assert blocked.json()["code"] == "OWNERSHIP_REQUIRED"
+
+        # 4. Verified repo with github_token runs SelfHealer + atomic multi-file commit
+        proof = OwnershipVerifier.create_proof_token("madiyar/growthlab", "commit_challenge", "madiyar")
+        fake_report = HealingReport(
+            before_score=55,
+            before_grade="D",
+            after_score=95,
+            after_grade="A+",
+            before_findings=2,
+            after_findings=0,
+            fixes=[
+                FileFix(
+                    file_path="src/web.ts",
+                    fixers=["Ограничен targetOrigin в postMessage()"],
+                    diff="-postMessage(x, '*')\n+postMessage(x, window.location.origin)\n",
+                    fixed_findings=["postMessage wildcard"],
+                    verified=True,
+                    patched_content="window.parent.postMessage(x, window.location.origin);\n",
+                )
+            ],
+        )
+
+        async def _fake_clone(repo_url, dest_dir, token=None, on_status=None):
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            return git_clone.CloneOutcome(success=True, mode="full")
+
+        fake_commit = {
+            "success": True,
+            "committed": True,
+            "direct_commit": False,
+            "branch_name": "aegis/autofix-20261122-170000",
+            "base_branch": "main",
+            "commit_sha": "abcdef1234567890",
+            "commit_url": "https://github.com/madiyar/growthlab/commit/abcdef1234567890",
+            "pull_request_url": "https://github.com/madiyar/growthlab/pull/5",
+            "files_committed": ["src/web.ts"],
+            "message": "Коммит запушен и открыт PR.",
+        }
+
+        with (
+            patch("aegis_server.main.clone_repo_resilient", side_effect=_fake_clone),
+            patch.object(SelfHealer, "heal", AsyncMock(return_value=fake_report)),
+            patch.object(PullRequestCreator, "commit_multi_file_fixes", AsyncMock(return_value=fake_commit)) as mock_commit,
+        ):
+            # Case A: without github_token -> returns diffs + needs_token=True
+            r_preview = await client.post(
+                "/api/repo/autofix",
+                json={"github_url": "madiyar/growthlab", "proof_token": proof},
+            )
+            assert r_preview.status_code == 200
+            dp = r_preview.json()
+            assert dp["committed"] is False
+            assert dp["needs_token"] is True
+            assert dp["fixed_count"] == 1
+            assert dp["after_score"] == 95
+            assert mock_commit.await_count == 0
+
+            # Case B: with github_token -> calls atomic commit & returns PR + commit URL
+            r_commit = await client.post(
+                "/api/repo/autofix",
+                json={
+                    "github_url": "madiyar/growthlab",
+                    "proof_token": proof,
+                    "github_token": "ghp_testtoken1234567890",
+                    "direct_commit": False,
+                },
+            )
+            assert r_commit.status_code == 200
+            dc = r_commit.json()
+            assert dc["committed"] is True
+            assert dc["commit_sha"] == "abcdef1234567890"
+            assert dc["pull_request_url"].endswith("/pull/5")
+            mock_commit.assert_awaited_once()
+
+
+
 
