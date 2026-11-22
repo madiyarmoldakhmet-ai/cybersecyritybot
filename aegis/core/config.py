@@ -127,8 +127,8 @@ class Settings(BaseSettings):
         description="Google Gemini API key for fallback/cloud inference"
     )
     gemini_model: str = Field(
-        default="gemini-3.8-flash",
-        description="Gemini model identifier"
+        default="gemini-3.1-pro-preview",
+        description="Gemini Pro model identifier (auto-resolves highest available Pro model)"
     )
     openrouter_api_key: Optional[str] = Field(
         default=None,

@@ -899,12 +899,14 @@ async def http_chat(req: ChatHttpRequest):
         _APPSEC_CHAT_SYSTEM_PROMPT,
         user_content,
         temperature=0.45,
-        max_tokens=700,
-        timeout=20.0,
+        max_tokens=1200,
+        timeout=28.0,
         task_label="HTTPChat",
     )
     if reply:
-        return {"reply": reply, "ai_generated": True, "model": resolved_model}
+        status_after = await get_runtime_status()
+        actual_model = status_after.get("last_used_model") or status_after.get("model") or resolved_model
+        return {"reply": reply, "ai_generated": True, "model": actual_model}
 
     return {
         "reply": build_offline_appsec_reply(data, ctx_dict, resolved_model),
@@ -983,8 +985,8 @@ async def websocket_chat(websocket: WebSocket):
                             system_prompt,
                             combined,
                             temperature=0.45,
-                            max_tokens=700,
-                            timeout=25.0,
+                            max_tokens=1200,
+                            timeout=30.0,
                             task_label=f"WSChat:{provider.value}",
                         )
                     ) or ""

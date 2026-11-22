@@ -6,11 +6,13 @@ import { Cloud, Cpu, Lock, RefreshCw, ShieldCheck, X } from 'lucide-react';
 export interface AiEngineConfigStatus {
   provider: string;
   model: string;
+  last_used_model?: string | null;
   is_local: boolean;
   air_gapped: boolean;
   has_api_key: boolean;
   ollama_reachable: boolean;
   ollama_models: string[];
+  gemini_models?: string[];
   recommended_local_model?: string;
   default_byok_models?: Record<string, string>;
 }
@@ -22,7 +24,7 @@ interface AiModelSwitcherProps {
 const BYOK_PROVIDERS = [
   { id: 'openrouter', label: 'OpenRouter', defaultModel: 'anthropic/claude-3.5-sonnet', hint: 'sk-or-v1-...' },
   { id: 'anthropic', label: 'Claude', defaultModel: 'claude-sonnet-4-20250514', hint: 'sk-ant-...' },
-  { id: 'gemini', label: 'Gemini', defaultModel: 'gemini-3.8-flash', hint: 'AIza... / AQ...' },
+  { id: 'gemini', label: 'Gemini', defaultModel: 'gemini-3.1-pro-preview', hint: 'AIza... / AQ...' },
   { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o-mini', hint: 'sk-...' },
 ] as const;
 
@@ -338,11 +340,19 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                 <input
                   id={`${baseId}-byok-model`}
                   type="text"
+                  list={byokProvider === 'gemini' && status?.gemini_models?.length ? `${baseId}-gemini-models` : undefined}
                   value={byokModel}
                   onChange={(e) => setByokModel(e.target.value)}
                   placeholder={activeByokMeta.defaultModel}
                   className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 font-mono text-xs text-[var(--color-ink)]"
                 />
+                {byokProvider === 'gemini' && status?.gemini_models && status.gemini_models.length > 0 && (
+                  <datalist id={`${baseId}-gemini-models`}>
+                    {status.gemini_models.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -389,7 +399,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
               </button>
             ) : (
               <span className="font-mono text-[10.5px] text-[var(--color-muted-soft)]">
-                12 сканеров + AI Logic + Auto-Fix
+                13 сканеров + Backdoor + AI Logic + Auto-Fix
               </span>
             )}
             <button

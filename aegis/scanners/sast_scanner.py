@@ -1083,12 +1083,14 @@ class SASTScanner:
         from aegis.scanners.sca_scanner import SCAScanner
         from aegis.scanners.nextjs_scanner import NextJSSecurityScanner
         from aegis.scanners.business_logic_auditor import BusinessLogicAuditor
+        from aegis.scanners.backdoor_scanner import BackdoorScanner
 
         secret_scanner = SecretScanner()
         flutter_scanner = FlutterSecurityScanner()
         sca_scanner = SCAScanner()
         nextjs_scanner = NextJSSecurityScanner()
         logic_auditor = BusinessLogicAuditor(enable_llm=self.enable_ai_logic_llm)
+        backdoor_scanner = BackdoorScanner()
 
         # Pass event_bus to other scanners if they support it
         if hasattr(secret_scanner, 'event_bus'):
@@ -1097,11 +1099,12 @@ class SASTScanner:
             flutter_scanner.event_bus = self.event_bus
 
         # Run built-in multi-language analyzer, mobile scanner, taint engine, Next.js/JS taint,
-        # business-logic auditor, SCA, and CLI tools concurrently
+        # backdoor detector, business-logic auditor, SCA, and CLI tools concurrently
         ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
         mobile_task = asyncio.create_task(self.mobile_scanner.scan(path))
         taint_task = asyncio.create_task(self.run_taint_analysis(path))
         nextjs_task = asyncio.create_task(nextjs_scanner.scan(path))
+        backdoor_task = asyncio.create_task(backdoor_scanner.scan(path))
         logic_task = asyncio.create_task(logic_auditor.scan(path))
         sca_task = asyncio.create_task(sca_scanner.scan(path))
         semgrep_task = asyncio.create_task(self.run_semgrep(path))
@@ -1114,6 +1117,7 @@ class SASTScanner:
             mobile_findings,
             taint_findings,
             nextjs_findings,
+            backdoor_findings,
             logic_findings,
             sca_findings,
             (semgrep_findings, semgrep_err),
@@ -1125,6 +1129,7 @@ class SASTScanner:
             mobile_task,
             taint_task,
             nextjs_task,
+            backdoor_task,
             logic_task,
             sca_task,
             semgrep_task,
@@ -1134,8 +1139,8 @@ class SASTScanner:
             return_exceptions=False,
         )
 
-        # Emit real-time stream alerts for Next.js / JS Taint & Business-Logic Auditor findings
-        for f in nextjs_findings + logic_findings:
+        # Emit real-time stream alerts for Next.js / JS Taint, Backdoor & Business-Logic Auditor findings
+        for f in backdoor_findings + nextjs_findings + logic_findings:
             await self._emit(
                 VulnerabilityFound(
                     severity=f.severity.value,
@@ -1152,7 +1157,8 @@ class SASTScanner:
         history_findings = await self.run_git_history(path)
 
         raw_findings: List[VulnerabilityFinding] = (
-            mobile_findings
+            backdoor_findings
+            + mobile_findings
             + bandit_findings
             + semgrep_findings
             + ml_findings
@@ -1197,6 +1203,7 @@ class SASTScanner:
 
         duration = round(time.time() - start_time, 2)
         scanners_run = [
+            ScannerType.BACKDOOR,
             ScannerType.MOBILE,
             ScannerType.CUSTOM,
             ScannerType.NEXTJS,

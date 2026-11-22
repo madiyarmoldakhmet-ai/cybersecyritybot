@@ -30,6 +30,7 @@ class ScannerType(str, Enum):
     GIT_HISTORY = "git-history"
     NEXTJS = "nextjs"
     AI_LOGIC = "ai-logic"
+    BACKDOOR = "backdoor"
 
 
 class VulnerabilityFinding(BaseModel):

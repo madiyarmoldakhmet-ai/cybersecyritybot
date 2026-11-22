@@ -102,15 +102,16 @@ _TX_LOCK_RE = re.compile(
 )
 
 _LLM_LOGIC_SYSTEM_PROMPT = """\
-You are a senior Principal Offensive Security Engineer auditing backend API routes for REAL, exploitable BUSINESS-LOGIC vulnerabilities that static SAST tools miss.
+You are a senior Principal Offensive Security Engineer & Red-Teamer auditing backend API routes for REAL, exploitable BUSINESS-LOGIC vulnerabilities and COVERT BACKDOORS that static SAST tools miss.
 
-Focus strictly on these 6 classes:
-1. IDOR (Broken Object Level Authorization, CWE-639): endpoint accesses/modifies/deletes a record by user-supplied ID without verifying the caller owns it or is admin.
-2. BROKEN_AUTH_RBAC (CWE-862 / CWE-285): missing authentication or privilege/role check on sensitive mutations or admin routes.
-3. SSRF (CWE-918): server fetches attacker-controlled URL without host/IP allowlist.
-4. RACE_CONDITION (CWE-362): check-then-act on money/balance/credits/coupons/inventory without DB transaction or row lock.
-5. MASS_ASSIGNMENT (CWE-915): unvalidated request body fields (e.g., role, isAdmin, balance, price) written straight to DB.
-6. DATA_EXPOSURE (CWE-200): returning password hashes, tokens, secrets, or other users' PII.
+Focus strictly on these 7 classes:
+1. BACKDOOR (CWE-506 / CWE-912): covert auth bypasses (magic passwords/tokens/headers like `x-admin-bypass`, hardcoded backdoor user IDs), hidden privilege escalation branches, secret exfiltration to external URLs/webhooks, obfuscated eval/exec, or logic time-bombs.
+2. IDOR (Broken Object Level Authorization, CWE-639): endpoint accesses/modifies/deletes a record by user-supplied ID without verifying the caller owns it or is admin.
+3. BROKEN_AUTH_RBAC (CWE-862 / CWE-285): missing authentication or privilege/role check on sensitive mutations or admin routes.
+4. SSRF (CWE-918): server fetches attacker-controlled URL without host/IP allowlist.
+5. RACE_CONDITION (CWE-362): check-then-act on money/balance/credits/coupons/inventory without DB transaction or row lock.
+6. MASS_ASSIGNMENT (CWE-915): unvalidated request body fields (e.g., role, isAdmin, balance, price) written straight to DB.
+7. DATA_EXPOSURE (CWE-200): returning password hashes, tokens, secrets, or other users' PII.
 
 STRICT ANTI-HALLUCINATION RULES:
 - Report ONLY vulnerabilities that are 100% proven by the provided code lines.
@@ -149,7 +150,7 @@ class BusinessLogicAuditor:
         self,
         enable_llm: Optional[bool] = None,
         max_llm_routes: int = 3,
-        llm_timeout: float = 12.0,
+        llm_timeout: float = 28.0,
     ) -> None:
         self.extractor = RouteExtractor()
         self.enable_llm = (not bool(os.environ.get("PYTEST_CURRENT_TEST"))) if enable_llm is None else enable_llm
@@ -189,11 +190,11 @@ class BusinessLogicAuditor:
                 try:
                     llm_findings = await asyncio.wait_for(
                         self._audit_endpoints_llm(high_value, target_path),
-                        timeout=15.0,
+                        timeout=32.0,
                     )
                     findings.extend(llm_findings)
                 except asyncio.TimeoutError:
-                    logger.info("Business-Logic LLM stage hit 15s cap — returning structural findings immediately.")
+                    logger.info("Business-Logic LLM stage hit 32s cap — returning structural findings immediately.")
 
         return self._deduplicate(findings)
 
@@ -390,9 +391,10 @@ class BusinessLogicAuditor:
             _LLM_LOGIC_SYSTEM_PROMPT,
             user_prompt,
             temperature=0.05,
-            max_tokens=900,
+            max_tokens=1100,
             timeout=self.llm_timeout,
             task_label=f"LogicAudit:{ep.file_path}:{ep.line_number}",
+            deep_reasoning=True,
         )
         if not raw:
             return []

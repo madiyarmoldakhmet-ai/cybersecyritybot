@@ -662,8 +662,9 @@ class SelfHealer:
                 user_prompt,
                 temperature=0.05,
                 max_tokens=3200,
-                timeout=40.0,
+                timeout=45.0,
                 task_label=f"AutoFixLLM:{rel_path}",
+                deep_reasoning=True,
             )
 
         if not raw:
