@@ -105,7 +105,9 @@ const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
   id: 'welcome-1',
   role: 'assistant',
   content:
-    'На связи **Commit Guardian** — работает как Telegram-бот прямо в браузере.\nОтправь `github.com/owner/repo` (или просто `owner/repo`), прикрепи `.zip`, введи `/verify owner/repo` или нажми **«Демо-аудит»** — проверю коммиты, уязвимости, утечки ИИН и пришлю **PDF-отчёт** прямо сюда в чат.',
+    'На связи **Commit Guardian** — on-premise аудитор коммитов (код и ПДн не уходят в облако).\n' +
+    'Чужие GitHub-репозитории заблокированы по умолчанию: сначала подтверди авторство командой `/verify owner/repo` (или через GitHub Token во вкладке **«Авторство»**), затем отправь ссылку.\n' +
+    'Для быстрого теста без своего репо нажми **«Демо-аудит»** или прикрепи свой `.zip`.',
   timestamp: 'Сегодня',
 };
 
@@ -205,10 +207,10 @@ export default function Home() {
   const [ollamaOnline, setOllamaOnline] = useState<boolean | null>(null);
   const [ollamaModel, setOllamaModel] = useState<string>('qwen2.5-coder:14b');
 
-  // Authorship verification state
+  // Authorship verification state (always strictly enforced for external GitHub repositories)
   const [verifyTarget, setVerifyTarget] = useState('https://github.com/madiyarmoldakhmet-ai/cybersecyritybot');
   const [authorship, setAuthorship] = useState<AuthorshipState>(EMPTY_AUTHORSHIP);
-  const [requireOwnership, setRequireOwnership] = useState(false);
+  const requireOwnership = true;
   const [repoScanUrl, setRepoScanUrl] = useState('');
 
   // Scan & audit state
@@ -275,7 +277,6 @@ export default function Home() {
   const appealedCount = Object.keys(appealedMap).length;
 
   // Dialogs
-  const pricingDialogRef = useRef<HTMLDialogElement>(null);
   const fixDialogRef = useRef<HTMLDialogElement>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [remediation, setRemediation] = useState<RemediationResult | null>(null);
@@ -322,7 +323,19 @@ export default function Home() {
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        if (data.type === 'action' && data.action === 'SCAN') {
+        if (data.type === 'authorship' && data.proof_token) {
+          setAuthorship((prev) => ({
+            ...prev,
+            verified: true,
+            target: data.target || prev.target,
+            targetType: 'github',
+            method: data.method || 'commit_challenge',
+            actor: data.actor || 'verified-author',
+            role: data.role || 'CommitVerified',
+            message: data.message || `Авторство ${data.target} подтверждено.`,
+            proofToken: data.proof_token,
+          }));
+        } else if (data.type === 'action' && data.action === 'SCAN') {
           setIsTyping(false);
           setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
           startScanRef.current(data.github_url);
@@ -570,6 +583,20 @@ export default function Home() {
           });
           const data = await res.json();
           setIsTyping(false);
+          if (data.verified_authorship?.proof_token) {
+            const va = data.verified_authorship;
+            setAuthorship((prev) => ({
+              ...prev,
+              verified: true,
+              target: va.target || prev.target,
+              targetType: 'github',
+              method: va.method || 'commit_challenge',
+              actor: va.actor || 'verified-author',
+              role: va.role || 'CommitVerified',
+              message: va.message || `Авторство ${va.target} подтверждено.`,
+              proofToken: va.proof_token,
+            }));
+          }
           if (data.action === 'SCAN' && data.github_url) {
             setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
             startScanRef.current(data.github_url);
@@ -662,6 +689,10 @@ export default function Home() {
       } else {
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
+        if (data.code === 'OWNERSHIP_REQUIRED') {
+          if (data.repo_name) setVerifyTarget(data.repo_name);
+          setInspectorTab('authorship');
+        }
       }
     } catch (err) {
       setIsScanning(false);
@@ -761,6 +792,10 @@ export default function Home() {
       } else {
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
+        if (data.code === 'OWNERSHIP_REQUIRED') {
+          if (data.repo_name) setVerifyTarget(data.repo_name);
+          setInspectorTab('authorship');
+        }
       }
     } catch (err) {
       setIsScanning(false);
@@ -825,6 +860,10 @@ export default function Home() {
         finished = true;
         setIsScanning(false);
         if (timerRef.current) clearInterval(timerRef.current);
+        if (data.code === 'OWNERSHIP_REQUIRED') {
+          if (data.repo_name) setVerifyTarget(data.repo_name);
+          setInspectorTab('authorship');
+        }
         setMessages((prev) => [
           ...prev.filter((m) => m.id !== 'scan-status'),
           { id: `${Date.now()}`, role: 'assistant', content: `⛔ ${data.message}`, timestamp: formatNowTime() },
@@ -1068,13 +1107,6 @@ export default function Home() {
             <a href="/dashboard" className="hover:text-[var(--color-ink)] transition-colors">
               Мониторинг
             </a>
-            <button
-              type="button"
-              onClick={() => pricingDialogRef.current?.showModal()}
-              className="hover:text-[var(--color-ink)] transition-colors cursor-pointer"
-            >
-              Тарифы ₸
-            </button>
           </nav>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -1276,8 +1308,6 @@ export default function Home() {
                         onTargetInputChange={setVerifyTarget}
                         authorship={authorship}
                         onAuthorshipChange={setAuthorship}
-                        requireOwnership={requireOwnership}
-                        onRequireOwnershipChange={setRequireOwnership}
                         onAskAi={(q) => sendChatText(q)}
                       />
                     ) : inspectorTab === 'scanner' ? (
@@ -1594,13 +1624,6 @@ export default function Home() {
           <a href="/docs" className="hover:text-[var(--color-ink)] transition-colors">
             /docs API
           </a>
-          <button
-            type="button"
-            onClick={() => pricingDialogRef.current?.showModal()}
-            className="hover:text-[var(--color-ink)] transition-colors cursor-pointer"
-          >
-            Тарифы ₸
-          </button>
           <span>Шрифт: Medeo OFL 1.1</span>
         </div>
       </footer>
@@ -1694,57 +1717,6 @@ export default function Home() {
             {selectedFinding?.recommendation || selectedFinding?.description || 'Не удалось получить патч.'}
           </p>
         )}
-      </dialog>
-
-      {/* Native <dialog>: B2B On-Premise Pricing */}
-      <dialog
-        ref={pricingDialogRef}
-        aria-labelledby="pricing-dialog-title"
-        className="m-auto w-[min(92vw,780px)] rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-ink)] p-6 shadow-2xl"
-      >
-        <div className="flex items-start justify-between gap-4 mb-5 pb-3 border-b border-[var(--color-line)]">
-          <div>
-            <h2 id="pricing-dialog-title" className="font-sans text-2xl font-medium">
-              On-Premise архитектура и тарифы B2B
-            </h2>
-            <p className="text-xs text-[var(--color-muted-soft)] mt-1">
-              Модель B2B-подписки внутри закрытого контура компании: исходный код и ПДн не покидают серверы заказчика.
-            </p>
-          </div>
-          <form method="dialog">
-            <button
-              type="submit"
-              aria-label="Закрыть тарифы"
-              className="min-h-9 min-w-9 p-1.5 rounded-full border border-[var(--color-line)] hover:border-[#e94a32] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer inline-flex items-center justify-center"
-            >
-              <X className="w-4 h-4" aria-hidden="true" />
-            </button>
-          </form>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
-            <div className="font-mono text-xs text-[#3fbf7f]">PILOT</div>
-            <div className="text-xl font-medium font-mono mt-1 tabular-nums">0 ₸ / 14 дней</div>
-            <p className="text-xs text-[var(--color-muted-soft)] mt-2 leading-relaxed">
-              1–2 репозитория, Docker-развёртывание, алерты в Telegram и Compliance PDF для команды до 5 разработчиков.
-            </p>
-          </div>
-          <div className="rounded-xl border border-[#e94a32] bg-[var(--color-panel)] p-4">
-            <div className="font-mono text-xs text-[#e94a32]">TEAM ON-PREM</div>
-            <div className="text-xl font-medium font-mono mt-1 tabular-nums">190 000 ₸ / мес</div>
-            <p className="text-xs text-[var(--color-muted-soft)] mt-2 leading-relaxed">
-              До 25 разработчиков, локальная Ollama, политики .aegis.yml (ИИН/ПДн), PR-фиксы и SIEM JSON-логи.
-            </p>
-          </div>
-          <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
-            <div className="font-mono text-xs text-sky-400">ENTERPRISE GOV/FIN</div>
-            <div className="text-xl font-medium font-mono mt-1 tabular-nums">от 650 000 ₸ / мес</div>
-            <p className="text-xs text-[var(--color-muted-soft)] mt-2 leading-relaxed">
-              Air-gapped контур без выхода в интернет, кастомные правила комплаенса банков и госсектора, SLA и выделенный GPU.
-            </p>
-          </div>
-        </div>
       </dialog>
     </div>
   );

@@ -6,10 +6,11 @@ Initializes aiogram Dispatcher, middlewares, and starts polling.
 import asyncio
 import html
 import logging
+import time
 import uuid
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Tuple
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import CommandStart
 from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
@@ -32,6 +33,26 @@ setup_logging()
 logger = logging.getLogger("aegis.main")
 
 router = Router()
+
+# Per-user verified GitHub repository authorizations from /verify (TTL 2h)
+_VERIFIED_TG_REPOS: Dict[Tuple[int, str], float] = {}
+_TG_VERIFY_TTL_SECONDS = 7200.0
+
+
+def _mark_tg_repo_verified(user_id: Optional[int], repo_name: str) -> None:
+    if user_id is None:
+        return
+    _VERIFIED_TG_REPOS[(user_id, repo_name.lower())] = time.time() + _TG_VERIFY_TTL_SECONDS
+
+
+def _is_tg_repo_verified(user_id: Optional[int], repo_name: str) -> bool:
+    if user_id is None:
+        return False
+    exp = _VERIFIED_TG_REPOS.get((user_id, repo_name.lower()))
+    if exp and exp >= time.time():
+        return True
+    _VERIFIED_TG_REPOS.pop((user_id, repo_name.lower()), None)
+    return False
 
 
 def _is_authorized_user(user_id: Optional[int]) -> bool:
@@ -184,6 +205,10 @@ async def handle_verify_command(message: types.Message):
     if len(parts) >= 3:
         ok, msg = await OwnershipVerifier.verify_commit_challenge(target, parts[2])
         badge = "✅" if ok else "⛔"
+        if ok:
+            parsed = OwnershipVerifier.parse_github_repo(target)
+            if parsed:
+                _mark_tg_repo_verified(message.from_user.id if message.from_user else None, parsed)
         await message.reply(f"{badge} {html.escape(msg)}", parse_mode=ParseMode.HTML)
         return
 
@@ -215,9 +240,26 @@ async def handle_repo_url(message: types.Message):
         await message.reply("Отправьте ZIP-архив, ссылку на GitHub или <code>/verify owner/repo</code> для проверки авторства.", parse_mode=ParseMode.HTML)
         return
 
-    is_accessible, access_msg, _ = await OwnershipVerifier.verify_github_access(settings.github_token, repo_name)
-    if not is_accessible:
-        await message.reply(f"⛔ {html.escape(access_msg)}", parse_mode=ParseMode.HTML)
+    uid = message.from_user.id if message.from_user else None
+    ownership_ok = _is_tg_repo_verified(uid, repo_name)
+    if not ownership_ok and (settings.github_token or "").strip():
+        strict = await OwnershipVerifier.verify_repo_ownership_strict(settings.github_token or "", repo_name)
+        ownership_ok = bool(strict.get("verified"))
+
+    if not ownership_ok:
+        ch = OwnershipVerifier.issue_challenge(repo_name, "github")
+        code = html.escape(ch["challenge_code"])
+        esc_repo = html.escape(repo_name)
+        await message.reply(
+            f"⛔ <b>Сканирование чужих репозиториев запрещено.</b>\n"
+            f"Сначала подтвердите, что вы автор <code>{esc_repo}</code>:\n\n"
+            f"1) Выполните в репозитории:\n"
+            f"<code>git commit --allow-empty -m \"{code}\" &amp;&amp; git push</code>\n\n"
+            f"2) Подтвердите командой:\n"
+            f"<code>/verify {esc_repo} {code}</code>\n\n"
+            f"После подтверждения отправьте ссылку снова (или загрузите свой <code>.zip</code>).",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     status_msg = await message.reply(f"Клонирую <code>{html.escape(repo_name)}</code> и запускаю скан...", parse_mode=ParseMode.HTML)

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Banknote, Calculator, CheckCircle2, Hand, HeartPulse, History, Undo2 } from 'lucide-react';
+import { Banknote, CheckCircle2, Hand, HeartPulse, History, Undo2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // ---------- Types shared with page.tsx ----------
@@ -58,20 +58,10 @@ const CARD_CLASS = 'bg-[var(--color-paper)] border border-[var(--color-line)] ro
 const LABEL_CLASS =
   'text-[11px] font-mono uppercase tracking-wider text-[var(--color-muted-soft)] mb-2.5 flex items-center gap-1.5';
 
-// ---------- Financial Risk + Interactive KZ ROI Calculator ----------
+// ---------- Financial Risk (ст. 79 КоАП РК) ----------
 
 export function RiskCard({ risk }: { risk: FinancialRisk }) {
-  const [teamSize, setTeamSize] = useState(15);
   const top = risk.top_findings[0]?.risk_kzt || 1;
-
-  // Mirrors deterministic backend estimate_roi() in aegis/scanners/risk_model.py
-  const guardianMonthly = teamSize <= 25 ? 190_000 : 650_000;
-  const tierLabel = teamSize <= 25 ? 'TEAM ON-PREM' : 'ENTERPRISE GOV/FIN';
-  const appsecFtes = Math.max(1, Math.ceil(teamSize / 20));
-  const inhouseMonthly = appsecFtes * 800_000;
-  const monthlySavings = Math.max(0, inhouseMonthly - guardianMonthly);
-  const annualSavings = monthlySavings * 12;
-  const roiMultiple = (inhouseMonthly / guardianMonthly).toFixed(1);
 
   return (
     <div className={CARD_CLASS}>
@@ -81,7 +71,7 @@ export function RiskCard({ risk }: { risk: FinancialRisk }) {
           <span>Финансовый риск (ст. 79 КоАП РК)</span>
         </div>
         <span className="font-mono text-[10px] px-2 py-0.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-muted-soft)]">
-          PYTHON MATH
+          КОАП РК
         </span>
       </div>
 
@@ -94,10 +84,12 @@ export function RiskCard({ risk }: { risk: FinancialRisk }) {
         {risk.total_kzt ? `до ${formatKzt(risk.total_kzt)}` : '0 ₸'}
       </div>
       <p className="text-xs text-[var(--color-muted-soft)] mt-1 leading-relaxed">
-        Штраф регулятора: <span className="font-mono text-[var(--color-ink)]">{formatKzt(risk.regulatory_kzt)}</span>
+        Штраф регулятора (ст. 79 КоАП РК):{' '}
+        <span className="font-mono text-[var(--color-ink)]">{formatKzt(risk.regulatory_kzt)}</span>
         {risk.incident_kzt ? (
           <>
-            {' '}· инцидент: <span className="font-mono text-[var(--color-ink)]">{formatKzt(risk.incident_kzt)}</span>
+            {' '}· оценка инцидента (.aegis.yml):{' '}
+            <span className="font-mono text-[var(--color-ink)]">{formatKzt(risk.incident_kzt)}</span>
           </>
         ) : null}
       </p>
@@ -123,53 +115,9 @@ export function RiskCard({ risk }: { risk: FinancialRisk }) {
         </ul>
       )}
 
-      {/* Interactive Team-Size ROI Calculator (StatDatathon / Halyk deterministic economics pattern) */}
-      <div className="mt-4 pt-4 border-t border-[var(--color-line)] space-y-2.5">
-        <div className="flex items-center justify-between gap-2 text-xs">
-          <label htmlFor="cg-roi-slider" className="font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)] inline-flex items-center gap-1.5">
-            <Calculator className="w-3.5 h-3.5 text-[#3fbf7f]" aria-hidden="true" />
-            <span>ROI калькулятор · команда</span>
-          </label>
-          <output htmlFor="cg-roi-slider" className="font-mono text-xs text-[var(--color-ink)] tabular-nums">
-            {teamSize} разраб. ({tierLabel})
-          </output>
-        </div>
-        <input
-          id="cg-roi-slider"
-          type="range"
-          min={5}
-          max={100}
-          step={5}
-          value={teamSize}
-          onChange={(e) => setTeamSize(Number(e.target.value))}
-          aria-label="Количество разработчиков в команде"
-          className="w-full accent-[#e94a32] cursor-pointer"
-        />
-        <div className="grid grid-cols-3 gap-2 pt-0.5">
-          <div className="rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] p-2">
-            <div className="font-mono text-[10px] text-[var(--color-muted-soft)]">GUARDIAN</div>
-            <div className="font-mono text-xs font-medium text-[var(--color-ink)] tabular-nums mt-0.5">
-              {formatKzt(guardianMonthly)}/мес
-            </div>
-          </div>
-          <div className="rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] p-2">
-            <div className="font-mono text-[10px] text-[var(--color-muted-soft)]">ЭКОНОМИЯ / ГОД</div>
-            <div className="font-mono text-xs font-medium text-[#3fbf7f] tabular-nums mt-0.5">
-              {formatKzt(annualSavings)}
-            </div>
-          </div>
-          <div className="rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] p-2">
-            <div className="font-mono text-[10px] text-[var(--color-muted-soft)]">ВЫГОДА VS FTE</div>
-            <div className="font-mono text-xs font-medium text-[#3fbf7f] tabular-nums mt-0.5">
-              {roiMultiple}× ({appsecFtes} AppSec)
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <details className="mt-3 text-[11px] text-[var(--color-muted-soft)]">
+      <details className="mt-4 pt-3 border-t border-[var(--color-line)] text-[11px] text-[var(--color-muted-soft)]">
         <summary className="cursor-pointer hover:text-[var(--color-ink)] transition-colors">
-          Допущения модели расчёта
+          База расчёта и допущения (МРП / .aegis.yml)
         </summary>
         <ul className="mt-1.5 list-disc pl-4 space-y-0.5 leading-relaxed">
           {risk.assumptions.map((a) => (

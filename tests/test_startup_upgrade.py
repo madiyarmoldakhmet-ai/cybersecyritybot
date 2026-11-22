@@ -617,3 +617,49 @@ async def test_clone_repo_resilient_switches_to_sparse_for_large_repos_and_timeo
     assert res2.mode == "sparse"
     sparse_fallback.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_mandatory_ownership_blocks_third_party_repos_even_on_bypass_attempt(monkeypatch):
+    from aegis.core.verifier import OwnershipVerifier
+    from aegis_server.main import app
+
+    monkeypatch.setattr(settings, "environment", "production")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+        # 1. Default request without proof_token or github_token MUST be blocked with 403
+        r1 = await client.post("/api/scan/repo", json={"github_url": "https://github.com/vxrn0/exterayond"})
+        assert r1.status_code == 403
+        d1 = r1.json()
+        assert d1["code"] == "OWNERSHIP_REQUIRED"
+        assert "cybersec-verify-" in d1["error"]
+
+        # 2. Client attempting require_ownership=False bypass in production MUST STILL be blocked
+        r2 = await client.post(
+            "/api/scan/repo",
+            json={"github_url": "https://github.com/vxrn0/exterayond", "require_ownership": False},
+        )
+        assert r2.status_code == 403
+        assert r2.json()["code"] == "OWNERSHIP_REQUIRED"
+
+        # 3. /verify in chat mints signed proof_token bound strictly to that repo
+        with patch.object(
+            OwnershipVerifier,
+            "verify_commit_challenge",
+            AsyncMock(return_value=(True, "Код подтверждения найден в коммите.")),
+        ):
+            v_resp = await client.post(
+                "/api/chat",
+                json={"message": "/verify madiyar/my-app cybersec-verify-12345678"},
+            )
+        assert v_resp.status_code == 200
+        va = v_resp.json()["verified_authorship"]
+        assert va["target"] == "madiyar/my-app"
+        assert va["proof_token"]
+
+        # Proof token for madiyar/my-app MUST NOT unlock vxrn0/exterayond
+        r3 = await client.post(
+            "/api/scan/repo",
+            json={"github_url": "https://github.com/vxrn0/exterayond", "proof_token": va["proof_token"]},
+        )
+        assert r3.status_code == 403
+
+

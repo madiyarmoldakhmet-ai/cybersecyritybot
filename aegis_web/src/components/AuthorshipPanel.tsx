@@ -22,8 +22,6 @@ interface AuthorshipPanelProps {
   onTargetInputChange: (val: string) => void;
   authorship: AuthorshipState;
   onAuthorshipChange: (next: AuthorshipState) => void;
-  requireOwnership: boolean;
-  onRequireOwnershipChange: (checked: boolean) => void;
   onAskAi?: (prompt: string) => void;
 }
 
@@ -34,8 +32,6 @@ export function AuthorshipPanel({
   onTargetInputChange,
   authorship,
   onAuthorshipChange,
-  requireOwnership,
-  onRequireOwnershipChange,
   onAskAi,
 }: AuthorshipPanelProps) {
   const [method, setMethod] = useState<VerifyMethod>('challenge');
@@ -296,19 +292,14 @@ export function AuthorshipPanel({
         </div>
       </div>
 
-      {/* Strict ownership toggle */}
-      <label className="flex items-center gap-2.5 text-xs text-[var(--color-body-text)] cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={requireOwnership}
-          onChange={(e) => onRequireOwnershipChange(e.target.checked)}
-          className="w-4 h-4 accent-[#e94a32]"
-        />
-        <span className="inline-flex items-center gap-1.5">
-          <Lock className="w-3.5 h-3.5 text-[var(--color-muted-soft)]" aria-hidden="true" />
-          <span>Блокировать скан без подтверждения авторства</span>
+      {/* Mandatory ownership policy indicator */}
+      <div className="rounded-lg border border-[#e94a32]/30 bg-[#e94a32]/8 px-3 py-2 flex items-start gap-2 text-xs text-[var(--color-body-text)]">
+        <Lock className="w-3.5 h-3.5 text-[#e94a32] shrink-0 mt-0.5" aria-hidden="true" />
+        <span>
+          <strong className="text-[var(--color-ink)]">Обязательная проверка авторства активна:</strong>{' '}
+          сканирование чужих GitHub-репозиториев заблокировано. Без своего репо доступен «Демо-аудит» и загрузка .zip.
         </span>
-      </label>
+      </div>
 
       {errorMsg && (
         <p className="text-xs font-mono text-[#e94a32] leading-relaxed break-words">{errorMsg}</p>

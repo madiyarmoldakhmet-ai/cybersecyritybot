@@ -153,7 +153,7 @@ class ScanRequest(BaseModel):
     github_url: str
     github_token: Optional[str] = None
     proof_token: Optional[str] = None
-    require_ownership: bool = False
+    require_ownership: bool = True
 
 
 async def clone_repo(repo_url: str, dest_dir: Path, token: Optional[str] = None) -> bool:
@@ -173,7 +173,10 @@ async def scan_repo_http(req: ScanRequest):
         repo_name, req.github_token, req.proof_token, req.require_ownership
     )
     if not allowed:
-        return JSONResponse(status_code=403, content={"error": auth_msg})
+        return JSONResponse(
+            status_code=403,
+            content={"error": auth_msg, "code": "OWNERSHIP_REQUIRED", "repo_name": repo_name},
+        )
 
     scan_uuid = uuid.uuid4().hex[:12]
     repo_dir = SCANS_DIR / f"repo_{scan_uuid}"
@@ -367,14 +370,32 @@ async def _authorize_ws_scan(
             strict.get("message", "Недостаточно прав в репозитории."),
         )
 
-    if require_ownership:
+    enforce_ownership = True if settings.environment.lower() == "production" else bool(require_ownership)
+    if enforce_ownership:
+        challenge_hint = ""
+        try:
+            ch = OwnershipVerifier.issue_challenge(repo_name, "github")
+            code = ch["challenge_code"]
+            challenge_hint = (
+                f"\n2) Или **Commit Challenge** (без токена):\n"
+                f"```bash\ngit commit --allow-empty -m \"{code}\" && git push\n```\n"
+                f"Затем напишите в чат: `/verify {repo_name} {code}`"
+            )
+        except Exception as ch_err:
+            logger.debug(f"Could not auto-issue ownership challenge for {repo_name}: {ch_err}")
         return (
             False,
             False,
             "Авторство не подтверждено",
             "unverified",
             False,
-            "Включена строгая проверка авторства: подтвердите владение репозиторием через Token или Commit Challenge.",
+            (
+                f"Сканирование чужих репозиториев запрещено — авторство `{repo_name}` не подтверждено.\n\n"
+                f"Подтвердите владение репозиторием:\n"
+                f"1) Вкладка **«Авторство»** → GitHub Token с правами Owner/Admin/Write;"
+                f"{challenge_hint}\n\n"
+                f"Для быстрого теста без своего репо нажмите **«Демо-аудит»** или загрузите свой `.zip`."
+            ),
         )
 
     accessible, msg, can_pr = await OwnershipVerifier.verify_github_access(effective_token, repo_name)
@@ -394,7 +415,7 @@ async def websocket_scan(websocket: WebSocket):
         repo_url = (data.get("github_url") or "").strip()
         user_token = (data.get("github_token") or "").strip()
         proof_token = (data.get("proof_token") or "").strip()
-        require_ownership = bool(data.get("require_ownership", False))
+        require_ownership = bool(data.get("require_ownership", True))
 
         repo_name = OwnershipVerifier.parse_github_repo(repo_url)
         if not repo_name:
@@ -406,7 +427,12 @@ async def websocket_scan(websocket: WebSocket):
             repo_name, user_token, proof_token, require_ownership
         )
         if not allowed:
-            await websocket.send_json({"event_type": "SystemError", "message": auth_msg})
+            await websocket.send_json({
+                "event_type": "SystemError",
+                "code": "OWNERSHIP_REQUIRED",
+                "repo_name": repo_name,
+                "message": auth_msg,
+            })
             await websocket.close()
             return
 
@@ -568,7 +594,23 @@ async def _try_handle_bot_command(data: str) -> Optional[Dict[str, Any]]:
         if len(parts) >= 3:
             ok, msg = await OwnershipVerifier.verify_commit_challenge(target, parts[2])
             badge = "✅" if ok else "⛔"
-            return {"reply": f"{badge} {msg}", "ai_generated": False}
+            payload: Dict[str, Any] = {"reply": f"{badge} {msg}", "ai_generated": False}
+            if ok:
+                parsed_repo = OwnershipVerifier.parse_github_repo(target) or target
+                proof_token = OwnershipVerifier.create_proof_token(parsed_repo, "commit_challenge", "verified-author")
+                payload["verified_authorship"] = {
+                    "target": parsed_repo,
+                    "proof_token": proof_token,
+                    "method": "commit_challenge",
+                    "actor": "verified-author",
+                    "role": "CommitVerified",
+                    "message": msg,
+                }
+                payload["reply"] = (
+                    f"✅ {msg}\n\n"
+                    f"Доступ открыт — теперь вставь `https://github.com/{parsed_repo}` для запуска аудита."
+                )
+            return payload
         try:
             ch = OwnershipVerifier.issue_challenge(target, "github")
             code = ch["challenge_code"]
@@ -682,6 +724,8 @@ async def websocket_chat(websocket: WebSocket):
                 chat_history.append({"role": "user", "content": data})
                 reply = cmd_result["reply"]
                 chat_history.append({"role": "assistant", "content": reply})
+                if cmd_result.get("verified_authorship"):
+                    await websocket.send_json({"type": "authorship", **cmd_result["verified_authorship"]})
                 if cmd_result.get("action") == "SCAN":
                     # Let the frontend startScan() own the single scan progress bubble (avoid glued duplicates)
                     await websocket.send_json({"type": "action", "action": "SCAN", "github_url": cmd_result["github_url"]})

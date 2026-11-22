@@ -77,14 +77,14 @@ class SASTScanRequest(BaseModel):
     repo_url: Optional[str] = Field(None, description="GitHub repository URL or 'owner/repo'")
     github_token: Optional[str] = Field(None, description="GitHub PAT with repo scope for private repos / PRs")
     proof_token: Optional[str] = Field(None, description="Signed authorship proof token returned by /api/v1/verify/ownership")
-    require_ownership: bool = Field(False, description="Require verified authorship even on public repositories")
+    require_ownership: bool = Field(True, description="Require verified authorship before scanning any GitHub repository")
     local_path: Optional[str] = Field(None, description="Local folder path to audit (if running locally)")
 
 
 class DASTScanRequest(BaseModel):
     target_url: str = Field(..., description="Target website or API base URL")
     proof_token: Optional[str] = Field(None, description="Signed domain ownership proof token")
-    require_ownership: bool = Field(False, description="Require verified domain DNS TXT ownership before active DAST probes")
+    require_ownership: bool = Field(True, description="Require verified domain DNS TXT ownership before active DAST probes")
     additional_endpoints: List[str] = Field(
         default_factory=lambda: ["/api", "/login", "/health"],
         description="Extra endpoints to probe"
@@ -209,17 +209,18 @@ async def trigger_sast_scan(req: SASTScanRequest):
     if not repo_name:
         raise HTTPException(status_code=400, detail="Invalid GitHub repository format.")
 
+    enforce_ownership = True if settings.environment.lower() == "production" else req.require_ownership
     token = (req.github_token or settings.github_token or "").strip()
     proof = OwnershipVerifier.verify_proof_token(req.proof_token, repo_name)
     if proof:
         can_create_pr = bool(token)
     else:
-        if req.require_ownership and not req.github_token:
+        if enforce_ownership and not req.github_token:
             raise HTTPException(
                 status_code=403,
-                detail="Требуется подтверждение авторства: передайте GitHub Token или proof_token из /api/v1/verify/ownership.",
+                detail="Сканирование чужих репозиториев запрещено: подтвердите авторство через GitHub Token или proof_token из /api/v1/verify/ownership.",
             )
-        if req.require_ownership:
+        if enforce_ownership:
             strict_res = await OwnershipVerifier.verify_repo_ownership_strict(token, repo_name)
             if not strict_res.get("verified"):
                 raise HTTPException(status_code=403, detail=strict_res.get("message", "Авторство не подтверждено."))
@@ -374,7 +375,8 @@ async def verify_asset_ownership(req: VerifyOwnershipRequest):
 @api_router.post("/api/v1/scan/dast", response_model=DASTScanResult, tags=["Scanners"])
 async def trigger_dast_scan(req: DASTScanRequest):
     """Execute dynamic security audit (Headers, CORS, Cookies) on live URL."""
-    if req.require_ownership:
+    enforce_ownership = True if settings.environment.lower() == "production" else req.require_ownership
+    if enforce_ownership:
         host = OwnershipVerifier.normalize_domain(req.target_url)
         if not host or not OwnershipVerifier.verify_proof_token(req.proof_token, host):
             raise HTTPException(
