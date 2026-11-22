@@ -16,7 +16,7 @@ import {
   VolumeX,
   Zap,
 } from 'lucide-react';
-import { OrcaLive2DCanvas } from '@/components/OrcaLive2DCanvas';
+import { Orca3DCanvas } from '@/components/Orca3DCanvas';
 import { OrcaMood } from '@/components/OrcaRigSvg';
 import { cn } from '@/lib/utils';
 
@@ -390,9 +390,9 @@ export function OrcaCompanion({
             cfg.ringColor
           )}
         >
-          {/* Live2D WebGL Studio Orca (Pixar-grade 6-frame lip-sync & blink + GLSL swim mesh deformation + 2.5D parallax) */}
+          {/* Live 3D WebGL Orca (organic swimming spine wave, 3D jaw lip-sync, eye-tracking, blinking, 3D sonar) */}
           <div className="relative w-full h-full">
-            <OrcaLive2DCanvas
+            <Orca3DCanvas
               mood={mood}
               isTalking={isTalking}
               mouthLevel={mouthLevel}
