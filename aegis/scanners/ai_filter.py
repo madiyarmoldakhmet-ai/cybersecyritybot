@@ -1,105 +1,119 @@
 import asyncio
 import json
 import logging
-from typing import List
+from typing import Dict, List
 
-from aegis.core.llm_runtime import chat_completion, resolve_active_llm
-from aegis.scanners.models import VulnerabilityFinding
+from aegis.core.llm_runtime import chat_completion
+from aegis.scanners.models import ScannerType, VulnerabilityFinding
 
 logger = logging.getLogger("aegis.ai_filter")
 
-AI_FILTER_SYSTEM_PROMPT = """\
-You are an expert Application Security Engineer. Your job is to review a potential vulnerability finding produced by a static analysis tool (SAST) and determine if it is a REAL threat or a FALSE POSITIVE.
-You must consider local data flow, variable sanitization, and context.
-
-CRITICAL RULE FOR SECRETS:
-If the finding is related to a hardcoded secret, token, or password, analyze the string value. If it is obviously a placeholder, mock token, or dummy string (e.g. 'YOUR_API_KEY_HERE', 'test-token', '123456', 'example_key'), you MUST classify it as a FALSE POSITIVE (is_real: false).
-
-Respond ONLY with a valid JSON object in this format:
-{
-  "is_real": true_or_false,
-  "reason": "Brief explanation of why it is real or false positive."
+# Deterministic scanners never need LLM false-positive filtering
+_SKIP_AI_FILTER_SCANNERS = {
+    ScannerType.SCA,
+    ScannerType.PIP_AUDIT,
+    ScannerType.GIT_HISTORY,
+    ScannerType.AI_LOGIC,  # Already verified by structural rules or anti-hallucination gate
 }
+
+AI_BATCH_FILTER_SYSTEM_PROMPT = """\
+You are an expert Application Security Engineer triaging static analysis (SAST) alerts.
+For each numbered finding, determine whether it is a REAL threat (`true`) or a FALSE POSITIVE (`false`),
+such as dummy placeholders ('replace_me', 'change_me', 'example', mock tokens) or sanitized code.
+
+Respond ONLY with a valid JSON object mapping each finding index (as string) to a boolean:
+{"0": true, "1": false}
 """
 
 
 class AIFalsePositiveFilter:
     """
-    AI-Assisted SAST Filter: Uses the active runtime LLM (Local Ollama or BYOK)
-    to semantically analyze findings and drop false positives that AST/regex couldn't resolve.
+    Fast Batched AI-Assisted SAST Filter.
+
+    Only inspects ambiguous SAST/Secret findings (skipping deterministic CVE/SCA & already-verified
+    scanners) and batches up to 6 findings into a single bounded LLM request (<12s total) so scans
+    stay fast (~10-15s) even on large repositories.
     """
 
-    def __init__(self, timeout_seconds: int = 25) -> None:
+    def __init__(self, timeout_seconds: int = 12, max_candidates: int = 6) -> None:
         self.timeout_seconds = timeout_seconds
+        self.max_candidates = max_candidates
         self.enabled = True
 
-    async def _check_finding(self, finding: VulnerabilityFinding) -> bool:
-        """Asks the active LLM if the finding is real. Returns True if real, False if false positive."""
-        if not self.enabled:
-            return True
-
-        prompt = (
-            f"Vulnerability Title: {finding.title}\n"
-            f"CWE: {finding.cwe}\n"
-            f"Description: {finding.description}\n"
-            f"File Path: {finding.file_path}\n\n"
-            f"### CODE SNIPPET:\n```\n{finding.code_snippet or ''}\n```\n\n"
-            "Analyze the data flow and context. Is this a true positive vulnerability or a false positive?\n"
-            "Respond strictly in JSON format with 'is_real' (boolean) and 'reason'."
-        )
-
-        raw_text = await chat_completion(
-            AI_FILTER_SYSTEM_PROMPT,
-            prompt,
-            temperature=0.1,
-            max_tokens=200,
-            timeout=float(self.timeout_seconds),
-            task_label=f"AIFilter:{finding.file_path}",
-        )
-        if not raw_text:
-            return True
-
-        try:
-            if "```json" in raw_text:
-                raw_text = raw_text.split("```json", 1)[1].split("```", 1)[0].strip()
-            elif "```" in raw_text:
-                raw_text = raw_text.split("```", 1)[1].split("```", 1)[0].strip()
-
-            start_idx = raw_text.find("{")
-            end_idx = raw_text.rfind("}")
-            if start_idx != -1 and end_idx != -1:
-                data = json.loads(raw_text[start_idx : end_idx + 1])
-                is_real = bool(data.get("is_real", True))
-                reason = str(data.get("reason", ""))
-                if not is_real:
-                    logger.info(
-                        f"AI Filter dropped False Positive '{finding.title}' in {finding.file_path}. Reason: {reason}"
-                    )
-                return is_real
-        except Exception as exc:
-            logger.debug(f"AI Filter parse skipped for '{finding.title}': {exc}")
-        return True
-
     async def filter_findings(self, findings: List[VulnerabilityFinding]) -> List[VulnerabilityFinding]:
-        """Run findings through the AI filter concurrently with provider-aware rate limits."""
+        """Batch-filter ambiguous findings in one fast LLM call with strict timeout."""
         if not self.enabled or not findings:
             return findings
 
-        provider, _, _, is_local = await resolve_active_llm()
-        concurrency = 2 if (not is_local and provider.value == "openrouter") else 4
-        sem = asyncio.Semaphore(concurrency)
+        candidate_indices: List[int] = []
+        for idx, f in enumerate(findings):
+            if f.scanner in _SKIP_AI_FILTER_SCANNERS:
+                continue
+            candidate_indices.append(idx)
+            if len(candidate_indices) >= self.max_candidates:
+                break
 
-        async def bounded_check(f: VulnerabilityFinding) -> bool:
-            async with sem:
-                res = await self._check_finding(f)
-                if not is_local and provider.value == "openrouter":
-                    await asyncio.sleep(0.8)
-                return res
+        if not candidate_indices:
+            return findings
 
-        results = await asyncio.gather(*(bounded_check(f) for f in findings), return_exceptions=True)
+        blocks: List[str] = []
+        for batch_pos, orig_idx in enumerate(candidate_indices):
+            f = findings[orig_idx]
+            snippet = (f.code_snippet or "").strip()[:260]
+            blocks.append(
+                f"[{batch_pos}] {f.title} | {f.file_path}:{f.line_start or 1} | CWE: {f.cwe}\n"
+                f"Snippet:\n{snippet}"
+            )
 
-        filtered: List[VulnerabilityFinding] = []
-        for finding, is_real in zip(findings, results):
-            if isinstance(is_real, Exception) or is_real is True:
-                filtered.append(finding)
-        return filtered
+        user_prompt = (
+            "Classify each numbered SAST alert below as true (real vulnerability) or false (false positive / placeholder):\n\n"
+            + "\n\n".join(blocks)
+            + '\n\nReturn ONLY JSON like {"0": true, "1": false}.'
+        )
+
+        try:
+            raw_text = await asyncio.wait_for(
+                chat_completion(
+                    AI_BATCH_FILTER_SYSTEM_PROMPT,
+                    user_prompt,
+                    temperature=0.05,
+                    max_tokens=160,
+                    timeout=float(self.timeout_seconds),
+                    task_label=f"AIFilterBatch({len(candidate_indices)})",
+                ),
+                timeout=float(self.timeout_seconds) + 1.0,
+            )
+        except Exception as exc:
+            logger.debug(f"AI batch filter skipped (timeout/error): {exc}")
+            return findings
+
+        if not raw_text:
+            return findings
+
+        verdicts: Dict[int, bool] = {}
+        try:
+            text = raw_text.strip()
+            if "```json" in text:
+                text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+            elif "```" in text:
+                text = text.split("```", 1)[1].split("```", 1)[0].strip()
+            lo, hi = text.find("{"), text.rfind("}")
+            if lo != -1 and hi != -1:
+                parsed = json.loads(text[lo : hi + 1])
+                if isinstance(parsed, dict):
+                    for k, v in parsed.items():
+                        if str(k).isdigit() and isinstance(v, bool):
+                            pos = int(k)
+                            if 0 <= pos < len(candidate_indices):
+                                verdicts[candidate_indices[pos]] = v
+        except Exception as exc:
+            logger.debug(f"AI batch filter JSON parse skipped: {exc}")
+            return findings
+
+        kept: List[VulnerabilityFinding] = []
+        for idx, f in enumerate(findings):
+            if verdicts.get(idx, True) is False:
+                logger.info(f"AI Filter dropped False Positive '{f.title}' in {f.file_path}")
+                continue
+            kept.append(f)
+        return kept

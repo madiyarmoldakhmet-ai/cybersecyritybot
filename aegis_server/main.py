@@ -859,11 +859,14 @@ _GROUNDED_PRODUCT_FAQ_PROMPTS = {
 }
 
 _APPSEC_CHAT_SYSTEM_PROMPT = (
-    "Ты Commit Guardian (Aegis Orca) — ИИ-аудитор безопасности кода (12 сканеров: Semgrep, Bandit, "
-    "pip-audit, AST Taint Engine, JS/TS/Next.js Taint & Server Actions, OSV/npm SCA, AI Business-Logic Auditor "
-    "на IDOR/Auth/SSRF/Race Conditions, «Машина времени Git» для секретов в удалённых коммитах, Self-Healing Auto-Fix "
+    "Ты Aegis Orca (Commit Guardian) — живая, умная и дружелюбная косатка-компаньон и AI AppSec инженер. "
+    "Ты умеешь свободно и естественно общаться на любые обычные темы (поприветствовать, поболтать, поддержать, "
+    "помочь с идеей, кодом, питчем, учебой или пошутить), отвечая по-человечески, живо и без канцелярита. "
+    "А когда спрашивают про безопасность или кидают репозиторий — ты профи по AppSec: 12 сканеров (Semgrep, Bandit, "
+    "pip-audit, Python AST Taint, JS/TS/Next.js Taint & Server Actions, OSV/npm SCA, AI Business-Logic Auditor на "
+    "IDOR/Auth/SSRF/Race Conditions, «Машина времени Git» для секретов в удалённых коммитах, Self-Healing Auto-Fix "
     "с SAST-перепроверкой и атомарным коммитом в GitHub, оценка риска по КоАП РК ст. 79 в ₸, Strict Ownership Gate "
-    "с HMAC proof_token). Отвечай чётко, технически и по делу на русском языке."
+    "с HMAC proof_token). Отвечай на русском языке кратко, понятно и по делу."
 )
 
 
@@ -895,9 +898,9 @@ async def http_chat(req: ChatHttpRequest):
     reply = await chat_completion(
         _APPSEC_CHAT_SYSTEM_PROMPT,
         user_content,
-        temperature=0.2,
-        max_tokens=1200,
-        timeout=25.0,
+        temperature=0.45,
+        max_tokens=700,
+        timeout=20.0,
         task_label="HTTPChat",
     )
     if reply:
@@ -979,9 +982,9 @@ async def websocket_chat(websocket: WebSocket):
                         await chat_completion(
                             system_prompt,
                             combined,
-                            temperature=0.2,
-                            max_tokens=1400,
-                            timeout=30.0,
+                            temperature=0.45,
+                            max_tokens=700,
+                            timeout=25.0,
                             task_label="WSChat:Anthropic",
                         )
                     ) or ""
@@ -992,6 +995,8 @@ async def websocket_chat(websocket: WebSocket):
                     stream = await client.chat.completions.create(
                         model=model,
                         messages=chat_history,
+                        temperature=0.45,
+                        max_tokens=700,
                         stream=True,
                     )
                     async for chunk in stream:

@@ -68,7 +68,7 @@ class AuditSummarizer:
         self.client = client or AsyncOpenAI(
             base_url=settings.ollama_base_url.rstrip("/") + "/v1",
             api_key="ollama",  # Ollama ignores the key, the SDK requires one
-            timeout=float(timeout_seconds or settings.ai_summary_timeout_seconds),
+            timeout=float(timeout_seconds or min(settings.ai_summary_timeout_seconds, 18)),
             max_retries=0,
         )
 
@@ -94,7 +94,7 @@ class AuditSummarizer:
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.2,
-                    max_tokens=600,
+                    max_tokens=320,
                 )
             text = (resp.choices[0].message.content or "").strip()
             if not text:

@@ -13,8 +13,10 @@ from aegis.scanners.models import Severity, VulnerabilityFinding
 
 # Known dummy/placeholder keywords
 PLACEHOLDER_REGEX = re.compile(
-    r"(?i)(your[_-]?(api[_-]?)?key|insert[_-]?(token|key)|replace[_-]?me|dummy[_-]?token|"
+    r"(?i)(your[_-]?(api[_-]?)?key|insert[_-]?(token|key)|replace[_-]?(me|this|with)|"
+    r"change[_-]?me|changeme|put[_-]?your|enter[_-]?your|dummy[_-]?token|"
     r"test[_-]?secret|example[_-]?key|fake[_-]?api|placeholder|sample[_-]?key|"
+    r"super[_-]?secret|my[_-]?secret|dev[_-]?secret|secret[_-]?here|password[_-]?here|"
     r"12345678|abcdef|xxxxxx|000000|todo|sk_test_|pk_test_|test_token|demo_secret)"
 )
 
@@ -149,6 +151,18 @@ class FalsePositiveSanitizer:
         # 5. Secret & API Key Entropy & Placeholder Sanitization
 
         if is_secret_rule:
+            # Generic placeholder passwords/keys in template env files or Markdown README docs
+            # are almost never live credentials (real vendor prefixes like AKIA/ghp_/sk_live_/AIza still pass).
+            is_generic_secret = "generic" in rule_blob
+            is_template_or_doc = (
+                file_path.endswith((".env.example", ".env.sample", ".env.template", ".md"))
+                or "/.env.example" in file_path
+                or "/readme" in file_path
+                or file_path.startswith("readme")
+            )
+            if is_generic_secret and is_template_or_doc:
+                return None
+
             snippet = finding.code_snippet or ""
             # Extract potential string literal values from snippet
             literals = re.findall(r"['\"]([a-zA-Z0-9_\-\.\:\/]{8,})['\"]", snippet)

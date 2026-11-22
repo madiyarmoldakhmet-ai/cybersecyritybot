@@ -148,8 +148,8 @@ class BusinessLogicAuditor:
     def __init__(
         self,
         enable_llm: Optional[bool] = None,
-        max_llm_routes: int = 5,
-        llm_timeout: float = 22.0,
+        max_llm_routes: int = 3,
+        llm_timeout: float = 12.0,
     ) -> None:
         self.extractor = RouteExtractor()
         self.enable_llm = (not bool(os.environ.get("PYTEST_CURRENT_TEST"))) if enable_llm is None else enable_llm
@@ -181,13 +181,19 @@ class BusinessLogicAuditor:
         for ep in auditable:
             findings.extend(self._audit_endpoint_structural(ep))
 
-        # Stage B: Deep LLM Business-Logic review on the highest-risk routes
+        # Stage B: Deep LLM Business-Logic review on the highest-risk routes (strict 15s total wall-clock cap)
         if self.enable_llm:
             prioritized = sorted(auditable, key=self._risk_priority, reverse=True)[: self.max_llm_routes]
             high_value = [ep for ep in prioritized if self._risk_priority(ep) >= 2]
             if high_value:
-                llm_findings = await self._audit_endpoints_llm(high_value, target_path)
-                findings.extend(llm_findings)
+                try:
+                    llm_findings = await asyncio.wait_for(
+                        self._audit_endpoints_llm(high_value, target_path),
+                        timeout=15.0,
+                    )
+                    findings.extend(llm_findings)
+                except asyncio.TimeoutError:
+                    logger.info("Business-Logic LLM stage hit 15s cap — returning structural findings immediately.")
 
         return self._deduplicate(findings)
 

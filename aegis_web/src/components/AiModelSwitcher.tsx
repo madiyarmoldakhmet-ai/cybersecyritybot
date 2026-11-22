@@ -29,7 +29,12 @@ const BYOK_PROVIDERS = [
 export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const onStatusChangeRef = useRef(onStatusChange);
   const baseId = useId();
+
+  useEffect(() => {
+    onStatusChangeRef.current = onStatusChange;
+  }, [onStatusChange]);
 
   const [status, setStatus] = useState<AiEngineConfigStatus | null>(null);
   const [mode, setMode] = useState<'local' | 'byok'>('local');
@@ -41,21 +46,18 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
   const [error, setError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
-  const applyStatus = useCallback(
-    (data: AiEngineConfigStatus) => {
-      setStatus(data);
-      onStatusChange?.(data);
-      if (data.is_local) {
-        setMode('local');
-        if (data.model) setLocalModel(data.model);
-      } else {
-        setMode('byok');
-        setByokProvider(data.provider);
-        if (data.model) setByokModel(data.model);
-      }
-    },
-    [onStatusChange]
-  );
+  const applyStatus = useCallback((data: AiEngineConfigStatus) => {
+    setStatus(data);
+    onStatusChangeRef.current?.(data);
+    if (data.is_local) {
+      setMode('local');
+      if (data.model) setLocalModel(data.model);
+    } else {
+      setMode('byok');
+      setByokProvider(data.provider);
+      if (data.model) setByokModel(data.model);
+    }
+  }, []);
 
   const loadStatus = useCallback(async () => {
     try {
