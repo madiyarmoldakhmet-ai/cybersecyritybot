@@ -399,7 +399,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
               </button>
             ) : (
               <span className="font-mono text-[10.5px] text-[var(--color-muted-soft)]">
-                13 сканеров + Backdoor + AI Logic + Auto-Fix
+                14 сканеров + Backdoor + System Analyst + Auto-Fix
               </span>
             )}
             <button

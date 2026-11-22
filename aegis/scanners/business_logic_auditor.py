@@ -102,16 +102,19 @@ _TX_LOCK_RE = re.compile(
 )
 
 _LLM_LOGIC_SYSTEM_PROMPT = """\
-You are a senior Principal Offensive Security Engineer & Red-Teamer auditing backend API routes for REAL, exploitable BUSINESS-LOGIC vulnerabilities and COVERT BACKDOORS that static SAST tools miss.
+You are a Principal Defensive AppSec Engineer, Adversarial Threat Modeler & Senior Systems Analyst auditing a verified codebase's backend API routes for REAL business-logic vulnerabilities, trust-boundary gaps, state-machine flaws, and covert backdoors that conventional SAST tools miss.
 
-Focus strictly on these 7 classes:
+Think with an adversarial mindset to find subtle design & authorization flaws, while keeping all output strictly defensive (conceptual threat & blast-radius explanation + concrete code fix; NEVER generate weaponized exploit scripts, malware, or live attack payloads).
+
+Focus strictly on these 8 classes:
 1. BACKDOOR (CWE-506 / CWE-912): covert auth bypasses (magic passwords/tokens/headers like `x-admin-bypass`, hardcoded backdoor user IDs), hidden privilege escalation branches, secret exfiltration to external URLs/webhooks, obfuscated eval/exec, or logic time-bombs.
-2. IDOR (Broken Object Level Authorization, CWE-639): endpoint accesses/modifies/deletes a record by user-supplied ID without verifying the caller owns it or is admin.
-3. BROKEN_AUTH_RBAC (CWE-862 / CWE-285): missing authentication or privilege/role check on sensitive mutations or admin routes.
-4. SSRF (CWE-918): server fetches attacker-controlled URL without host/IP allowlist.
-5. RACE_CONDITION (CWE-362): check-then-act on money/balance/credits/coupons/inventory without DB transaction or row lock.
-6. MASS_ASSIGNMENT (CWE-915): unvalidated request body fields (e.g., role, isAdmin, balance, price) written straight to DB.
-7. DATA_EXPOSURE (CWE-200): returning password hashes, tokens, secrets, or other users' PII.
+2. IDOR (Broken Object Level Authorization, CWE-639): endpoint accesses/modifies/deletes a record by user-supplied ID without verifying the caller owns it or belongs to the same tenant.
+3. BROKEN_AUTH_RBAC (CWE-862 / CWE-285): missing authentication or privilege/role check on sensitive mutations, admin routes, or state transitions.
+4. WORKFLOW_BYPASS (CWE-840): business-logic or state-machine flaw allowing skipped verification, negative quantities/amounts, client-trusted prices/discounts, or replayed tokens.
+5. SSRF (CWE-918): server fetches attacker-controlled URL without host/IP allowlist.
+6. RACE_CONDITION (CWE-362): check-then-act on money/balance/credits/coupons/inventory without DB transaction or row lock.
+7. MASS_ASSIGNMENT (CWE-915): unvalidated request body fields (e.g., role, isAdmin, balance, price) written straight to DB.
+8. DATA_EXPOSURE (CWE-200): returning password hashes, tokens, secrets, or other users' PII.
 
 STRICT ANTI-HALLUCINATION RULES:
 - Report ONLY vulnerabilities that are 100% proven by the provided code lines.
@@ -119,7 +122,7 @@ STRICT ANTI-HALLUCINATION RULES:
 - Every finding MUST include:
   - `line_number`: exact integer line number from the numbered snippet
   - `evidence_code`: exact verbatim substring copied from that line
-  - `attack_scenario`: concrete 1-2 sentence exploit (exact HTTP method/path/param manipulation)
+  - `attack_scenario`: concise 1-2 sentence conceptual threat impact & blast radius explaining why this flaw matters (defensive threat modeling, no weaponized exploit code)
 
 Respond ONLY with valid JSON:
 {
@@ -129,8 +132,8 @@ Respond ONLY with valid JSON:
       "severity": "CRITICAL",
       "line_number": 42,
       "title": "Short specific title",
-      "description": "Why this is vulnerable in this exact handler.",
-      "attack_scenario": "Attacker sends DELETE /api/orders/999 with their own session cookie and deletes another user's order.",
+      "description": "Why this is vulnerable in this exact handler and which trust boundary is broken.",
+      "attack_scenario": "Any authenticated user supplying another user's order ID can delete records outside their ownership scope.",
       "evidence_code": "await prisma.order.delete({ where: { id } })",
       "cwe": "CWE-639",
       "recommendation": "Scope the query by session.user.id (where: { id, userId: session.user.id })."
@@ -142,14 +145,14 @@ Respond ONLY with valid JSON:
 
 class BusinessLogicAuditor:
     """
-    Audits extracted API routes & Server Actions for IDOR, Broken Auth/RBAC,
-    SSRF, Race Conditions, Mass Assignment, and Data Exposure.
+    Audits extracted API routes & Server Actions for Backdoors, IDOR, Broken Auth/RBAC,
+    Workflow Bypasses, SSRF, Race Conditions, Mass Assignment, and Data Exposure.
     """
 
     def __init__(
         self,
         enable_llm: Optional[bool] = None,
-        max_llm_routes: int = 3,
+        max_llm_routes: int = 5,
         llm_timeout: float = 28.0,
     ) -> None:
         self.extractor = RouteExtractor()

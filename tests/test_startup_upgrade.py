@@ -1200,3 +1200,72 @@ async def test_backdoor_scanner_and_pro_first_gemini_ranking(tmp_path: Path):
     assert "backdoor-trojan-source-bidi" in ids
     assert "backdoor-npm-postinstall" in ids
     assert all(f.severity == Severity.CRITICAL for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_system_analyst_architecture_stride_and_risk_chains(tmp_path: Path):
+    from aegis.scanners.system_analyst import SystemAnalystScanner
+    from aegis.ai.offline_chat import build_offline_appsec_reply, format_scan_context_note
+
+    # Build a realistic insecure FastAPI + Postgres + Docker app
+    (tmp_path / "app.py").write_text(
+        "from fastapi import FastAPI\n"
+        "from fastapi.middleware.cors import CORSMiddleware\n"
+        "import sqlalchemy, traceback\n"
+        "app = FastAPI()\n"
+        "app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True)\n"
+        "@app.post('/api/orders/delete')\n"
+        "async def delete_order(order_id: int, resp=None):\n"
+        "    resp.set_cookie('sid', '1', httponly=False, secure=False)\n"
+        "    return {'err': traceback.format_exc()}\n"
+        "@app.post('/api/users/promote')\n"
+        "async def promote_user(user_id: int):\n"
+        "    return {'ok': True}\n"
+        "@app.delete('/api/invoices/{id}')\n"
+        "async def drop_invoice(id: int):\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.12-slim\nWORKDIR /app\nCOPY . .\nCMD [\"uvicorn\", \"app:app\"]\n",
+        encoding="utf-8",
+    )
+
+    analyst = SystemAnalystScanner()
+    sys_findings, analysis = await analyst.scan(tmp_path)
+    enriched = analyst.enrich_with_findings(analysis, sys_findings)
+
+    ids = {f.id for f in sys_findings}
+    assert "sys-cors-wildcard-credentials" in ids
+    assert "sys-insecure-cookie-flags" in ids
+    assert "sys-debug-stacktrace-prod" in ids
+    assert "sys-docker-root-user" in ids
+    assert "sys-trust-boundary-unauth-surface" in ids
+    assert "sys-missing-rate-limit" in ids
+    assert "sys-missing-security-headers" in ids
+
+    assert "FastAPI" in enriched["tech_stack"]
+    assert "SQLAlchemy" in enriched["datastores"]
+    assert "Docker" in enriched["infrastructure"]
+    assert enriched["endpoints_total"] == 3
+    assert enriched["auth_coverage_pct"] == 0
+    assert enriched["stride_breakdown"]["Spoofing"] >= 1
+    assert enriched["stride_breakdown"]["Elevation of Privilege"] >= 1
+    assert len(enriched["risk_chains"]) >= 1
+    assert len(enriched["remediation_roadmap"]) >= 1
+
+    # Verify chat context formatting and offline system analysis reply work seamlessly
+    ctx = {
+        "repo_name": "demo/insecure-api",
+        "security_score": 25,
+        "grade": "F",
+        "total_findings": len(sys_findings),
+        "system_analysis": enriched,
+        "findings": [f.model_dump() for f in sys_findings],
+    }
+    note = format_scan_context_note(ctx)
+    assert "Системный анализ архитектуры" in note
+    assert "STRIDE:" in note
+    reply = build_offline_appsec_reply("Системный анализ и цепочки угроз", ctx, "gemini-3.6-flash")
+    assert "Системный анализ" in reply
+    assert "STRIDE" in reply

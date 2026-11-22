@@ -66,6 +66,22 @@ export type ChatCommitCard = {
   commitMessage?: string;
 };
 
+export type SystemAnalysisSummary = {
+  tech_stack?: string[];
+  datastores?: string[];
+  infrastructure?: string[];
+  files_analyzed?: number;
+  endpoints_total?: number;
+  non_public_endpoints?: number;
+  protected_endpoints?: number;
+  auth_coverage_pct?: number | null;
+  unprotected_mutations?: { method: string; path: string; location: string }[];
+  trust_boundaries?: string[];
+  stride_breakdown?: Record<string, number>;
+  risk_chains?: { severity: string; title: string; steps: string[]; defense?: string }[];
+  remediation_roadmap?: string[];
+};
+
 export type ChatAuditCard = {
   repoName: string;
   commitSha?: string;
@@ -84,6 +100,7 @@ export type ChatAuditCard = {
   pdfUrl?: string | null;
   mdUrl?: string | null;
   topFindings?: { severity: string; title: string; location: string }[];
+  systemAnalysis?: SystemAnalysisSummary | null;
   canSelfHeal?: boolean;
   isRealRepo?: boolean;
 };
@@ -125,10 +142,10 @@ interface AiCopilotChatProps {
 }
 
 const QUICK_PROMPTS = [
+  'Системный анализ и цепочки угроз',
   'Исправь и закоммить в GitHub',
   'Объясни критичные баги',
   'Оцени риск в тенге (КоАП РК)',
-  'Как работает проверка авторства?',
 ];
 
 function renderCodeSpans(text: string, keyPrefix: string): ReactNode[] {
@@ -307,6 +324,88 @@ function TelegramAuditCard({
           </ol>
         </div>
       )}
+
+      {/* Systems Analyst Architecture, STRIDE & Risk Chains (native <details> disclosure) */}
+      {card.systemAnalysis &&
+        ((card.systemAnalysis.tech_stack?.length ?? 0) > 0 ||
+          (card.systemAnalysis.endpoints_total ?? 0) > 0 ||
+          (card.systemAnalysis.risk_chains?.length ?? 0) > 0) && (
+          <details className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)]/70 px-2.5 py-2 text-[11.5px]">
+            <summary className="cursor-pointer font-mono text-[11px] font-medium text-[var(--color-ink)] select-none">
+              Системный анализ · Архитектура, STRIDE и цепочки риска
+              {typeof card.systemAnalysis.auth_coverage_pct === 'number'
+                ? ` (Auth: ${card.systemAnalysis.auth_coverage_pct}%)`
+                : ''}
+            </summary>
+            <div className="mt-2 pt-2 border-t border-[var(--color-line)] space-y-2 text-[var(--color-body-text)]">
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10.5px]">
+                {card.systemAnalysis.tech_stack && card.systemAnalysis.tech_stack.length > 0 && (
+                  <div>
+                    <dt className="inline text-[var(--color-muted-soft)]">Стек: </dt>
+                    <dd className="inline text-[var(--color-ink)]">{card.systemAnalysis.tech_stack.join(', ')}</dd>
+                  </div>
+                )}
+                {card.systemAnalysis.datastores && card.systemAnalysis.datastores.length > 0 && (
+                  <div>
+                    <dt className="inline text-[var(--color-muted-soft)]">БД: </dt>
+                    <dd className="inline text-[var(--color-ink)]">{card.systemAnalysis.datastores.join(', ')}</dd>
+                  </div>
+                )}
+                <div>
+                  <dt className="inline text-[var(--color-muted-soft)]">API-маршруты: </dt>
+                  <dd className="inline text-[var(--color-ink)]">
+                    {card.systemAnalysis.endpoints_total ?? 0}
+                    {typeof card.systemAnalysis.auth_coverage_pct === 'number'
+                      ? ` · Auth ${card.systemAnalysis.auth_coverage_pct}%`
+                      : ''}
+                  </dd>
+                </div>
+                {card.systemAnalysis.stride_breakdown &&
+                  Object.values(card.systemAnalysis.stride_breakdown).some((n) => n > 0) && (
+                    <div className="sm:col-span-2">
+                      <dt className="inline text-[var(--color-muted-soft)]">STRIDE: </dt>
+                      <dd className="inline text-[var(--color-ink)]">
+                        {Object.entries(card.systemAnalysis.stride_breakdown)
+                          .filter(([, count]) => count > 0)
+                          .map(([cat, count]) => `${cat} (${count})`)
+                          .join(' · ')}
+                      </dd>
+                    </div>
+                  )}
+              </dl>
+
+              {card.systemAnalysis.risk_chains && card.systemAnalysis.risk_chains.length > 0 && (
+                <div className="space-y-1">
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+                    Цепочки риска (Blast Radius)
+                  </div>
+                  <ul className="space-y-1.5 list-disc pl-4">
+                    {card.systemAnalysis.risk_chains.slice(0, 3).map((chain, idx) => (
+                      <li key={idx} className="leading-snug">
+                        <span className="font-mono text-[10px] text-[#ff735d] mr-1">[{chain.severity}]</span>
+                        <strong className="text-[var(--color-ink)] font-medium">{chain.title}:</strong>{' '}
+                        <span>{chain.steps.join(' → ')}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {card.systemAnalysis.remediation_roadmap && card.systemAnalysis.remediation_roadmap.length > 0 && (
+                <div className="space-y-1">
+                  <div className="font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+                    План системных исправлений
+                  </div>
+                  <ul className="space-y-0.5 list-disc pl-4 text-[11px]">
+                    {card.systemAnalysis.remediation_roadmap.slice(0, 3).map((step, idx) => (
+                      <li key={idx}>{step}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </details>
+        )}
 
       {/* Auditor summary */}
       {card.summary && (

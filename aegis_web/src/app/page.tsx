@@ -20,7 +20,14 @@ import {
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { TerminalWindow, ScanEvent } from '@/components/TerminalWindow';
 import { SecurityScore } from '@/components/SecurityScore';
-import { AiCopilotChat, ChatAuditCard, ChatCommitCard, ChatMessage, ChatVerifyCard } from '@/components/AiCopilotChat';
+import {
+  AiCopilotChat,
+  ChatAuditCard,
+  ChatCommitCard,
+  ChatMessage,
+  ChatVerifyCard,
+  SystemAnalysisSummary,
+} from '@/components/AiCopilotChat';
 import { AiModelSwitcher } from '@/components/AiModelSwitcher';
 import { AuthorshipPanel, AuthorshipState, PendingVerifyChallenge } from '@/components/AuthorshipPanel';
 import { CommitsReportsPanel, RepoCommit, ReportsFeedData } from '@/components/CommitsReportsPanel';
@@ -166,7 +173,8 @@ function buildAuditChatCard(data: {
   report_pdf_url?: string | null;
   report_md_url?: string | null;
   financial_risk?: FinancialRisk | null;
-  scan_result?: { duration_seconds?: number };
+  system_analysis?: SystemAnalysisSummary | null;
+  scan_result?: { duration_seconds?: number; system_analysis?: SystemAnalysisSummary | null };
   duration_seconds?: number;
 }): ChatAuditCard {
   const list = data.vulnerabilities || data.findings || [];
@@ -204,6 +212,7 @@ function buildAuditChatCard(data: {
     pdfUrl: data.report_pdf_url ?? null,
     mdUrl: data.report_md_url ?? null,
     topFindings,
+    systemAnalysis: data.system_analysis ?? data.scan_result?.system_analysis ?? null,
     canSelfHeal: (repoName === 'demo/kz-fintech-app' || isRealRepo) && list.length > 0,
     isRealRepo,
   };
@@ -250,6 +259,7 @@ export default function Home() {
   const [reportMdUrl, setReportMdUrl] = useState<string | null>(null);
   const [activeTarget, setActiveTarget] = useState<string>('');
   const [financialRisk, setFinancialRisk] = useState<FinancialRisk | null>(null);
+  const [systemAnalysis, setSystemAnalysis] = useState<SystemAnalysisSummary | null>(null);
   const [healReport, setHealReport] = useState<HealingReport | null>(null);
   const [isHealing, setIsHealing] = useState(false);
   const [appealedMap, setAppealedMap] = useState<Record<string, AppealRecord>>({});
@@ -705,7 +715,8 @@ export default function Home() {
     report_pdf_url?: string | null;
     report_md_url?: string | null;
     financial_risk?: FinancialRisk | null;
-    scan_result?: { duration_seconds?: number };
+    system_analysis?: SystemAnalysisSummary | null;
+    scan_result?: { duration_seconds?: number; system_analysis?: SystemAnalysisSummary | null };
     duration_seconds?: number;
   }) => {
     const list = data.vulnerabilities || data.findings || [];
@@ -720,6 +731,7 @@ export default function Home() {
     setReportPdfUrl(data.report_pdf_url ?? null);
     setReportMdUrl(data.report_md_url ?? null);
     setFinancialRisk(data.financial_risk ?? null);
+    setSystemAnalysis(data.system_analysis ?? data.scan_result?.system_analysis ?? null);
     setHealReport(null);
     setAppealedMap({});
     if (typeof data.scan_result?.duration_seconds === 'number') {
@@ -764,6 +776,7 @@ export default function Home() {
               grade,
               total_findings: activeFindingsCount,
               financial_risk: financialRisk,
+              system_analysis: systemAnalysis,
               findings: findings.filter((f) => !appealedMap[makeFindingKey(f)]).slice(0, 8),
             }
           : undefined;
@@ -871,7 +884,7 @@ export default function Home() {
         })
       );
     },
-    [activeTarget, findings, grade, securityScore, activeFindingsCount, financialRisk, appealedMap, activatePendingVerify]
+    [activeTarget, findings, grade, securityScore, activeFindingsCount, financialRisk, systemAnalysis, appealedMap, activatePendingVerify]
   );
 
   const handleSendMessage = (e: FormEvent) => {

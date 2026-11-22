@@ -31,6 +31,7 @@ class ScannerType(str, Enum):
     NEXTJS = "nextjs"
     AI_LOGIC = "ai-logic"
     BACKDOOR = "backdoor"
+    SYSTEM_ANALYST = "system-analyst"
 
 
 class VulnerabilityFinding(BaseModel):
@@ -57,6 +58,10 @@ class SASTScanResult(BaseModel):
     duration_seconds: float = Field(default=0.0, description="Total execution duration in seconds")
     scanners_run: List[ScannerType] = Field(default_factory=list, description="Scanners executed in this audit")
     errors: List[str] = Field(default_factory=list, description="Non-fatal errors or warnings encountered during scan")
+    system_analysis: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Systems Analyst architectural map, attack surface, STRIDE breakdown, and conceptual risk chains",
+    )
 
 
 class DASTScanResult(BaseModel):

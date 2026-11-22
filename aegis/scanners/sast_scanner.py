@@ -1084,6 +1084,7 @@ class SASTScanner:
         from aegis.scanners.nextjs_scanner import NextJSSecurityScanner
         from aegis.scanners.business_logic_auditor import BusinessLogicAuditor
         from aegis.scanners.backdoor_scanner import BackdoorScanner
+        from aegis.scanners.system_analyst import SystemAnalystScanner
 
         secret_scanner = SecretScanner()
         flutter_scanner = FlutterSecurityScanner()
@@ -1091,6 +1092,7 @@ class SASTScanner:
         nextjs_scanner = NextJSSecurityScanner()
         logic_auditor = BusinessLogicAuditor(enable_llm=self.enable_ai_logic_llm)
         backdoor_scanner = BackdoorScanner()
+        system_analyst = SystemAnalystScanner()
 
         # Pass event_bus to other scanners if they support it
         if hasattr(secret_scanner, 'event_bus'):
@@ -1099,13 +1101,14 @@ class SASTScanner:
             flutter_scanner.event_bus = self.event_bus
 
         # Run built-in multi-language analyzer, mobile scanner, taint engine, Next.js/JS taint,
-        # backdoor detector, business-logic auditor, SCA, and CLI tools concurrently
+        # backdoor detector, business-logic auditor, system analyst, SCA, and CLI tools concurrently
         ml_task = asyncio.create_task(self.run_multi_language_analyzer(path))
         mobile_task = asyncio.create_task(self.mobile_scanner.scan(path))
         taint_task = asyncio.create_task(self.run_taint_analysis(path))
         nextjs_task = asyncio.create_task(nextjs_scanner.scan(path))
         backdoor_task = asyncio.create_task(backdoor_scanner.scan(path))
         logic_task = asyncio.create_task(logic_auditor.scan(path))
+        sys_analyst_task = asyncio.create_task(system_analyst.scan(path))
         sca_task = asyncio.create_task(sca_scanner.scan(path))
         semgrep_task = asyncio.create_task(self.run_semgrep(path))
         bandit_task = asyncio.create_task(self.run_bandit(path))
@@ -1119,6 +1122,7 @@ class SASTScanner:
             nextjs_findings,
             backdoor_findings,
             logic_findings,
+            (sys_findings, raw_system_analysis),
             sca_findings,
             (semgrep_findings, semgrep_err),
             (bandit_findings, bandit_err),
@@ -1131,6 +1135,7 @@ class SASTScanner:
             nextjs_task,
             backdoor_task,
             logic_task,
+            sys_analyst_task,
             sca_task,
             semgrep_task,
             bandit_task,
@@ -1139,8 +1144,8 @@ class SASTScanner:
             return_exceptions=False,
         )
 
-        # Emit real-time stream alerts for Next.js / JS Taint, Backdoor & Business-Logic Auditor findings
-        for f in backdoor_findings + nextjs_findings + logic_findings:
+        # Emit real-time stream alerts for Next.js / JS Taint, Backdoor, System Analyst & Business-Logic findings
+        for f in backdoor_findings + sys_findings + nextjs_findings + logic_findings:
             await self._emit(
                 VulnerabilityFound(
                     severity=f.severity.value,
@@ -1158,6 +1163,7 @@ class SASTScanner:
 
         raw_findings: List[VulnerabilityFinding] = (
             backdoor_findings
+            + sys_findings
             + mobile_findings
             + bandit_findings
             + semgrep_findings
@@ -1204,6 +1210,7 @@ class SASTScanner:
         duration = round(time.time() - start_time, 2)
         scanners_run = [
             ScannerType.BACKDOOR,
+            ScannerType.SYSTEM_ANALYST,
             ScannerType.MOBILE,
             ScannerType.CUSTOM,
             ScannerType.NEXTJS,
@@ -1217,6 +1224,12 @@ class SASTScanner:
             ScannerType.GIT_HISTORY,
         ]
 
+        enriched_system_analysis = (
+            system_analyst.enrich_with_findings(raw_system_analysis, clean_findings)
+            if raw_system_analysis
+            else None
+        )
+
         result = SASTScanResult(
             target_path=str(path),
             total_findings=len(clean_findings),
@@ -1224,7 +1237,8 @@ class SASTScanner:
             findings=clean_findings,
             duration_seconds=duration,
             scanners_run=scanners_run,
-            errors=errors
+            errors=errors,
+            system_analysis=enriched_system_analysis,
         )
 
         logger.info(

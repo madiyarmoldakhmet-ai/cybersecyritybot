@@ -15,6 +15,7 @@ _SKIP_AI_FILTER_SCANNERS = {
     ScannerType.GIT_HISTORY,
     ScannerType.AI_LOGIC,  # Already verified by structural rules or anti-hallucination gate
     ScannerType.BACKDOOR,  # High-precision backdoor / reverse-shell / Trojan Source signatures
+    ScannerType.SYSTEM_ANALYST,  # Deterministic architecture / trust-boundary checks
 }
 
 AI_BATCH_FILTER_SYSTEM_PROMPT = """\

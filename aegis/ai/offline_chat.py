@@ -69,6 +69,32 @@ def format_scan_context_note(ctx: Optional[Dict[str, Any]]) -> str:
         f"Score: {ctx.get('security_score', '-')}/100 ({ctx.get('grade', '-')}); "
         f"Всего находок: {ctx.get('total_findings', len(findings))}."
     )
+    sa = ctx.get("system_analysis")
+    if isinstance(sa, dict) and (sa.get("tech_stack") or sa.get("endpoints_total") or sa.get("risk_chains")):
+        stack = ", ".join(sa.get("tech_stack") or [])
+        stores = ", ".join(sa.get("datastores") or [])
+        auth_cov = sa.get("auth_coverage_pct")
+        ep_total = sa.get("endpoints_total", 0)
+        note += (
+            f"\nСистемный анализ архитектуры: стек [{stack or 'н/д'}]"
+            + (f"; БД [{stores}]" if stores else "")
+            + f"; API-маршрутов: {ep_total}"
+            + (f"; покрытие авторизацией: {auth_cov}%" if auth_cov is not None else "")
+            + "."
+        )
+        stride = sa.get("stride_breakdown") or {}
+        non_zero_stride = [f"{k}: {v}" for k, v in stride.items() if v]
+        if non_zero_stride:
+            note += "\nSTRIDE: " + ", ".join(non_zero_stride)
+        chains = sa.get("risk_chains") or []
+        if chains:
+            chain_lines = [
+                f"- [{c.get('severity', 'HIGH')}] {c.get('title', '')}: {' → '.join(c.get('steps') or [])}"
+                for c in chains[:4]
+                if isinstance(c, dict)
+            ]
+            if chain_lines:
+                note += "\nКонцептуальные цепочки риска:\n" + "\n".join(chain_lines)
     if top_lines:
         note += "\nКлючевые уязвимости:\n" + "\n".join(top_lines)
     return note
@@ -293,6 +319,50 @@ def _reply_git_history_and_heal() -> str:
     )
 
 
+def _reply_system_analysis(scan_context: Optional[Dict[str, Any]]) -> str:
+    sa = (scan_context or {}).get("system_analysis")
+    if not isinstance(sa, dict) or not (sa.get("tech_stack") or sa.get("endpoints_total") or sa.get("risk_chains")):
+        return (
+            "### Системный анализ и модель угроз (STRIDE)\n\n"
+            "После запуска аудита (**«Демо-аудит»**, `.zip` или подтверждённый GitHub-репозиторий) "
+            "модуль `SystemAnalystScanner` автоматически строит:\n"
+            "- **Карту архитектуры:** стек, БД/ORM, инфраструктура, все API-маршруты и процент покрытия авторизацией;\n"
+            "- **Границы доверия и STRIDE:** классификацию угроз (`Spoofing`, `Tampering`, `Information Disclosure`, `DoS`, `Elevation of Privilege`);\n"
+            "- **Концептуальные цепочки риска (Blast Radius):** как найденные баги, утечки секретов и ошибки конфигурации усиливают друг друга;\n"
+            "- **План исправлений P0 → P3** для инженерной команды."
+        )
+
+    repo = (scan_context or {}).get("repo_name", "workspace")
+    stack = ", ".join(sa.get("tech_stack") or ["Multi-language"])
+    stores = ", ".join(sa.get("datastores") or [])
+    ep_total = sa.get("endpoints_total", 0)
+    auth_cov = sa.get("auth_coverage_pct")
+    lines = [
+        f"### Системный анализ `{repo}`",
+        f"- **Стек:** `{stack}`" + (f" · **БД/Хранилища:** `{stores}`" if stores else ""),
+        f"- **Поверхность атаки:** `{ep_total}` маршрутов"
+        + (f" · **Покрытие авторизацией:** `{auth_cov}%`" if auth_cov is not None else ""),
+    ]
+    stride = sa.get("stride_breakdown") or {}
+    nz = [f"{k}: **{v}**" for k, v in stride.items() if v]
+    if nz:
+        lines.append("- **STRIDE:** " + " · ".join(nz))
+    chains = sa.get("risk_chains") or []
+    if chains:
+        lines.append("\n**Концептуальные цепочки риска (Blast Radius):**")
+        for idx, c in enumerate(chains[:4], 1):
+            steps = " → ".join(c.get("steps") or [])
+            lines.append(f"{idx}. **[`{c.get('severity', 'HIGH')}`] {c.get('title', '')}** — {steps}")
+            if c.get("defense"):
+                lines.append(f"   *Защита:* {c['defense']}")
+    roadmap = sa.get("remediation_roadmap") or []
+    if roadmap:
+        lines.append("\n**Дорожная карта исправления:**")
+        for step in roadmap[:4]:
+            lines.append(f"- {step}")
+    return "\n".join(lines)
+
+
 def build_offline_appsec_reply(
     question: str,
     scan_context: Optional[Dict[str, Any]],
@@ -300,6 +370,9 @@ def build_offline_appsec_reply(
 ) -> str:
     """Return a context-aware deterministic AppSec response when live LLM streaming is unavailable."""
     q = (question or "").strip().lower()
+
+    if any(k in q for k in ("системн", "архитектур", "stride", "цепоч", "модел", "угроз", "поверхност", "blast")):
+        return _reply_system_analysis(scan_context)
 
     if any(k in q for k in ("тенге", "коап", "штраф", "roi", "деньг", "эконом", "финанс", "мрп")):
         return _reply_financial_risk(scan_context)
