@@ -974,7 +974,7 @@ async def websocket_chat(websocket: WebSocket):
             provider, model, api_key, _is_local = await resolve_active_llm()
             try:
                 full_response = ""
-                if provider == LLMProvider.ANTHROPIC and api_key:
+                if provider in (LLMProvider.ANTHROPIC, LLMProvider.GEMINI) and api_key:
                     combined = "\n\n".join(
                         f"{m['role'].upper()}: {m['content']}" for m in chat_history[1:]
                     )
@@ -985,7 +985,7 @@ async def websocket_chat(websocket: WebSocket):
                             temperature=0.45,
                             max_tokens=700,
                             timeout=25.0,
-                            task_label="WSChat:Anthropic",
+                            task_label=f"WSChat:{provider.value}",
                         )
                     ) or ""
                     if full_response:

@@ -267,6 +267,62 @@ async def chat_completion(
             return None
 
     try:
+        if provider == LLMProvider.GEMINI and api_key:
+            payload = {
+                "systemInstruction": {"parts": [{"text": system_prompt}]},
+                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                "generationConfig": {
+                    "temperature": temperature,
+                    "maxOutputTokens": max_tokens,
+                },
+            }
+            # Support both Vertex Express / new AI Studio `AQ.` keys AND classic `AIza...` Developer API keys
+            if api_key.startswith("AQ."):
+                endpoints = [
+                    (
+                        "aiplatform",
+                        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent",
+                        {"Content-Type": "application/json"},
+                        {"key": api_key},
+                    ),
+                    (
+                        "generativelanguage",
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                        {"Content-Type": "application/json", "x-goog-api-key": api_key},
+                        None,
+                    ),
+                ]
+            else:
+                endpoints = [
+                    (
+                        "generativelanguage",
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                        {"Content-Type": "application/json", "x-goog-api-key": api_key},
+                        None,
+                    ),
+                    (
+                        "aiplatform",
+                        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent",
+                        {"Content-Type": "application/json"},
+                        {"key": api_key},
+                    ),
+                ]
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                for host_label, url, hdrs, qparams in endpoints:
+                    resp = await client.post(url, headers=hdrs, params=qparams, json=payload)
+                    if resp.status_code == 200:
+                        cands = resp.json().get("candidates") or []
+                        if cands:
+                            parts = (cands[0].get("content") or {}).get("parts") or []
+                            txt = "\n".join(str(p.get("text", "")) for p in parts if p.get("text")).strip()
+                            if txt:
+                                return txt
+                    else:
+                        logger.warning(
+                            f"{task_label}: Gemini ({host_label}/{model}) HTTP {resp.status_code}: {resp.text[:220]}"
+                        )
+            return None
+
         if provider == LLMProvider.ANTHROPIC and api_key:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(
@@ -310,5 +366,5 @@ async def chat_completion(
                 return await _invoke() or None
         return await _invoke() or None
     except Exception as exc:
-        logger.debug(f"{task_label} ({provider.value}/{model}) failed: {exc}")
+        logger.warning(f"{task_label} ({provider.value}/{model}) failed: {exc}")
         return None
