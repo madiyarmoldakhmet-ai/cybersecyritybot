@@ -43,7 +43,7 @@ async def probe_ai_status(timeout_seconds: float = 0.8) -> Tuple[str, bool, str]
     if not is_local:
         return f"{provider.value} · {model} (BYOK)", True, "облачный BYOK-провайдер (сессионный ключ)"
 
-    installed = await list_ollama_models(force_refresh=True)
+    installed = await list_ollama_models(force_refresh=False)
     if installed:
         return f"Ollama · {model} (online)", True, "локальная модель, 0 байт в облако"
     return f"Ollama · {model} (standby)", False, "rule-based AppSec движок, без облака"

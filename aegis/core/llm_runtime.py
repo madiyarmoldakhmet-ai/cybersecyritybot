@@ -304,12 +304,12 @@ async def list_gemini_models(api_key: str, force_refresh: bool = False) -> List[
 
 
 async def list_ollama_models(force_refresh: bool = False) -> List[str]:
-    """Query local Ollama `/api/tags` with a short URL-keyed cache & fast timeout."""
+    """Query local Ollama `/api/tags` with a short URL-keyed cache (including negative offline cache)."""
     global _ollama_tags_cache
     base = settings.ollama_base_url.rstrip("/")
     now = time.monotonic()
     cached_base, cached_ts, cached_models = _ollama_tags_cache
-    if not force_refresh and cached_base == base and (now - cached_ts) < _OLLAMA_CACHE_TTL and cached_models:
+    if not force_refresh and cached_base == base and cached_ts > 0.0 and (now - cached_ts) < _OLLAMA_CACHE_TTL:
         return list(cached_models)
 
     try:
@@ -471,8 +471,8 @@ async def resolve_active_llm(
 
 async def get_runtime_status() -> Dict[str, Any]:
     """Return safe public AI engine status (never exposes API keys)."""
-    installed = await list_ollama_models(force_refresh=True)
     provider, model, api_key, is_local = await resolve_active_llm()
+    installed = await list_ollama_models(force_refresh=False) if is_local else []
     gemini_models = await list_gemini_models(api_key) if (provider == LLMProvider.GEMINI and api_key) else []
     ollama_reachable = len(installed) > 0
     return {

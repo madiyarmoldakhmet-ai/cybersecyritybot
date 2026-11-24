@@ -16,6 +16,7 @@ from aegis.ai.offline_chat import probe_ai_status
 from aegis.core.audit_pipeline import report_urls_for
 from aegis.core.config import settings
 from aegis.core.metrics_store import DashboardMetrics, get_metrics_store
+from aegis.core.traffic_guard import traffic_telemetry
 
 logger = logging.getLogger("aegis.dashboard")
 router = APIRouter(tags=["Observability"])
@@ -31,6 +32,7 @@ async def dashboard_metrics() -> Dict[str, Any]:
     data["llm_mode"] = llm_mode
     data["llm_online"] = llm_online
     data["llm_hint"] = llm_hint
+    data["live_traffic"] = traffic_telemetry.snapshot()
     return data
 
 
@@ -231,6 +233,14 @@ def _render(
     <div class="stat"><div class="label">Оспорено (FP)</div><div class="value" id="appeals_count">{m.appeals_count}</div></div>
   </section>
 
+  <section class="secondary" aria-label="Живая активность сайта">
+    <div class="stat"><div class="label">Онлайн сейчас (WS)</div><div class="value" id="live_active_online">{traffic_telemetry.active_ws_users}</div></div>
+    <div class="stat"><div class="label">Уникальных гостей</div><div class="value" id="live_unique_visitors">{traffic_telemetry.snapshot()["unique_visitors"]}</div></div>
+    <div class="stat"><div class="label">Всего HTTP-запросов</div><div class="value" id="live_total_requests">{traffic_telemetry.total_requests}</div></div>
+    <div class="stat"><div class="label">Кэш Демо-скана</div><div class="value" id="live_demo_cache_hits">{traffic_telemetry.demo_cache_hits}</div></div>
+    <div class="stat"><div class="label">Заблокировано (429)</div><div class="value" id="live_rate_limited_429">{traffic_telemetry.rate_limited_429}</div></div>
+  </section>
+
   <h2>Последние проверки</h2>
   <div class="table-wrap">
     <table>
@@ -316,6 +326,10 @@ def _render(
         document.getElementById("avg_scan_seconds").textContent = secs(m.avg_scan_seconds);
         if (m.llm_mode) {{ document.getElementById("ai_chip_label").textContent = m.llm_mode; }}
         if (m.llm_hint) {{ document.getElementById("ai_kpi_hint").textContent = m.llm_hint; }}
+        if (m.live_traffic) {{
+          ["active_online", "unique_visitors", "total_requests", "demo_cache_hits", "rate_limited_429"]
+            .forEach(function (k) {{ var el = document.getElementById("live_" + k); if (el && m.live_traffic[k] !== undefined) el.textContent = m.live_traffic[k]; }});
+        }}
         var dot = document.getElementById("ai_chip_dot");
         if (dot) {{ dot.className = m.llm_online ? "dot" : "dot dot-standby"; }}
         if (m.recent && m.recent.length) {{

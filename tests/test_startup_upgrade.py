@@ -1269,3 +1269,42 @@ async def test_system_analyst_architecture_stride_and_risk_chains(tmp_path: Path
     reply = build_offline_appsec_reply("Системный анализ и цепочки угроз", ctx, "gemini-3.6-flash")
     assert "Системный анализ" in reply
     assert "STRIDE" in reply
+
+
+@pytest.mark.asyncio
+async def test_traffic_guard_rate_limiting_security_headers_and_live_telemetry(monkeypatch):
+    from aegis.core.traffic_guard import rate_limiter, traffic_telemetry
+    from aegis_server.main import app
+
+    rate_limiter.clear()
+    traffic_telemetry.reset()
+    monkeypatch.setenv("AEGIS_ENABLE_RATE_LIMIT", "1")
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+            # 1. Defensive security headers & live traffic telemetry in /api/v1/dashboard/metrics
+            r0 = await client.get("/api/v1/dashboard/metrics", headers={"X-Forwarded-For": "203.0.113.10"})
+            assert r0.status_code == 200
+            assert r0.headers.get("x-content-type-options") == "nosniff"
+            assert r0.headers.get("x-frame-options") == "DENY"
+            assert r0.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+            lt = r0.json()["live_traffic"]
+            assert lt["total_requests"] >= 1
+            assert lt["unique_visitors"] >= 1
+
+            # 2. Heavy scan endpoint enforces per-IP 429 after 12 req/min while other IPs remain unaffected
+            codes = []
+            for _ in range(15):
+                resp = await client.post(
+                    "/api/scan/repo",
+                    json={"github_url": "not-a-valid-url"},
+                    headers={"X-Forwarded-For": "198.51.100.99"},
+                )
+                codes.append(resp.status_code)
+            assert codes.count(400) == 12
+            assert codes.count(429) == 3
+
+            # Different visitor IP is still served cleanly
+            other = await client.get("/api/ai/config", headers={"X-Forwarded-For": "203.0.113.11"})
+            assert other.status_code == 200
+    finally:
+        rate_limiter.clear()

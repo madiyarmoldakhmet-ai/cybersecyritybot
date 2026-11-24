@@ -7,6 +7,7 @@ dashboard survives restarts and needs no external database service.
 import logging
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,8 +90,12 @@ class MetricsStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._summary_cache: Optional[tuple[int, float, DashboardMetrics]] = None
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+
+    def _invalidate_cache(self) -> None:
+        self._summary_cache = None
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=5)
@@ -125,6 +130,7 @@ class MetricsStore:
                     float(scan_seconds), float(ai_seconds), int(ai_generated), report_name,
                 ),
             )
+            self._invalidate_cache()
 
     def record_failure(self, repo_name: str, commit_sha: str, branch: str, error: str) -> None:
         with self._lock, self._connect() as conn:
@@ -133,6 +139,7 @@ class MetricsStore:
                    VALUES (?, 'failed', ?, ?, ?, ?)""",
                 (self._now(), repo_name, commit_sha, branch, error[:500]),
             )
+            self._invalidate_cache()
 
     def record_appeal(
         self,
@@ -165,6 +172,7 @@ class MetricsStore:
                 ),
             )
             appeal_id = int(cur.lastrowid)
+            self._invalidate_cache()
         return {
             "id": appeal_id,
             "created_at": created_at,
@@ -196,50 +204,58 @@ class MetricsStore:
     def delete_appeal(self, appeal_id: int) -> bool:
         with self._lock, self._connect() as conn:
             cur = conn.execute("DELETE FROM finding_appeals WHERE id = ?", (int(appeal_id),))
+            self._invalidate_cache()
             return cur.rowcount > 0
 
     def summary(self, recent_limit: int = 10) -> DashboardMetrics:
-        with self._lock, self._connect() as conn:
-            row = conn.execute(
-                """SELECT
-                       COUNT(*) FILTER (WHERE status = 'completed')                       AS total_scans,
-                       COUNT(*) FILTER (WHERE status = 'failed')                          AS failed_scans,
-                       COALESCE(SUM(critical), 0)                                         AS critical_found,
-                       COALESCE(SUM(high), 0)                                             AS high_found,
-                       COALESCE(SUM(total_findings), 0)                                   AS total_findings,
-                       COUNT(DISTINCT repo_name)                                          AS repos_monitored,
-                       AVG(ai_seconds)   FILTER (WHERE status = 'completed' AND ai_generated = 1) AS avg_ai_seconds,
-                       AVG(scan_seconds) FILTER (WHERE status = 'completed')              AS avg_scan_seconds
-                   FROM audits"""
-            ).fetchone()
-            recent = conn.execute(
-                """SELECT created_at, status, repo_name, commit_sha, branch, total_findings, critical, high,
-                          medium, low, ai_seconds, ai_generated, report_name
-                   FROM audits ORDER BY id DESC LIMIT ?""",
-                (recent_limit,),
-            ).fetchall()
-            appeals_count = conn.execute("SELECT COUNT(*) FROM finding_appeals").fetchone()[0]
-            recent_appeals = conn.execute(
-                """SELECT id, created_at, repo_name, finding_key, finding_title, severity, status, reason, reviewer
-                   FROM finding_appeals ORDER BY id DESC LIMIT 10"""
-            ).fetchall()
+        now = time.monotonic()
+        with self._lock:
+            cached = self._summary_cache
+            if cached and cached[0] == recent_limit and (now - cached[1]) < 2.0:
+                return cached[2]
+            with self._connect() as conn:
+                row = conn.execute(
+                    """SELECT
+                           COUNT(*) FILTER (WHERE status = 'completed')                       AS total_scans,
+                           COUNT(*) FILTER (WHERE status = 'failed')                          AS failed_scans,
+                           COALESCE(SUM(critical), 0)                                         AS critical_found,
+                           COALESCE(SUM(high), 0)                                             AS high_found,
+                           COALESCE(SUM(total_findings), 0)                                   AS total_findings,
+                           COUNT(DISTINCT repo_name)                                          AS repos_monitored,
+                           AVG(ai_seconds)   FILTER (WHERE status = 'completed' AND ai_generated = 1) AS avg_ai_seconds,
+                           AVG(scan_seconds) FILTER (WHERE status = 'completed')              AS avg_scan_seconds
+                       FROM audits"""
+                ).fetchone()
+                recent = conn.execute(
+                    """SELECT created_at, status, repo_name, commit_sha, branch, total_findings, critical, high,
+                              medium, low, ai_seconds, ai_generated, report_name
+                       FROM audits ORDER BY id DESC LIMIT ?""",
+                    (recent_limit,),
+                ).fetchall()
+                appeals_count = conn.execute("SELECT COUNT(*) FROM finding_appeals").fetchone()[0]
+                recent_appeals = conn.execute(
+                    """SELECT id, created_at, repo_name, finding_key, finding_title, severity, status, reason, reviewer
+                       FROM finding_appeals ORDER BY id DESC LIMIT 10"""
+                ).fetchall()
 
-        def rounded(value: Optional[float]) -> Optional[float]:
-            return round(value, 2) if value is not None else None
+            def rounded(value: Optional[float]) -> Optional[float]:
+                return round(value, 2) if value is not None else None
 
-        return DashboardMetrics(
-            total_scans=row["total_scans"],
-            failed_scans=row["failed_scans"],
-            critical_found=row["critical_found"],
-            high_found=row["high_found"],
-            total_findings=row["total_findings"],
-            repos_monitored=row["repos_monitored"],
-            avg_ai_seconds=rounded(row["avg_ai_seconds"]),
-            avg_scan_seconds=rounded(row["avg_scan_seconds"]),
-            appeals_count=int(appeals_count),
-            recent=[dict(r) for r in recent],
-            recent_appeals=[dict(r) for r in recent_appeals],
-        )
+            result = DashboardMetrics(
+                total_scans=row["total_scans"],
+                failed_scans=row["failed_scans"],
+                critical_found=row["critical_found"],
+                high_found=row["high_found"],
+                total_findings=row["total_findings"],
+                repos_monitored=row["repos_monitored"],
+                avg_ai_seconds=rounded(row["avg_ai_seconds"]),
+                avg_scan_seconds=rounded(row["avg_scan_seconds"]),
+                appeals_count=int(appeals_count),
+                recent=[dict(r) for r in recent],
+                recent_appeals=[dict(r) for r in recent_appeals],
+            )
+            self._summary_cache = (recent_limit, now, result)
+            return result
 
 
 _store: Optional[MetricsStore] = None

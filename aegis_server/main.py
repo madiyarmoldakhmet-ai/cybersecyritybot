@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -12,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from openai import AsyncOpenAI
@@ -37,6 +39,7 @@ from aegis.core.llm_runtime import (
 )
 from aegis.core.pr_creator import PullRequestCreator
 from aegis.core.self_heal import SelfHealer
+from aegis.core.traffic_guard import TrafficGuardMiddleware, traffic_telemetry
 from aegis.core.verifier import OwnershipVerifier
 from aegis.scanners.models import SASTScanResult
 from aegis.scanners.sast_scanner import SASTScanner
@@ -138,6 +141,8 @@ def _build_scan_payload(
         "scan_result": result.model_dump(),
     }
 
+app.add_middleware(GZipMiddleware, minimum_size=500)
+app.add_middleware(TrafficGuardMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -145,6 +150,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Concurrency cap & single-flight demo scan cache to prevent OOM under 100K+ traffic bursts
+_DEMO_SCAN_CACHE: Optional[tuple[float, Dict[str, Any]]] = None
+_DEMO_SCAN_TTL_SECONDS = 300.0
+_SCAN_LIMITER_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_SCAN_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_DEMO_LOCK: Optional[asyncio.Lock] = None
+
+
+def _get_scan_primitives() -> tuple[asyncio.Semaphore, asyncio.Lock]:
+    global _SCAN_LIMITER_LOOP, _SCAN_SEMAPHORE, _DEMO_LOCK
+    loop = asyncio.get_running_loop()
+    if _SCAN_LIMITER_LOOP is not loop or _SCAN_SEMAPHORE is None or _DEMO_LOCK is None:
+        _SCAN_LIMITER_LOOP = loop
+        _SCAN_SEMAPHORE = asyncio.Semaphore(2)
+        _DEMO_LOCK = asyncio.Lock()
+    return _SCAN_SEMAPHORE, _DEMO_LOCK
 
 # Commit Guardian: GitHub webhook audits, observability dashboard & REST API
 app.include_router(webhook_router)
@@ -241,32 +263,48 @@ async def scan_repo_http(req: ScanRequest):
 
 @app.post("/api/scan/demo")
 async def scan_demo():
-    """Run a 1-click live demo audit against the built-in fintech/GovTech target with real git history."""
+    """Run a 1-click live demo audit with single-flight 5m caching so traffic spikes never OOM the container."""
+    global _DEMO_SCAN_CACHE
     if not DEMO_TARGET_DIR.is_dir():
         return JSONResponse(status_code=404, content={"error": "Demo target directory is missing."})
 
-    scan_uuid = uuid.uuid4().hex[:12]
-    work_dir = SCANS_DIR / f"demo_{scan_uuid}"
-    try:
-        target = await asyncio.to_thread(materialize_demo_repo, DEMO_TARGET_DIR, work_dir / "kz-fintech-app")
-        commit_sha, branch, author, commits = await _extract_git_metadata(
-            target, fallback_sha=scan_uuid, fallback_branch="demo", fallback_author="stage-demo"
-        )
-        scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
-        result = await scanner.scan(target)
-        repo_name = "demo/kz-fintech-app"
-        artifacts = await finalize_scan_audit(
-            result,
-            repo_name=repo_name,
-            commit_sha=commit_sha,
-            branch=branch,
-            author=author,
-        )
-        return _build_scan_payload(
-            result, repo_name, artifacts, commit_sha=commit_sha, branch=branch, author=author, commits=commits
-        )
-    finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+    use_cache = not bool(os.environ.get("PYTEST_CURRENT_TEST")) or os.environ.get("AEGIS_ENABLE_DEMO_CACHE") == "1"
+    if use_cache and _DEMO_SCAN_CACHE and (time.monotonic() - _DEMO_SCAN_CACHE[0]) < _DEMO_SCAN_TTL_SECONDS:
+        traffic_telemetry.demo_cache_hits += 1
+        return {**_DEMO_SCAN_CACHE[1], "cached": True}
+
+    scan_sem, demo_lock = _get_scan_primitives()
+    async with demo_lock:
+        if use_cache and _DEMO_SCAN_CACHE and (time.monotonic() - _DEMO_SCAN_CACHE[0]) < _DEMO_SCAN_TTL_SECONDS:
+            traffic_telemetry.demo_cache_hits += 1
+            return {**_DEMO_SCAN_CACHE[1], "cached": True}
+
+        async with scan_sem:
+            scan_uuid = uuid.uuid4().hex[:12]
+            work_dir = SCANS_DIR / f"demo_{scan_uuid}"
+            try:
+                target = await asyncio.to_thread(materialize_demo_repo, DEMO_TARGET_DIR, work_dir / "kz-fintech-app")
+                commit_sha, branch, author, commits = await _extract_git_metadata(
+                    target, fallback_sha=scan_uuid, fallback_branch="demo", fallback_author="stage-demo"
+                )
+                scanner = SASTScanner(event_bus=ScanEventBus(scan_id=scan_uuid))
+                result = await scanner.scan(target)
+                repo_name = "demo/kz-fintech-app"
+                artifacts = await finalize_scan_audit(
+                    result,
+                    repo_name=repo_name,
+                    commit_sha=commit_sha,
+                    branch=branch,
+                    author=author,
+                )
+                payload = _build_scan_payload(
+                    result, repo_name, artifacts, commit_sha=commit_sha, branch=branch, author=author, commits=commits
+                )
+                if use_cache:
+                    _DEMO_SCAN_CACHE = (time.monotonic(), payload)
+                return payload
+            finally:
+                shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @app.post("/api/scan/demo/heal")
@@ -931,6 +969,9 @@ async def http_chat(req: ChatHttpRequest):
 
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
+    if not traffic_telemetry.ws_connected():
+        await websocket.close(code=1013, reason="Server busy — max concurrent chat sessions reached")
+        return
     await websocket.accept()
 
     system_prompt = _APPSEC_CHAT_SYSTEM_PROMPT
@@ -1042,6 +1083,8 @@ async def websocket_chat(websocket: WebSocket):
             await websocket.close()
         except Exception as close_err:
             logger.debug(f"Chat WebSocket close skipped: {close_err}")
+    finally:
+        traffic_telemetry.ws_disconnected()
 
 # Mounted last so it never shadows API routes; optional so the API runs without a frontend build
 FRONTEND_DIR = Path("aegis_web/out")

@@ -17,6 +17,7 @@ import secrets
 import shutil
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import quote, urlparse
 
@@ -27,8 +28,12 @@ logger = logging.getLogger("aegis.verifier")
 
 _PROOF_SECRET = os.environ.get("AEGIS_PROOF_SECRET", "").encode("utf-8") or secrets.token_bytes(32)
 _CHALLENGE_TTL_SECONDS = 1800
-_CHALLENGES: Dict[str, Tuple[str, float]] = {}
+_MAX_CHALLENGES = 10_000
+_CHALLENGES: "OrderedDict[str, Tuple[str, float]]" = OrderedDict()
 _GITHUB_ETAG_CACHE: Dict[str, Tuple[str, Any]] = {}
+_REPO_META_CACHE: "OrderedDict[str, Tuple[str, bool, float]]" = OrderedDict()
+_REPO_META_TTL_SECONDS = 600.0
+_MAX_REPO_META = 2048
 
 
 class OwnershipVerifier:
@@ -139,9 +144,12 @@ class OwnershipVerifier:
         existing = _CHALLENGES.get(normalized)
         if existing and existing[1] > now + 60:
             code = existing[0]
+            _CHALLENGES.move_to_end(normalized)
         else:
             code = cls.generate_commit_challenge()
             _CHALLENGES[normalized] = (code, now + _CHALLENGE_TTL_SECONDS)
+            if len(_CHALLENGES) > _MAX_CHALLENGES:
+                _CHALLENGES.popitem(last=False)
 
         verify_url: Optional[str] = None
         if resolved_type == "github":
@@ -184,6 +192,17 @@ class OwnershipVerifier:
         branch = "main"
         filename = "verify.txt"
 
+        cache_key = repo_name.lower()
+        now_m = time.monotonic()
+        cached_meta = _REPO_META_CACHE.get(cache_key)
+        if cached_meta and (now_m - cached_meta[2]) < _REPO_META_TTL_SECONDS:
+            _REPO_META_CACHE.move_to_end(cache_key)
+            branch, verify_exists = cached_meta[0], cached_meta[1]
+            if verify_exists:
+                suffix = code.rsplit("-", 1)[-1][:8]
+                filename = f"verify-{suffix}.txt"
+            return cls.issue_challenge(target, target_type="github", branch=branch, filename=filename)
+
         headers = {
             "User-Agent": "CommitGuardian-Verifier/2.1",
             "Accept": "application/vnd.github.v3+json",
@@ -192,6 +211,7 @@ class OwnershipVerifier:
         if gh_token and not gh_token.startswith("your_"):
             headers["Authorization"] = f"Bearer {gh_token}"
 
+        verify_exists = False
         try:
             async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
                 repo_resp = await client.get(f"https://api.github.com/repos/{repo_name}", headers=headers)
@@ -204,10 +224,15 @@ class OwnershipVerifier:
                         headers=headers,
                     )
                     if exists_resp.status_code == 200:
+                        verify_exists = True
                         suffix = code.rsplit("-", 1)[-1][:8]
                         filename = f"verify-{suffix}.txt"
         except Exception as exc:
             logger.debug(f"GitHub metadata lookup skipped for {repo_name}: {exc}")
+
+        _REPO_META_CACHE[cache_key] = (branch, verify_exists, now_m)
+        if len(_REPO_META_CACHE) > _MAX_REPO_META:
+            _REPO_META_CACHE.popitem(last=False)
 
         return cls.issue_challenge(target, target_type="github", branch=branch, filename=filename)
 
