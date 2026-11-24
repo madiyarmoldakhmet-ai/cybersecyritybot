@@ -12,6 +12,7 @@ Unified Runtime LLM Provider & Smart Model Resolver for Commit Guardian.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -97,6 +98,97 @@ _GEMINI_MODELS_CACHE_TTL = 600.0
 _resolved_gemini_model: Optional[str] = None
 _last_gemini_model_used: Optional[str] = None
 _last_gemini_fallbacks: List[str] = []
+_gemini_cooldown: Dict[str, float] = {}
+_gemini_warmup_task: Optional[asyncio.Task] = None
+
+
+def _mark_gemini_cooldown(model_name: str, seconds: float) -> None:
+    _gemini_cooldown[model_name] = time.monotonic() + seconds
+
+
+def _is_gemini_cooled_down(model_name: str) -> bool:
+    until = _gemini_cooldown.get(model_name, 0.0)
+    return until > time.monotonic()
+
+
+async def warmup_gemini_model() -> Optional[str]:
+    """
+    Probe top ranked Gemini models (Pro first, then full Flash) IN PARALLEL at server startup
+    so the very first user chat turn responds in ~2-4s instead of serially hitting 429/404/503s.
+    """
+    global _resolved_gemini_model, _last_gemini_fallbacks
+    if settings.air_gapped or settings.llm_provider != LLMProvider.GEMINI or not settings.gemini_api_key:
+        return None
+
+    api_key = settings.gemini_api_key
+    ranked = await list_gemini_models(api_key)
+    candidates = (ranked[:9] if ranked else list(_GEMINI_FALLBACK_PRO_ORDER))
+    if not candidates:
+        return None
+
+    hdrs = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+
+    async def _probe(cand: str) -> Tuple[str, str]:
+        low = cand.lower()
+        gen_cfg: Dict[str, Any] = {"maxOutputTokens": 16}
+        if "gemini-3" in low:
+            gen_cfg["thinkingConfig"] = {"thinkingLevel": "low"}
+        elif "gemini-2.5-pro" in low:
+            gen_cfg["thinkingConfig"] = {"thinkingBudget": 128}
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": "ok"}]}],
+            "generationConfig": gen_cfg,
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{cand}:generateContent"
+        try:
+            async with httpx.AsyncClient(timeout=7.5) as client:
+                resp = await client.post(url, headers=hdrs, json=payload)
+                if resp.status_code == 400 and "thinking" in resp.text.lower():
+                    resp = await client.post(
+                        url,
+                        headers=hdrs,
+                        json={"contents": payload["contents"], "generationConfig": {"maxOutputTokens": 16}},
+                    )
+                if resp.status_code == 200:
+                    return cand, "OK"
+                return cand, f"HTTP{resp.status_code}"
+        except httpx.TimeoutException:
+            return cand, "timeout"
+        except Exception as exc:
+            return cand, type(exc).__name__
+
+    results = await asyncio.gather(*(_probe(c) for c in candidates))
+    winner: Optional[str] = None
+    notes: List[str] = []
+    for cand, status in results:
+        if status == "OK":
+            if winner is None:
+                winner = cand
+        else:
+            if winner is None:
+                notes.append(f"{cand}:{status}")
+            if status in ("HTTP404", "HTTP429"):
+                _mark_gemini_cooldown(cand, 600.0)
+            else:
+                _mark_gemini_cooldown(cand, 90.0)
+
+    if winner:
+        _resolved_gemini_model = winner
+        _last_gemini_fallbacks = notes
+        logger.info(f"Gemini startup warmup locked onto '{winner}' (skipped: {notes[:5]})")
+    else:
+        _last_gemini_fallbacks = notes
+        logger.warning(f"Gemini startup warmup found no ready candidate: {notes[:6]}")
+    return winner
+
+
+def start_gemini_warmup() -> None:
+    """Kick off non-blocking parallel Gemini warmup once at FastAPI startup."""
+    global _gemini_warmup_task
+    if settings.air_gapped or settings.llm_provider != LLMProvider.GEMINI or not settings.gemini_api_key:
+        return
+    if _gemini_warmup_task is None or _gemini_warmup_task.done():
+        _gemini_warmup_task = asyncio.create_task(warmup_gemini_model())
 
 
 def rank_gemini_models(model_names: List[str]) -> List[str]:
@@ -285,6 +377,7 @@ def reset_runtime_override() -> None:
     global _runtime_override, _resolved_gemini_model
     _runtime_override = None
     _resolved_gemini_model = None
+    _gemini_cooldown.clear()
 
 
 async def resolve_active_llm(
@@ -425,6 +518,14 @@ async def chat_completion(
             global _resolved_gemini_model, _last_gemini_model_used, _last_gemini_fallbacks
             attempt_notes: List[str] = []
 
+            # If startup parallel warmup is currently probing models, await it briefly (<= 7s)
+            # instead of duplicating serial 429/404/503 retries on the user's first message.
+            if _resolved_gemini_model is None and _gemini_warmup_task is not None and not _gemini_warmup_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(_gemini_warmup_task), timeout=7.5)
+                except Exception:
+                    pass
+
             def _gemini_payload(target_model: str, include_thinking: bool = True) -> Dict[str, Any]:
                 low_name = target_model.lower()
                 if "gemini-3" in low_name:
@@ -480,14 +581,25 @@ async def chat_completion(
                 base_candidates.extend(_GEMINI_FALLBACK_PRO_ORDER)
 
             candidate_models = list(dict.fromkeys(m for m in base_candidates if m))
+            # Skip models that recently returned 404/429/503 unless explicitly requested or all cooled down
+            active_candidates = [
+                m for m in candidate_models
+                if m == explicit_user_model or not _is_gemini_cooled_down(m)
+            ]
+            if not active_candidates:
+                active_candidates = candidate_models
             hdrs = {"Content-Type": "application/json", "x-goog-api-key": api_key}
 
-            for cand_model in candidate_models[:8]:
+            for cand_model in active_candidates[:8]:
                 is_pro = "pro" in cand_model.lower() and "lite" not in cand_model.lower()
-                if is_pro:
-                    per_model_timeout = max(timeout, 35.0) if deep_reasoning else min(max(timeout, 22.0), 28.0)
+                is_verified = cand_model == _resolved_gemini_model
+                if deep_reasoning:
+                    per_model_timeout = max(timeout, 32.0) if is_pro else min(max(timeout, 20.0), 26.0)
+                elif is_verified:
+                    per_model_timeout = min(max(timeout, 16.0), 22.0)
                 else:
-                    per_model_timeout = min(max(timeout, 16.0), 24.0)
+                    # Keep unverified probe hops brisk so cold-start failover never stalls chat
+                    per_model_timeout = 11.0 if is_pro else 10.0
 
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{cand_model}:generateContent"
                 async with httpx.AsyncClient(timeout=per_model_timeout) as client:
@@ -495,6 +607,7 @@ async def chat_completion(
                         resp = await client.post(url, headers=hdrs, json=_gemini_payload(cand_model, True))
                     except httpx.TimeoutException:
                         attempt_notes.append(f"{cand_model}:timeout({per_model_timeout:.0f}s)")
+                        _mark_gemini_cooldown(cand_model, 90.0)
                         logger.warning(
                             f"{task_label}: Gemini '{cand_model}' timed out after {per_model_timeout:.0f}s, trying next..."
                         )
@@ -508,13 +621,15 @@ async def chat_completion(
                             resp = await client.post(url, headers=hdrs, json=_gemini_payload(cand_model, False))
                         except httpx.TimeoutException:
                             attempt_notes.append(f"{cand_model}:timeout-nothink")
+                            _mark_gemini_cooldown(cand_model, 90.0)
                             continue
 
                     if resp.status_code == 200:
                         txt = _extract_gemini_text(resp.json())
                         if txt:
                             _last_gemini_model_used = cand_model
-                            _last_gemini_fallbacks = attempt_notes
+                            if attempt_notes:
+                                _last_gemini_fallbacks = attempt_notes
                             if "lite" not in cand_model.lower():
                                 _resolved_gemini_model = cand_model
                             logger.info(
@@ -524,6 +639,7 @@ async def chat_completion(
                         attempt_notes.append(f"{cand_model}:empty")
                     elif resp.status_code in (404, 429, 503):
                         attempt_notes.append(f"{cand_model}:HTTP{resp.status_code}")
+                        _mark_gemini_cooldown(cand_model, 600.0 if resp.status_code in (404, 429) else 90.0)
                         logger.warning(
                             f"{task_label}: Gemini '{cand_model}' HTTP {resp.status_code} ({resp.text[:160]}), trying next..."
                         )
@@ -532,6 +648,7 @@ async def chat_completion(
                         continue
                     else:
                         attempt_notes.append(f"{cand_model}:HTTP{resp.status_code}")
+                        _mark_gemini_cooldown(cand_model, 90.0)
                         logger.warning(
                             f"{task_label}: Gemini ({cand_model}) HTTP {resp.status_code}: {resp.text[:220]}"
                         )

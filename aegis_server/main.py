@@ -33,6 +33,7 @@ from aegis.core.llm_runtime import (
     reset_runtime_override,
     resolve_active_llm,
     set_runtime_override,
+    start_gemini_warmup,
 )
 from aegis.core.pr_creator import PullRequestCreator
 from aegis.core.self_heal import SelfHealer
@@ -67,6 +68,7 @@ def log_security_posture() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log_security_posture()
+    start_gemini_warmup()
     bot_task = asyncio.create_task(run_bot())
     yield
     logger.info("Shutting down Telegram bot")
@@ -993,13 +995,16 @@ async def websocket_chat(websocket: WebSocket):
                         f"{m['role'].upper()}: {m['content']}" for m in chat_history[1:]
                     )
                     full_response = (
-                        await chat_completion(
-                            system_prompt,
-                            combined,
-                            temperature=0.45,
-                            max_tokens=1200,
-                            timeout=30.0,
-                            task_label=f"WSChat:{provider.value}",
+                        await asyncio.wait_for(
+                            chat_completion(
+                                system_prompt,
+                                combined,
+                                temperature=0.45,
+                                max_tokens=1200,
+                                timeout=20.0,
+                                task_label=f"WSChat:{provider.value}",
+                            ),
+                            timeout=24.0,
                         )
                     ) or ""
                     if full_response:

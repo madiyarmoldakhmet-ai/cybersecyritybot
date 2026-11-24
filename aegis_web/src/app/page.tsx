@@ -334,6 +334,9 @@ export default function Home() {
 
   const zipInputId = useId();
   const chatWsRef = useRef<WebSocket | null>(null);
+  const wsPendingRef = useRef<{ message: string; scan_context?: Record<string, unknown> } | null>(null);
+  const wsWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const httpChatFallbackRef = useRef<(msg: string, ctx?: Record<string, unknown>) => Promise<void>>(async () => {});
   const scanWsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startScanRef = useRef<(repoUrl: string, overrideAuth?: { proofToken?: string; githubToken?: string }) => void>(() => {});
@@ -450,11 +453,14 @@ export default function Home() {
     let active = true;
     const pollHealth = async () => {
       try {
-        const res = await fetch('/health');
+        const res = await fetch('/api/ai/config', { cache: 'no-store' });
         if (!res.ok || !active) return;
-        const data = await res.json();
-        if (typeof data.ollama_online === 'boolean') setOllamaOnline(data.ollama_online);
-        if (data.ollama_model) setOllamaModel(data.ollama_model);
+        const cfg = await res.json();
+        const online = cfg.is_local ? Boolean(cfg.ollama_reachable) : Boolean(cfg.has_api_key);
+        setOllamaOnline(online);
+        if (cfg.model) {
+          setOllamaModel(cfg.is_local ? cfg.model : `${cfg.provider}:${cfg.model}`);
+        }
       } catch {
         if (active) setOllamaOnline(false);
       }
@@ -478,6 +484,11 @@ export default function Home() {
       chatWsRef.current = ws;
 
       ws.onmessage = (event) => {
+        if (wsWatchdogRef.current) {
+          clearTimeout(wsWatchdogRef.current);
+          wsWatchdogRef.current = null;
+        }
+        wsPendingRef.current = null;
         const data = JSON.parse(event.data);
         if (data.type === 'authorship' && data.proof_token) {
           setPendingVerify(null);
@@ -557,6 +568,15 @@ export default function Home() {
       };
 
       ws.onclose = () => {
+        if (wsWatchdogRef.current) {
+          clearTimeout(wsWatchdogRef.current);
+          wsWatchdogRef.current = null;
+        }
+        if (wsPendingRef.current) {
+          const pending = wsPendingRef.current;
+          wsPendingRef.current = null;
+          void httpChatFallbackRef.current(pending.message, pending.scan_context);
+        }
         if (!unmounted) reconnectTimer = setTimeout(connectChatWs, 3000);
       };
     };
@@ -566,6 +586,7 @@ export default function Home() {
     return () => {
       unmounted = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (wsWatchdogRef.current) clearTimeout(wsWatchdogRef.current);
       if (chatWsRef.current) chatWsRef.current.onclose = null;
       chatWsRef.current?.close();
       scanWsRef.current?.close();
@@ -760,6 +781,96 @@ export default function Home() {
     ]);
   };
 
+  const deliverChatOverHttp = useCallback(
+    async (userMsg: string, scanContext?: Record<string, unknown>) => {
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: userMsg, scan_context: scanContext }),
+        });
+        const data = await res.json();
+        setIsTyping(false);
+        if (data.verified_authorship?.proof_token) {
+          const va = data.verified_authorship;
+          setPendingVerify(null);
+          setOwnershipBlockedRepo(null);
+          setOrcaChatReply('');
+          setAuthorship((prev) => ({
+            ...prev,
+            verified: true,
+            target: va.target || prev.target,
+            targetType: 'github',
+            method: va.method || 'commit_challenge',
+            actor: va.actor || 'verified-author',
+            role: va.role || 'CommitVerified',
+            message: va.message || `Авторство ${va.target} подтверждено.`,
+            proofToken: va.proof_token,
+          }));
+        }
+        if (data.verify_challenge?.challenge_code && data.verify_challenge?.verify_url) {
+          const vc = data.verify_challenge;
+          const card: ChatVerifyCard = {
+            repoName: vc.repo_name,
+            challengeCode: vc.challenge_code,
+            verifyUrl: vc.verify_url,
+            verifyFilename: vc.verify_filename || 'verify.txt',
+          };
+          activatePendingVerify(card);
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== 'streaming'),
+            {
+              id: `${Date.now() + 1}`,
+              role: 'assistant',
+              content: data.reply || `Подтверди авторство \`${vc.repo_name}\` в 1 клик — я сама всё проверю!`,
+              verifyCard: card,
+              timestamp: formatNowTime(),
+            },
+          ]);
+          return;
+        }
+        if (data.action === 'AUTOFIX') {
+          setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
+          autoFixActionRef.current(Boolean(data.direct_commit));
+          return;
+        }
+        if (data.action === 'SCAN' && data.github_url) {
+          setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
+          startScanRef.current(data.github_url);
+          return;
+        }
+        const replyText = data.reply || 'Запрос обработан.';
+        const spoken = summarizeSpeechLine(replyText);
+        if (spoken) setOrcaChatReply(spoken);
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== 'streaming'),
+          {
+            id: `${Date.now() + 1}`,
+            role: 'assistant',
+            content: replyText,
+            timestamp: formatNowTime(),
+          },
+        ]);
+      } catch {
+        setIsTyping(false);
+        setMessages((prev) => [
+          ...prev.filter((m) => m.id !== 'streaming'),
+          {
+            id: `${Date.now() + 1}`,
+            role: 'assistant',
+            content: 'Не удалось доставить сообщение. Повторите запрос или запустите «Демо-аудит».',
+            timestamp: formatNowTime(),
+          },
+        ]);
+      }
+    },
+    [activatePendingVerify]
+  );
+
+  useEffect(() => {
+    httpChatFallbackRef.current = deliverChatOverHttp;
+  }, [deliverChatOverHttp]);
+
   const sendChatText = useCallback(
     async (rawPrompt: string) => {
       const userMsg = rawPrompt.trim();
@@ -791,91 +902,23 @@ export default function Home() {
         }
         setIsTyping(true);
         setMessages((prev) => [...prev, { id: 'streaming', role: 'assistant', content: '', timestamp: now }]);
-        try {
-          const res = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: userMsg, scan_context: scanContext }),
-          });
-          const data = await res.json();
-          setIsTyping(false);
-          if (data.verified_authorship?.proof_token) {
-            const va = data.verified_authorship;
-            setPendingVerify(null);
-            setOwnershipBlockedRepo(null);
-            setOrcaChatReply('');
-            setAuthorship((prev) => ({
-              ...prev,
-              verified: true,
-              target: va.target || prev.target,
-              targetType: 'github',
-              method: va.method || 'commit_challenge',
-              actor: va.actor || 'verified-author',
-              role: va.role || 'CommitVerified',
-              message: va.message || `Авторство ${va.target} подтверждено.`,
-              proofToken: va.proof_token,
-            }));
-          }
-          if (data.verify_challenge?.challenge_code && data.verify_challenge?.verify_url) {
-            const vc = data.verify_challenge;
-            const card: ChatVerifyCard = {
-              repoName: vc.repo_name,
-              challengeCode: vc.challenge_code,
-              verifyUrl: vc.verify_url,
-              verifyFilename: vc.verify_filename || 'verify.txt',
-            };
-            activatePendingVerify(card);
-            setMessages((prev) => [
-              ...prev.filter((m) => m.id !== 'streaming'),
-              {
-                id: `${Date.now() + 1}`,
-                role: 'assistant',
-                content: data.reply || `Подтверди авторство \`${vc.repo_name}\` в 1 клик — я сама всё проверю!`,
-                verifyCard: card,
-                timestamp: formatNowTime(),
-              },
-            ]);
-            return;
-          }
-          if (data.action === 'AUTOFIX') {
-            setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
-            autoFixActionRef.current(Boolean(data.direct_commit));
-            return;
-          }
-          if (data.action === 'SCAN' && data.github_url) {
-            setMessages((prev) => prev.filter((m) => m.id !== 'streaming'));
-            startScanRef.current(data.github_url);
-            return;
-          }
-          const replyText = data.reply || 'Запрос обработан.';
-          const spoken = summarizeSpeechLine(replyText);
-          if (spoken) setOrcaChatReply(spoken);
-          setMessages((prev) => [
-            ...prev.filter((m) => m.id !== 'streaming'),
-            {
-              id: `${Date.now() + 1}`,
-              role: 'assistant',
-              content: replyText,
-              timestamp: formatNowTime(),
-            },
-          ]);
-        } catch {
-          setIsTyping(false);
-          setMessages((prev) => [
-            ...prev.filter((m) => m.id !== 'streaming'),
-            {
-              id: `${Date.now() + 1}`,
-              role: 'assistant',
-              content: 'Не удалось доставить сообщение. Повторите запрос или запустите «Демо-аудит».',
-              timestamp: formatNowTime(),
-            },
-          ]);
-        }
+        await deliverChatOverHttp(userMsg, scanContext);
         return;
       }
 
       setIsTyping(true);
       setMessages((prev) => [...prev, { id: 'streaming', role: 'assistant', content: '', timestamp: now }]);
+
+      wsPendingRef.current = { message: userMsg, scan_context: scanContext };
+      if (wsWatchdogRef.current) clearTimeout(wsWatchdogRef.current);
+      wsWatchdogRef.current = setTimeout(() => {
+        if (wsPendingRef.current) {
+          const pending = wsPendingRef.current;
+          wsPendingRef.current = null;
+          wsWatchdogRef.current = null;
+          void deliverChatOverHttp(pending.message, pending.scan_context);
+        }
+      }, 22000);
 
       chatWsRef.current.send(
         JSON.stringify({
@@ -884,7 +927,7 @@ export default function Home() {
         })
       );
     },
-    [activeTarget, findings, grade, securityScore, activeFindingsCount, financialRisk, systemAnalysis, appealedMap, activatePendingVerify]
+    [activeTarget, findings, grade, securityScore, activeFindingsCount, financialRisk, systemAnalysis, appealedMap, deliverChatOverHttp]
   );
 
   const handleSendMessage = (e: FormEvent) => {
@@ -1559,7 +1602,7 @@ export default function Home() {
   const companionSpeech = useMemo(() => {
     if (isHealing) return 'Патчу уязвимый код, прогоняю ast.parse и пересканирую песочницу…';
     if (isScanning) return `Просвечиваю ${activeTarget || 'репозиторий'} сонаром: AST, Taint, секреты и Git-история…`;
-    if (isTyping) return 'Думаю над твоим вопросом — пингую локальный движок…';
+    if (isTyping) return 'Думаю над твоим вопросом — анализирую через AI-движок…';
     if (pendingVerify) {
       return `Жду подтверждение ${pendingVerify.repoName}! Нажми кнопку в чате и кликни Commit на GitHub — я сама проверю и сразу запущу скан!`;
     }
