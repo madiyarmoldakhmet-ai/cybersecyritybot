@@ -1,15 +1,27 @@
 import type { Metadata, Viewport } from "next";
-import { MedeoSans } from "medeo-font/sans";
+import { Pixelify_Sans, Press_Start_2P } from "next/font/google";
 import { MedeoMono } from "medeo-font/mono";
-import { MedeoSerif } from "medeo-font/serif";
-import { MedeoPixel } from "medeo-font/pixel";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
 
+const pixelifySans = Pixelify_Sans({
+  subsets: ["latin", "cyrillic"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-pixel-body",
+  display: "swap",
+});
+
+const pressStart2P = Press_Start_2P({
+  subsets: ["latin", "cyrillic"],
+  weight: "400",
+  variable: "--font-pixel-display",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "Commit Guardian — On-Premise AI AppSec & Chat",
+  title: "Commit Guardian — 16-Bit On-Premise AI AppSec & Chat",
   description:
-    "Локальный AI-ассистент и аудитор безопасности коммитов: чат с Qwen/Ollama, SAST, Taint-анализ, защита ИИН и PDF-отчёты без утечки кода в облако.",
+    "Лёгкий пиксельный AI-аудитор безопасности коммитов: Aegis Orca, 14 сканеров, системный анализ, защита ИИН и PDF-отчёты.",
 };
 
 export const viewport: Viewport = {
@@ -21,7 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html
       lang="ru"
       suppressHydrationWarning
-      className={`${MedeoSans.variable} ${MedeoMono.variable} ${MedeoSerif.variable} ${MedeoPixel.variable} h-full antialiased`}
+      className={`${pixelifySans.variable} ${pressStart2P.variable} ${MedeoMono.variable} h-full`}
     >
       <body className="min-h-full flex flex-col font-sans selection:bg-[#e94a32] selection:text-white">
         <Providers>{children}</Providers>

@@ -31,7 +31,7 @@ export function ThemeToggle() {
   }, [mounted, theme]);
 
   if (!mounted) {
-    return <div className="min-h-9 min-w-9 rounded-full border border-[var(--color-line)]" />;
+    return <div className="min-h-8 min-w-8 border-2 border-[var(--color-line)]" />;
   }
 
   const currentRendered = resolvedTheme === 'dark' ? 'dark' : 'light';
@@ -55,13 +55,13 @@ export function ThemeToggle() {
     <button
       type="button"
       onClick={handleToggle}
-      className="min-h-9 min-w-9 rounded-full border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-ink)] transition-colors inline-flex items-center justify-center cursor-pointer"
-      aria-label={currentRendered === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}
+      className="pixel-btn min-h-8 min-w-8 bg-[var(--color-panel)] text-[var(--color-moon)] inline-flex items-center justify-center cursor-pointer"
+      aria-label={currentRendered === 'dark' ? 'Включить светлую пиксельную тему' : 'Включить ночную пиксельную тему'}
     >
       {currentRendered === 'dark' ? (
-        <Sun className="w-4 h-4" aria-hidden="true" />
+        <Sun className="w-3.5 h-3.5" aria-hidden="true" />
       ) : (
-        <Moon className="w-4 h-4" aria-hidden="true" />
+        <Moon className="w-3.5 h-3.5 text-[var(--color-ink)]" aria-hidden="true" />
       )}
     </button>
   );

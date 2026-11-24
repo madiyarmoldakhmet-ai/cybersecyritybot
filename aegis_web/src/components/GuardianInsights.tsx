@@ -54,7 +54,7 @@ export type HealingReport = {
 
 export const formatKzt = (n: number) => `${Math.round(n).toLocaleString('ru-RU').replace(/,/g, ' ')} ₸`;
 
-const CARD_CLASS = 'bg-[var(--color-paper)] border border-[var(--color-line)] rounded-2xl p-5';
+const CARD_CLASS = 'pixel-card bg-[var(--color-paper)] p-4';
 const LABEL_CLASS =
   'text-[11px] font-mono uppercase tracking-wider text-[var(--color-muted-soft)] mb-2.5 flex items-center gap-1.5';
 
@@ -70,7 +70,7 @@ export function RiskCard({ risk }: { risk: FinancialRisk }) {
           <Banknote className="w-3.5 h-3.5 text-[#e94a32]" aria-hidden="true" />
           <span>Финансовый риск (ст. 79 КоАП РК)</span>
         </div>
-        <span className="font-mono text-[10px] px-2 py-0.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-muted-soft)]">
+        <span className="font-mono text-[10px] px-2 py-0.5 border-2 border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-muted-soft)]">
           КОАП РК
         </span>
       </div>
@@ -78,7 +78,7 @@ export function RiskCard({ risk }: { risk: FinancialRisk }) {
       <div
         className={cn(
           'text-2xl sm:text-3xl font-semibold font-mono tabular-nums mt-2',
-          risk.total_kzt ? 'text-[#ff735d]' : 'text-[#3fbf7f]'
+          risk.total_kzt ? 'text-[#ff7b66]' : 'text-[#47d18c]'
         )}
       >
         {risk.total_kzt ? `до ${formatKzt(risk.total_kzt)}` : '0 ₸'}
@@ -102,11 +102,11 @@ export function RiskCard({ risk }: { risk: FinancialRisk }) {
                 <span className="truncate text-[var(--color-body-text)]" title={r.title}>
                   {r.title}
                 </span>
-                <span className="font-mono text-[#ff735d] tabular-nums shrink-0">{formatKzt(r.risk_kzt)}</span>
+                <span className="font-mono text-[#ff7b66] tabular-nums shrink-0">{formatKzt(r.risk_kzt)}</span>
               </div>
-              <div className="h-1.5 rounded-full bg-[var(--color-panel)] mt-1 overflow-hidden">
+              <div className="h-2 border border-[var(--color-line-strong)] bg-[var(--color-panel)] mt-1 overflow-hidden">
                 <div
-                  className="h-full bg-[#e94a32]/80 rounded-full"
+                  className="h-full bg-[#e94a32]"
                   style={{ width: `${Math.max(4, (r.risk_kzt / top) * 100)}%` }}
                 />
               </div>
@@ -115,7 +115,7 @@ export function RiskCard({ risk }: { risk: FinancialRisk }) {
         </ul>
       )}
 
-      <details className="mt-4 pt-3 border-t border-[var(--color-line)] text-[11px] text-[var(--color-muted-soft)]">
+      <details className="mt-4 pt-3 border-t-2 border-[var(--color-line)] text-[11px] text-[var(--color-muted-soft)]">
         <summary className="cursor-pointer hover:text-[var(--color-ink)] transition-colors">
           База расчёта и допущения (МРП / .aegis.yml)
         </summary>
@@ -134,7 +134,7 @@ export function RiskCard({ risk }: { risk: FinancialRisk }) {
 export function GhostSecretsCard({ ghosts }: { ghosts: GhostSecret[] }) {
   if (!ghosts.length) return null;
   return (
-    <div className={cn(CARD_CLASS, 'border-[#e94a32]/50')}>
+    <div className={cn(CARD_CLASS, '!border-[#e94a32]')}>
       <div className={LABEL_CLASS}>
         <History className="w-3.5 h-3.5 text-[#e94a32]" aria-hidden="true" />
         <span>Машина времени Git (Ghost Secrets)</span>
@@ -144,13 +144,13 @@ export function GhostSecretsCard({ ghosts }: { ghosts: GhostSecret[] }) {
           <div key={`${g.introduced.short}-${g.masked_value}`} className="text-xs">
             <div className="text-[var(--color-ink)] font-medium flex flex-wrap items-center gap-2">
               <span>{g.secret_type}</span>
-              <code className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-[#e94a32]/15 text-[#ff735d] border border-[#e94a32]/35">
+              <code className="text-[11px] px-1.5 py-0.5 bg-[#e94a32]/20 text-[#ff8573] border border-[#e94a32]">
                 {g.masked_value}
               </code>
             </div>
-            <ol className="relative border-l border-[var(--color-line-strong)] ml-1.5 mt-2.5 space-y-2.5 pl-4">
+            <ol className="relative border-l-2 border-[var(--color-line-strong)] ml-1.5 mt-2.5 space-y-2.5 pl-4">
               <li>
-                <span className="absolute -left-[5px] w-2.5 h-2.5 rounded-full bg-[#e94a32]" />
+                <span className="absolute -left-[6px] w-2.5 h-2.5 bg-[#e94a32]" />
                 <span className="font-mono text-[11px] text-[var(--color-muted-soft)]">
                   {g.introduced.date.slice(0, 10)} · {g.introduced.short}
                 </span>
@@ -160,7 +160,7 @@ export function GhostSecretsCard({ ghosts }: { ghosts: GhostSecret[] }) {
               </li>
               {g.removed && (
                 <li>
-                  <span className="absolute -left-[5px] w-2.5 h-2.5 rounded-full bg-[#e8a33d]" />
+                  <span className="absolute -left-[6px] w-2.5 h-2.5 bg-[#f0b541]" />
                   <span className="font-mono text-[11px] text-[var(--color-muted-soft)]">
                     {g.removed.date.slice(0, 10)} · {g.removed.short}
                   </span>
@@ -168,14 +168,14 @@ export function GhostSecretsCard({ ghosts }: { ghosts: GhostSecret[] }) {
                 </li>
               )}
               <li>
-                <span className="absolute -left-[5px] w-2.5 h-2.5 rounded-full bg-[#e94a32] animate-pulse" />
-                <span className="font-mono text-[11px] text-[#ff735d]">сегодня</span>
+                <span className="pixel-blink absolute -left-[6px] w-2.5 h-2.5 bg-[#e94a32]" />
+                <span className="font-mono text-[11px] text-[#ff7b66]">сегодня</span>
                 <div className="text-[var(--color-body-text)]">
-                  Всё ещё восстанавливается через <code className="font-mono text-[11px]">git log -p</code>
+                  Всё ещё восстанавливается через <code className="text-[11px]">git log -p</code>
                 </div>
               </li>
             </ol>
-            <div className="mt-3 px-2.5 py-1.5 rounded-lg bg-[#e94a32]/10 border border-[#e94a32]/30 font-mono text-[11px] text-[#ff735d]">
+            <div className="mt-3 px-2.5 py-1.5 bg-[#e94a32]/15 border-2 border-[#e94a32] font-mono text-[11px] text-[#ff8573]">
               Окно утечки: {g.exposure_days} дн. — удаление из файла не отзывает ключ
             </div>
           </div>
@@ -207,16 +207,16 @@ function useCountUp(target: number, from: number, run: boolean, ms = 1200) {
 
 function DiffView({ diff }: { diff: string }) {
   return (
-    <pre className="text-[11px] font-mono leading-relaxed overflow-x-auto bg-[#0a0a0a] border border-[#232323] rounded-lg p-3 mt-2">
+    <pre className="text-[11px] leading-relaxed overflow-x-auto bg-[#080c16] border-2 border-[#30436b] p-3 mt-2">
       {diff.split('\n').map((line, i) => {
         const color =
           line.startsWith('+') && !line.startsWith('+++')
-            ? 'text-[#3fbf7f] bg-[#3fbf7f]/10'
+            ? 'text-[#5ee8a7] bg-[#3fbf7f]/15'
             : line.startsWith('-') && !line.startsWith('---')
-            ? 'text-[#ff735d] bg-[#e94a32]/10'
+            ? 'text-[#ff8573] bg-[#e94a32]/15'
             : line.startsWith('@@')
-            ? 'text-sky-300'
-            : 'text-[#8e8d88]';
+            ? 'text-[#6ce4ff]'
+            : 'text-[#93add1]';
         return (
           <div key={i} className={color}>
             {line || ' '}
@@ -230,21 +230,21 @@ function DiffView({ diff }: { diff: string }) {
 export function HealPanel({ report }: { report: HealingReport }) {
   const score = useCountUp(report.after_score, report.before_score, true);
   const risk = useCountUp(report.after_risk_kzt, report.before_risk_kzt, true, 1600);
-  const scoreColor = score >= 75 ? 'text-[#3fbf7f]' : score >= 50 ? 'text-[#e8a33d]' : 'text-[#ff735d]';
+  const scoreColor = score >= 75 ? 'text-[#47d18c]' : score >= 50 ? 'text-[#f0b541]' : 'text-[#ff7b66]';
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className={cn(CARD_CLASS, 'border-[#3fbf7f]/45')}
+      className={cn(CARD_CLASS, '!border-[#47d18c]')}
     >
       <div className={LABEL_CLASS}>
-        <HeartPulse className="w-3.5 h-3.5 text-[#3fbf7f]" aria-hidden="true" />
+        <HeartPulse className="w-3.5 h-3.5 text-[#47d18c]" aria-hidden="true" />
         <span>Самоисцеление с доказательством — патч → ast.parse → пересканирование</span>
       </div>
 
       <div className="grid grid-cols-2 gap-2.5">
-        <div className="rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 min-w-0">
+        <div className="pixel-panel bg-[var(--color-panel)] p-3 min-w-0">
           <div className="text-[10px] text-[var(--color-muted-soft)] font-mono">SECURITY SCORE</div>
           <div className={cn('text-xl sm:text-2xl font-semibold font-mono tabular-nums mt-0.5', scoreColor)}>
             {report.before_grade} → {Math.round(score)}
@@ -253,19 +253,19 @@ export function HealPanel({ report }: { report: HealingReport }) {
             {report.before_score} → {report.after_score} (Grade {report.after_grade})
           </div>
         </div>
-        <div className="rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 min-w-0">
+        <div className="pixel-panel bg-[var(--color-panel)] p-3 min-w-0">
           <div className="text-[10px] text-[var(--color-muted-soft)] font-mono">НАХОДКИ</div>
           <div className="text-xl sm:text-2xl font-semibold font-mono text-[var(--color-ink)] tabular-nums mt-0.5">
             {report.before_findings} → {report.after_findings}
           </div>
-          <div className="text-[11px] text-[#3fbf7f] font-mono tabular-nums">
+          <div className="text-[11px] text-[#47d18c] font-mono tabular-nums">
             подтверждённых фиксов: {report.fixed_count}
           </div>
         </div>
-        <div className="col-span-2 rounded-xl bg-[var(--color-panel)] border border-[var(--color-line)] p-3 flex flex-wrap items-baseline justify-between gap-2 min-w-0">
+        <div className="pixel-panel col-span-2 bg-[var(--color-panel)] p-3 flex flex-wrap items-baseline justify-between gap-2 min-w-0">
           <div>
             <div className="text-[10px] text-[var(--color-muted-soft)] font-mono">РИСК КОАП + ИНЦИДЕНТ</div>
-            <div className="text-lg sm:text-xl font-semibold font-mono text-[#3fbf7f] tabular-nums mt-0.5">
+            <div className="text-lg sm:text-xl font-semibold font-mono text-[#47d18c] tabular-nums mt-0.5">
               {formatKzt(risk)}
             </div>
           </div>
@@ -279,18 +279,18 @@ export function HealPanel({ report }: { report: HealingReport }) {
         {report.fixes.map((fix) => (
           <details
             key={fix.file_path}
-            className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3"
+            className="pixel-panel bg-[var(--color-panel)] p-3"
             open={report.fixes.length <= 2}
           >
             <summary className="cursor-pointer text-xs flex flex-wrap items-center gap-2 text-[var(--color-ink)]">
               <CheckCircle2
-                className={cn('w-3.5 h-3.5 shrink-0', fix.verified ? 'text-[#3fbf7f]' : 'text-[var(--color-muted-soft)]')}
+                className={cn('w-3.5 h-3.5 shrink-0', fix.verified ? 'text-[#47d18c]' : 'text-[var(--color-muted-soft)]')}
                 aria-hidden="true"
               />
-              <code className="font-mono font-medium">{fix.file_path}</code>
+              <code className="font-medium">{fix.file_path}</code>
               <span className="text-[var(--color-muted-soft)]">— {fix.fixers.join(' · ')}</span>
             </summary>
-            <ul className="mt-2 ml-5 text-[11px] text-[#3fbf7f] list-none space-y-0.5">
+            <ul className="mt-2 ml-5 text-[11px] text-[#47d18c] list-none space-y-0.5">
               {fix.fixed_findings.map((t, i) => (
                 <li key={i}>− {t}</li>
               ))}
@@ -299,7 +299,7 @@ export function HealPanel({ report }: { report: HealingReport }) {
           </details>
         ))}
         {report.reverted_files.map((f) => (
-          <div key={f} className="text-xs text-[#e8a33d] flex items-center gap-1.5 font-mono">
+          <div key={f} className="text-xs text-[#f0b541] flex items-center gap-1.5 font-mono">
             <Undo2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
             <span>{f}: патч автоматически откатан — не снизил риск</span>
           </div>
@@ -307,16 +307,16 @@ export function HealPanel({ report }: { report: HealingReport }) {
       </div>
 
       {report.manual_actions.length > 0 && (
-        <div className="mt-4 border-t border-[var(--color-line)] pt-3.5">
+        <div className="mt-4 border-t-2 border-[var(--color-line)] pt-3.5">
           <div className={LABEL_CLASS}>
-            <Hand className="w-3.5 h-3.5 text-[#e8a33d]" aria-hidden="true" />
+            <Hand className="w-3.5 h-3.5 text-[#f0b541]" aria-hidden="true" />
             <span>Требует действия инженера (не лечится патчем кода)</span>
           </div>
           <div className="space-y-2">
             {report.manual_actions.map((m, i) => (
               <div key={i} className="text-xs text-[var(--color-body-text)]">
-                <span className="font-mono text-[#ff735d]">[{m.severity}]</span> {m.title}{' '}
-                <code className="font-mono text-[11px] text-[var(--color-muted-soft)]">{m.location}</code>
+                <span className="font-mono text-[#ff7b66]">[{m.severity}]</span> {m.title}{' '}
+                <code className="text-[11px] text-[var(--color-muted-soft)]">{m.location}</code>
                 <div className="text-[11px] text-[var(--color-muted-soft)] mt-0.5">→ {m.action}</div>
               </div>
             ))}

@@ -26,7 +26,7 @@ export function MetricsDashboard({
   return (
     <div
       className={cn(
-        'rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] px-3 py-2.5 font-mono text-xs space-y-1.5 tabular-nums',
+        'pixel-panel bg-[var(--color-paper)] px-3 py-2.5 font-mono text-xs space-y-1.5 tabular-nums',
         className
       )}
     >

@@ -133,67 +133,107 @@ def _render(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>Commit Guardian — мониторинг</title>
 <style>
   :root {{
-    --bg: #0A0B0D; --panel: #111317; --line: rgba(255,255,255,.08); --text: #ECEDEE; --muted: #8A8F98;
-    --accent: #C6F432; --crit: #FF5C5C; --high: #FF9F0A;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    color-scheme: dark;
+    --bg: #0b0e18; --panel: #121829; --panel-2: #19223a;
+    --line: #324670; --line-strong: #5270ab; --shadow: #05070e;
+    --text: #eef6ff; --body: #c9e4ff; --muted: #93add1;
+    --accent: #56d4b2; --violet: #8e7ef0; --moon: #ffe79e;
+    --ok: #47d18c; --crit: #ff6b57; --high: #f0b541;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
   }}
-  * {{ box-sizing: border-box; margin: 0; }}
-  body {{ background: var(--bg); color: var(--text); font: 15px/1.5 var(--sans); padding: 40px 24px; }}
+  * {{ box-sizing: border-box; margin: 0; border-radius: 0 !important; }}
+  body {{
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(180deg, rgba(45,168,144,.14) 0px, rgba(94,76,168,.09) 72px, transparent 150px),
+      radial-gradient(rgba(201,228,255,.16) 1px, transparent 0);
+    background-size: 100% 100%, 28px 28px;
+    color: var(--text);
+    font: 14px/1.55 var(--mono);
+    padding: 0 24px 40px;
+  }}
+  .aurora-bar {{
+    height: 4px; margin: 0 -24px 32px;
+    background-image: repeating-linear-gradient(
+      90deg,
+      #1f6e6c 0px, #1f6e6c 24px, #2da890 24px, #2da890 48px,
+      #56d4b2 48px, #56d4b2 64px, #5e4ca8 64px, #5e4ca8 96px,
+      #3d3572 96px, #3d3572 120px, #ffe79e 120px, #ffe79e 132px,
+      #e94a32 132px, #e94a32 148px
+    );
+  }}
   .wrap {{ max-width: 1180px; margin: 0 auto; }}
-  header {{ display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: flex-end; margin-bottom: 32px; }}
-  .eyebrow {{ font: 13px var(--mono); color: var(--accent); margin-bottom: 6px; }}
-  h1 {{ font-size: 32px; font-weight: 700; letter-spacing: -.5px; }}
+  header {{ display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: flex-end; margin-bottom: 28px; }}
+  .eyebrow {{ font: 12px var(--mono); color: var(--accent); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }}
+  h1 {{ font-size: 26px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; text-shadow: 3px 3px 0 var(--shadow); }}
   .status {{ display: flex; gap: 10px; flex-wrap: wrap; }}
-  .chip {{ font: 13px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; }}
-  .chip b {{ color: var(--text); font-weight: 500; }}
-  .dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 8px; box-shadow: 0 0 10px var(--accent); }}
-  .dot-standby {{ background: var(--high); box-shadow: 0 0 8px var(--high); }}
+  .chip {{
+    font: 12px var(--mono); color: var(--body); background: var(--panel);
+    border: 2px solid var(--line-strong); padding: 6px 12px;
+    box-shadow: 3px 3px 0 var(--shadow);
+  }}
+  .chip b {{ color: var(--moon); font-weight: 600; }}
+  .dot {{ display: inline-block; width: 8px; height: 8px; background: var(--ok); margin-right: 8px; }}
+  .dot-standby {{ background: var(--high); }}
   .kpis {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }}
-  .kpi {{ background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }}
-  .kpi .label {{ color: var(--muted); font-size: 14px; }}
-  .kpi .value {{ font-size: 56px; font-weight: 700; letter-spacing: -2px; line-height: 1.1; margin-top: 8px; font-variant-numeric: tabular-nums; }}
-  .kpi .hint {{ color: var(--muted); font: 12px var(--mono); margin-top: 8px; }}
+  .kpi {{
+    background: var(--panel); border: 2px solid var(--line-strong); padding: 20px;
+    box-shadow: 4px 4px 0 var(--shadow);
+  }}
+  .kpi .label {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }}
+  .kpi .value {{ font-size: 46px; font-weight: 700; letter-spacing: -1px; line-height: 1.1; margin-top: 8px; font-variant-numeric: tabular-nums; text-shadow: 3px 3px 0 var(--shadow); }}
+  .kpi .hint {{ color: var(--muted); font-size: 11.5px; margin-top: 8px; }}
   .kpi.crit .value {{ color: var(--crit); }}
   .kpi.ai .value {{ color: var(--accent); }}
-  .secondary {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin: 16px 0 32px; }}
-  .stat {{ border-top: 1px solid var(--line); padding-top: 12px; }}
-  .stat .label {{ color: var(--muted); font-size: 13px; }}
-  .stat .value {{ font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }}
-  h2 {{ font-size: 18px; font-weight: 600; margin-bottom: 12px; }}
-  .table-wrap {{ background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow-x: auto; }}
+  .secondary {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 16px 0 24px; }}
+  .stat {{
+    background: var(--panel-2); border: 2px solid var(--line); padding: 12px 14px;
+    box-shadow: 3px 3px 0 var(--shadow);
+  }}
+  .stat .label {{ color: var(--muted); font-size: 11.5px; text-transform: uppercase; }}
+  .stat .value {{ font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; color: var(--text); }}
+  h2 {{ font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--moon); margin-bottom: 12px; }}
+  .table-wrap {{
+    background: var(--panel); border: 2px solid var(--line-strong); overflow-x: auto;
+    box-shadow: 4px 4px 0 var(--shadow);
+  }}
   table {{ width: 100%; border-collapse: collapse; min-width: 760px; }}
-  th, td {{ padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }}
-  th {{ color: var(--muted); font-weight: 500; font-size: 13px; }}
+  th, td {{ padding: 11px 14px; text-align: left; border-bottom: 2px solid var(--line); vertical-align: top; }}
+  th {{ color: var(--accent); background: var(--panel-2); font-weight: 600; font-size: 12px; text-transform: uppercase; }}
   tr:last-child td {{ border-bottom: none; }}
   .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
   th.num {{ text-align: right; }}
-  .mono {{ font-family: var(--mono); font-size: 13px; }}
+  .mono {{ font-family: var(--mono); font-size: 12.5px; }}
   .muted {{ color: var(--muted); }}
-  .small {{ font-size: 12px; }}
-  .crit {{ color: var(--crit); }}
-  .high {{ color: var(--high); }}
-  .pill {{ font: 12px var(--mono); padding: 3px 10px; border-radius: 999px; white-space: nowrap; }}
-  .pill-ok {{ color: var(--accent); background: rgba(198,244,50,.1); }}
-  .pill-risk {{ color: var(--crit); background: rgba(255,92,92,.12); }}
-  .pill-fail {{ color: var(--muted); background: rgba(255,255,255,.06); }}
+  .small {{ font-size: 11.5px; }}
+  .crit {{ color: var(--crit); font-weight: 700; }}
+  .high {{ color: var(--high); font-weight: 700; }}
+  .pill {{ font: 11px var(--mono); padding: 2px 8px; border: 2px solid; white-space: nowrap; text-transform: uppercase; }}
+  .pill-ok {{ color: var(--ok); border-color: var(--ok); background: rgba(71,209,140,.14); }}
+  .pill-risk {{ color: var(--crit); border-color: #e94a32; background: rgba(233,74,50,.18); }}
+  .pill-fail {{ color: var(--muted); border-color: var(--line); background: rgba(255,255,255,.05); }}
   .link {{ color: var(--accent); text-decoration: none; }}
-  .link:hover {{ text-decoration: underline; }}
-  .nav-link {{ color: var(--text); text-decoration: none; background: rgba(255,255,255,.06); }}
-  .nav-link:hover {{ border-color: var(--accent); }}
-  .empty {{ color: var(--muted); text-align: center; padding: 40px; }}
-  footer {{ color: var(--muted); font: 12px var(--mono); margin-top: 24px; }}
+  .link:hover {{ text-decoration: underline; color: var(--moon); }}
+  .nav-link {{ color: var(--text); text-decoration: none; background: #e94a32; border-color: #ff8c78; }}
+  .nav-link:hover {{ background: #ff5b42; }}
+  .empty {{ color: var(--muted); text-align: center; padding: 36px; }}
+  footer {{ color: var(--muted); font-size: 12px; margin-top: 24px; }}
+  @media (forced-colors: active) {{
+    .chip, .kpi, .stat, .table-wrap {{ box-shadow: none; border: 2px solid CanvasText; }}
+  }}
   @media (max-width: 760px) {{
     .kpis {{ grid-template-columns: 1fr; }}
     .secondary {{ grid-template-columns: repeat(2, 1fr); }}
-    .kpi .value {{ font-size: 44px; }}
+    .kpi .value {{ font-size: 38px; }}
   }}
 </style>
 </head>
 <body>
+<div class="aurora-bar" aria-hidden="true"></div>
 <div class="wrap">
   <header>
     <div>

@@ -658,7 +658,7 @@ export function OrcaRigSvg({
   );
 }
 
-/** Crisp lightweight 28x28 vector Orca head badge for chat headers & message bubbles (zero raster images). */
+/** Crisp lightweight 16x16 pixel-art Orca sprite badge for chat headers & message bubbles. */
 export function OrcaMiniAvatar({
   mood = 'idle',
   className,
@@ -675,40 +675,49 @@ export function OrcaMiniAvatar({
     <span
       aria-hidden="true"
       className={cn(
-        'inline-flex items-center justify-center w-7 h-7 rounded-full border border-[var(--color-line-strong)] bg-[#090d16] shrink-0 overflow-hidden',
+        'inline-flex items-center justify-center w-7 h-7 border-2 border-[var(--color-line-strong)] bg-[#0b0e18] shadow-[2px_2px_0_var(--pixel-shadow)] shrink-0 overflow-hidden',
         className
       )}
     >
-      <svg viewBox="0 0 36 36" className="w-full h-full">
-        <circle cx="18" cy="18" r="18" fill={pal.backdrop} />
-        {/* Tiny dorsal fin */}
-        <path d="M 13 11 C 12 6, 9 4, 8 3 C 12 4, 16 7, 18 11 Z" fill="#0f172a" />
-        <path d="M 9.5 4.5 C 11.5 6.5, 13.5 8.5, 15 10.5" stroke={pal.accent} strokeWidth="1.2" fill="none" strokeLinecap="round" />
-        {/* Head dome */}
-        <path
-          d="M 6 23 C 7 13, 14 9, 22 10 C 28 11, 31 16, 30 22 C 28 28, 20 31, 12 30 C 8 29, 6 26, 6 23 Z"
-          fill="#0f172a"
-          stroke="#24334b"
-          strokeWidth="0.9"
-        />
+      <svg viewBox="0 0 16 16" shapeRendering="crispEdges" className="pixel-art w-full h-full">
+        {/* Midnight aurora sky backdrop */}
+        <rect x="0" y="0" width="16" height="16" fill="#0b0e18" />
+        <rect x="0" y="2" width="10" height="2" fill="#1f6e6c" />
+        <rect x="6" y="3" width="10" height="2" fill="#4c3e8f" />
+        <rect x="13" y="1" width="2" height="2" fill="#ffe79e" />
+        {/* Pixel dorsal fin + mood LED */}
+        <rect x="4" y="3" width="2" height="2" fill="#151f38" />
+        <rect x="5" y="4" width="3" height="2" fill="#151f38" />
+        <rect x="4" y="3" width="1" height="2" fill={pal.accent} />
+        {/* Pixel Orca head & obsidian body */}
+        <rect x="2" y="6" width="12" height="7" fill="#151f38" />
+        <rect x="3" y="5" width="10" height="2" fill="#23345c" />
+        <rect x="13" y="8" width="2" height="4" fill="#151f38" />
         {/* White belly jaw */}
-        <path d="M 12 28 C 19 29, 26 26, 29 21 C 27 27, 20 31, 12 30 Z" fill="#f8fafc" />
-        {/* White eye patch */}
-        <ellipse cx="14.5" cy="16.5" rx="4.2" ry="2.2" transform="rotate(-14 14.5 16.5)" fill="#f8fafc" />
-        {/* Eye */}
+        <rect x="4" y="12" width="10" height="2" fill="#eef6ff" />
+        <rect x="11" y="11" width="3" height="2" fill="#eef6ff" />
+        {/* White post-ocular patch */}
+        <rect x="4" y="7" width="3" height="2" fill="#eef6ff" />
+        {/* Cozy red winter scarf accent */}
+        <rect x="2" y="10" width="2" height="3" fill="#e94a32" />
+        {/* Expressive pixel eye */}
         {happy ? (
-          <path d="M 20 19 Q 23 15 26 19" fill="none" stroke="#3fbf7f" strokeWidth="2" strokeLinecap="round" />
+          <>
+            <rect x="9" y="9" width="1" height="1" fill="#47d18c" />
+            <rect x="10" y="8" width="2" height="1" fill="#47d18c" />
+            <rect x="12" y="9" width="1" height="1" fill="#47d18c" />
+          </>
         ) : (
           <>
-            <circle cx="22.8" cy="18.2" r="2.8" fill={pal.irisTop} />
-            <circle cx="23" cy="18.3" r="1.4" fill="#030712" />
-            <circle cx="21.9" cy="17.2" r="0.85" fill="#ffffff" />
-            {angry && <path d="M 19.5 14.2 L 26 16" stroke="#ff5a3c" strokeWidth="1.6" strokeLinecap="round" />}
+            <rect x="9" y="8" width="3" height="3" fill="#05070e" />
+            <rect x="10" y="9" width="2" height="2" fill={pal.irisTop} />
+            <rect x="10" y="9" width="1" height="1" fill="#ffffff" />
+            {angry && <rect x="9" y="7" width="3" height="1" fill="#ff6b57" />}
           </>
         )}
-        {/* Cyber-visor on scanning */}
+        {/* Pixel cyber-visor when scanning */}
         {scanning && (
-          <rect x="19" y="15.5" width="9" height="4.8" rx="1.4" fill={pal.accent} opacity="0.4" stroke={pal.accent} strokeWidth="0.8" />
+          <rect x="8" y="8" width="5" height="3" fill={pal.accent} fillOpacity="0.45" />
         )}
       </svg>
     </span>

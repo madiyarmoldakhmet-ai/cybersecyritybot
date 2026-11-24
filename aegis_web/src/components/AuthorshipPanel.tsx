@@ -178,17 +178,17 @@ export function AuthorshipPanel({
         </span>
         <span
           className={cn(
-            'font-mono text-[11px] px-2 py-0.5 rounded border',
+            'font-mono text-[11px] px-2 py-0.5 border-2',
             authorship.verified
-              ? 'border-[#3fbf7f]/40 text-[#3fbf7f] bg-[#3fbf7f]/10'
-              : 'border-[var(--color-line)] text-[var(--color-muted-soft)] bg-[var(--color-raised)]'
+              ? 'border-[#47d18c] text-[#47d18c] bg-[#47d18c]/15'
+              : 'border-[var(--color-line-strong)] text-[var(--color-muted-soft)] bg-[var(--color-raised)]'
           )}
         >
           {authorship.verified ? `VERIFIED · ${authorship.role}` : 'UNVERIFIED'}
         </span>
       </div>
 
-      {/* Method switcher pills */}
+      {/* Method switcher pixel tabs */}
       <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Способ подтверждения авторства">
         {(
           [
@@ -206,10 +206,10 @@ export function AuthorshipPanel({
               setErrorMsg('');
             }}
             className={cn(
-              'min-h-8 px-2 py-1 rounded-lg border font-mono text-[11px] transition-colors cursor-pointer truncate',
+              'pixel-btn min-h-8 px-2 py-1 font-mono text-[11px] cursor-pointer truncate',
               method === item.id
-                ? 'border-[#e94a32] bg-[var(--color-panel)] text-[var(--color-ink)]'
-                : 'border-[var(--color-line)] bg-[var(--color-paper)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                ? '!border-[#e94a32] bg-[#e94a32]/20 text-[var(--color-ink)] font-semibold'
+                : 'bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
             )}
           >
             {item.label}
@@ -219,7 +219,7 @@ export function AuthorshipPanel({
 
       {/* Target input */}
       <div className="space-y-1.5">
-        <label htmlFor="cg-verify-target" className="block font-mono text-[11px] text-[var(--color-muted-soft)]">
+        <label htmlFor="cg-verify-target" className="block font-mono text-[11.5px] text-[var(--color-muted-soft)]">
           {method === 'dns_txt' ? 'Домен для DAST-аудита' : 'GitHub репозиторий (URL или owner/repo)'}
         </label>
         <input
@@ -228,13 +228,13 @@ export function AuthorshipPanel({
           value={targetInput}
           onChange={(e) => onTargetInputChange(e.target.value)}
           placeholder={method === 'dns_txt' ? 'app.fintech.kz' : 'https://github.com/owner/repo'}
-          className="w-full min-h-9 px-3 py-1.5 rounded-lg bg-[var(--color-paper)] border border-[var(--color-line)] focus:border-[#e94a32] text-sm font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
+          className="pixel-input w-full min-h-9 px-3 py-1.5 bg-[var(--color-panel)] focus:border-[#56d4b2] text-sm font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
         />
       </div>
 
       {method === 'token' ? (
         <div className="space-y-2">
-          <label htmlFor="cg-gh-token" className="block font-mono text-[11px] text-[var(--color-muted-soft)]">
+          <label htmlFor="cg-gh-token" className="block font-mono text-[11.5px] text-[var(--color-muted-soft)]">
             Personal Access Token (подходит и для приватных репо, не хранится на сервере)
           </label>
           <input
@@ -243,13 +243,13 @@ export function AuthorshipPanel({
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
             placeholder="ghp_... или github_pat_..."
-            className="w-full min-h-9 px-3 py-1.5 rounded-lg bg-[var(--color-paper)] border border-[var(--color-line)] focus:border-[#e94a32] text-sm font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
+            className="pixel-input w-full min-h-9 px-3 py-1.5 bg-[var(--color-panel)] focus:border-[#56d4b2] text-sm font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
           />
           <button
             type="button"
             disabled={verifying}
             onClick={handleVerify}
-            className="w-full min-h-9 px-3.5 py-2 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs uppercase tracking-wider inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+            className="pixel-btn-snow w-full min-h-9 px-3.5 py-2 font-mono text-xs uppercase tracking-wider inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
           >
             <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
             <span>{verifying ? 'Проверяю права…' : 'Проверить и запустить аудит'}</span>
@@ -262,7 +262,7 @@ export function AuthorshipPanel({
               type="button"
               disabled={loadingChallenge}
               onClick={handleIssueChallenge}
-              className="flex-1 min-h-9 px-3 py-1.5 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-raised)] hover:border-[var(--color-ink)] font-mono text-xs text-[var(--color-ink)] transition-colors cursor-pointer"
+              className="pixel-btn flex-1 min-h-9 px-3 py-1.5 bg-[var(--color-raised)] font-mono text-xs text-[var(--color-ink)] cursor-pointer"
             >
               {loadingChallenge ? 'Готовлю…' : challengeCode ? 'Обновить код' : '1. Получить кнопку'}
             </button>
@@ -270,20 +270,20 @@ export function AuthorshipPanel({
               type="button"
               disabled={verifying || !challengeCode}
               onClick={handleVerify}
-              className="flex-1 min-h-9 px-3 py-1.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs transition-colors cursor-pointer disabled:opacity-45"
+              className="pixel-btn-snow flex-1 min-h-9 px-3 py-1.5 font-mono text-xs cursor-pointer disabled:opacity-45"
             >
               {verifying ? 'Проверка…' : 'Проверить сейчас'}
             </button>
           </div>
 
           {challengeCode && (
-            <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] p-3 space-y-2.5">
+            <div className="pixel-panel bg-[var(--color-panel)] p-3 space-y-2.5">
               {method === 'challenge' && verifyUrl && (
                 <a
                   href={verifyUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="w-full min-h-9 px-3 py-2 rounded-lg bg-[#e94a32] hover:bg-[#c83822] text-white font-mono text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
+                  className="pixel-btn-primary w-full min-h-9 px-3 py-2 font-mono text-xs font-semibold inline-flex items-center justify-center gap-1.5"
                 >
                   <span>Открыть GitHub и нажать Commit</span>
                   <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -291,27 +291,27 @@ export function AuthorshipPanel({
               )}
 
               <div className="flex items-center justify-between gap-2">
-                <code className="font-mono text-xs text-[#e94a32] break-all">{challengeCode}</code>
+                <code className="text-xs text-[#ff7b66] break-all">{challengeCode}</code>
                 <button
                   type="button"
                   onClick={handleCopyCode}
                   aria-label="Скопировать код подтверждения"
-                  className="min-h-7 px-2 py-0.5 rounded border border-[var(--color-line)] hover:border-[var(--color-line-strong)] font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]"
+                  className="pixel-btn min-h-7 px-2 py-0.5 bg-[var(--color-paper)] font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]"
                 >
-                  {copied ? <Check className="w-3 h-3 text-[#3fbf7f]" /> : <Copy className="w-3 h-3" />}
+                  {copied ? <Check className="w-3 h-3 text-[#47d18c]" /> : <Copy className="w-3 h-3" />}
                   <span>{copied ? 'Скопировано' : 'Копия'}</span>
                 </button>
               </div>
 
               {pendingVerify && method === 'challenge' && (
-                <div className="flex items-center gap-1.5 font-mono text-[11px] text-sky-400">
+                <div className="flex items-center gap-1.5 font-mono text-[11.5px] text-[#56d4b2]">
                   <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
                   <span>Авто-проверка активна — скан стартует сам после Commit</span>
                 </div>
               )}
 
               {instructions.length > 0 && (
-                <ul className="space-y-1 font-mono text-[11px] text-[var(--color-muted-soft)] leading-relaxed">
+                <ul className="space-y-1 font-mono text-[11.5px] text-[var(--color-muted-soft)] leading-relaxed">
                   {instructions.map((line, i) => (
                     <li key={i} className="break-words">{line}</li>
                   ))}
@@ -323,7 +323,7 @@ export function AuthorshipPanel({
       )}
 
       {/* Structured Inspection Rows */}
-      <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] p-3 font-mono text-xs space-y-1.5">
+      <div className="pixel-panel bg-[var(--color-panel)] p-3 font-mono text-xs space-y-1.5">
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-[var(--color-muted-soft)]">target</span>
           <span className="text-[var(--color-ink)] truncate">{authorship.target || targetInput || '—'}</span>
@@ -338,15 +338,15 @@ export function AuthorshipPanel({
         </div>
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-[var(--color-muted-soft)]">decision</span>
-          <span className={authorship.verified ? 'text-[#3fbf7f]' : 'text-[#e8a33d]'}>
+          <span className={authorship.verified ? 'text-[#47d18c]' : 'text-[#f0b541]'}>
             {authorship.verified ? 'verified_author' : 'unverified'}
           </span>
         </div>
       </div>
 
       {/* Mandatory ownership policy indicator */}
-      <div className="rounded-lg border border-[#e94a32]/30 bg-[#e94a32]/8 px-3 py-2 flex items-start gap-2 text-xs text-[var(--color-body-text)]">
-        <Lock className="w-3.5 h-3.5 text-[#e94a32] shrink-0 mt-0.5" aria-hidden="true" />
+      <div className="border-2 border-[#e94a32] bg-[#e94a32]/12 px-3 py-2 flex items-start gap-2 text-xs text-[var(--color-body-text)]">
+        <Lock className="w-3.5 h-3.5 text-[#ff7b66] shrink-0 mt-0.5" aria-hidden="true" />
         <span>
           <strong className="text-[var(--color-ink)]">Обязательная проверка авторства активна:</strong>{' '}
           сканирование чужих GitHub-репозиториев заблокировано. Без своего репо доступен «Демо-аудит» и загрузка .zip.
@@ -354,10 +354,10 @@ export function AuthorshipPanel({
       </div>
 
       {errorMsg && (
-        <p className="text-xs font-mono text-[#e94a32] leading-relaxed break-words">{errorMsg}</p>
+        <p className="text-xs font-mono text-[#ff7b66] leading-relaxed break-words">{errorMsg}</p>
       )}
       {!errorMsg && authorship.message && (
-        <div className="text-xs font-mono text-[#3fbf7f] leading-relaxed break-words flex items-start gap-1.5">
+        <div className="text-xs font-mono text-[#47d18c] leading-relaxed break-words flex items-start gap-1.5">
           <ShieldCheck className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
           <span>{authorship.message}</span>
         </div>
@@ -367,7 +367,7 @@ export function AuthorshipPanel({
         <button
           type="button"
           onClick={() => onAskAi('Как работает проверка авторства и почему нельзя сканировать чужие репозитории?')}
-          className="text-xs font-mono text-[var(--color-muted-soft)] hover:text-[#e94a32] transition-colors cursor-pointer"
+          className="text-xs font-mono text-[var(--color-muted-soft)] hover:text-[#56d4b2] transition-colors cursor-pointer"
         >
           Спросить ИИ про защиту от несанкционированных сканов →
         </button>

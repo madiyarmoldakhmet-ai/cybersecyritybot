@@ -16,7 +16,7 @@ import {
   VolumeX,
   Zap,
 } from 'lucide-react';
-import { Orca3DCanvas } from '@/components/Orca3DCanvas';
+import { PixelOrcaScene } from '@/components/PixelOrcaScene';
 import { OrcaMood } from '@/components/OrcaRigSvg';
 import { cn } from '@/lib/utils';
 
@@ -50,33 +50,33 @@ const MOOD_CONFIG: Record<
 > = {
   idle: {
     label: 'ПАТРУЛЬ',
-    accentClass: 'text-sky-400 border-sky-400/35 bg-sky-400/10',
-    ringColor: 'border-sky-400/28',
+    accentClass: 'text-[#56d4b2] border-[#2da890] bg-[#1f6e6c]/25',
+    ringColor: 'border-[#2da890]',
   },
   thinking: {
     label: 'ДУМАЮ…',
-    accentClass: 'text-[#e8a33d] border-[#e8a33d]/40 bg-[#e8a33d]/10',
-    ringColor: 'border-[#e8a33d]/45',
+    accentClass: 'text-[#ffe79e] border-[#f0b541] bg-[#f0b541]/20',
+    ringColor: 'border-[#f0b541]',
   },
   scanning: {
     label: 'СОНАР-СКАН',
-    accentClass: 'text-sky-400 border-sky-400/45 bg-sky-400/14',
-    ringColor: 'border-sky-400/55',
+    accentClass: 'text-[#6ce4ff] border-[#2ca6c4] bg-[#2ca6c4]/20',
+    ringColor: 'border-[#6ce4ff]',
   },
   alert: {
     label: 'УГРОЗА В КОДЕ',
-    accentClass: 'text-[#ff735d] border-[#e94a32]/55 bg-[#e94a32]/15',
-    ringColor: 'border-[#e94a32]/65',
+    accentClass: 'text-[#ff7b66] border-[#e94a32] bg-[#e94a32]/20',
+    ringColor: 'border-[#e94a32]',
   },
   blocked: {
     label: 'ЖДУ ПОДТВЕРЖДЕНИЯ',
-    accentClass: 'text-[#ff735d] border-[#e94a32]/55 bg-[#e94a32]/15',
-    ringColor: 'border-[#e94a32]/65',
+    accentClass: 'text-[#ff7b66] border-[#e94a32] bg-[#e94a32]/20',
+    ringColor: 'border-[#e94a32]',
   },
   happy: {
     label: 'ВОДА ЧИСТА',
-    accentClass: 'text-[#3fbf7f] border-[#3fbf7f]/45 bg-[#3fbf7f]/12',
-    ringColor: 'border-[#3fbf7f]/55',
+    accentClass: 'text-[#5ee8a7] border-[#3fbf7f] bg-[#3fbf7f]/20',
+    ringColor: 'border-[#47d18c]',
   },
 };
 
@@ -307,9 +307,9 @@ export function OrcaCompanion({
 
   return (
     <aside
-      aria-label="Aegis Orca — живая говорящая косатка-помощник"
+      aria-label="Aegis Orca — живая говорящая пиксельная косатка-помощник"
       className={cn(
-        'lg:h-full flex flex-col justify-between gap-3 p-4 sm:p-5 bg-[var(--color-paper)] border-b lg:border-b-0 lg:border-r border-[var(--color-line)] shrink-0',
+        'lg:h-full flex flex-col justify-between gap-3 p-4 sm:p-5 bg-[var(--color-paper)] border-b-2 lg:border-b-0 lg:border-r-2 border-[var(--color-line)] shrink-0',
         disableMotion && 'orca-paused'
       )}
     >
@@ -318,30 +318,30 @@ export function OrcaCompanion({
         <div className="flex items-center gap-1.5 min-w-0">
           <span
             className={cn(
-              'inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border',
+              'inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider px-2 py-0.5 border-2 shadow-[2px_2px_0_var(--pixel-shadow)]',
               cfg.accentClass
             )}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" aria-hidden="true" />
+            <span className="w-2 h-2 bg-current shrink-0" aria-hidden="true" />
             <span className="truncate">{cfg.label}</span>
           </span>
           {isScanning && (
-            <span className="font-mono text-[10.5px] tabular-nums text-[var(--color-muted-soft)]">
+            <span className="font-mono text-[11px] tabular-nums text-[var(--color-muted-soft)]">
               {elapsedTime.toFixed(1)}s
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
             onClick={handleToggleVoice}
             title={voiceEnabled ? 'Выключить озвучку косатки' : 'Включить русский голос косатки'}
             className={cn(
-              'min-h-7 px-2 py-1 rounded-full border font-mono text-[10.5px] inline-flex items-center gap-1 transition-colors cursor-pointer',
+              'pixel-btn min-h-7 px-2 py-1 font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer',
               voiceEnabled
-                ? 'border-[#3fbf7f]/55 bg-[#3fbf7f]/15 text-[#3fbf7f]'
-                : 'border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                ? '!border-[#47d18c] bg-[#47d18c]/20 text-[#5ee8a7]'
+                : 'bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
             )}
           >
             {voiceEnabled ? (
@@ -361,12 +361,12 @@ export function OrcaCompanion({
             type="button"
             onClick={() => setMotionPaused((p) => !p)}
             title={motionPaused ? 'Включить анимацию косатки' : 'Поставить анимацию на паузу'}
-            className="min-h-7 px-2 py-1 rounded-full border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] font-mono text-[10.5px] inline-flex items-center gap-1 transition-colors cursor-pointer"
+            className="pixel-btn min-h-7 px-2 py-1 bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer"
           >
             {motionPaused ? (
               <>
                 <Play className="w-3 h-3" aria-hidden="true" />
-                <span className="sr-only sm:not-sr-only">Анимация</span>
+                <span className="sr-only sm:not-sr-only">Старт</span>
               </>
             ) : (
               <>
@@ -378,21 +378,20 @@ export function OrcaCompanion({
         </div>
       </div>
 
-      {/* Live 3D WebGL Orca Stage */}
+      {/* Live 16-Bit Pixel-Art Aurora & Orca Stage (Ultra-Lightweight 2D Canvas) */}
       <div className="flex flex-row lg:flex-col items-center gap-3.5 my-auto">
         <button
           ref={stageRef}
           type="button"
           onClick={handlePoke}
-          aria-label="Кликнуть по 3D-косатке Aegis Orca, чтобы она заговорила"
+          aria-label="Кликнуть по пиксельной косатке Aegis Orca, чтобы она заговорила"
           className={cn(
-            'group relative w-28 h-28 sm:w-36 sm:h-36 lg:w-full lg:h-[252px] shrink-0 rounded-3xl overflow-hidden border bg-[#040811] shadow-[0_24px_50px_-24px_rgba(0,0,0,0.85)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e94a32] transition-colors duration-300',
+            'group relative w-28 h-28 sm:w-36 sm:h-36 lg:w-full lg:h-[246px] shrink-0 overflow-hidden border-2 bg-[#0b0e18] shadow-[4px_4px_0_var(--pixel-shadow)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffe79e] transition-colors',
             cfg.ringColor
           )}
         >
-          {/* Live 3D WebGL Orca (organic swimming spine wave, 3D jaw lip-sync, eye-tracking, blinking, 3D sonar) */}
           <div className="relative w-full h-full">
-            <Orca3DCanvas
+            <PixelOrcaScene
               mood={mood}
               isTalking={isTalking}
               mouthLevel={mouthLevel}
@@ -403,24 +402,18 @@ export function OrcaCompanion({
             />
           </div>
 
-          {/* Subtle top glass sheen */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-white/[0.05] to-transparent z-10"
-          />
-
-          {/* Bottom Live Nameplate + Talking Equalizer Bars */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 px-3 py-1.5 bg-gradient-to-t from-[#05070c]/95 via-[#05070c]/65 to-transparent flex items-center justify-between gap-2 z-20">
-            <div className="flex items-center gap-1.5">
-              <span className="font-mono text-[11px] font-medium text-[#f4f4f2] tracking-tight">
+          {/* Crisp 16-bit Pixel Frame Nameplate + Talking Equalizer Bars */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 px-2.5 py-1.5 bg-[#0b0e18]/90 border-t-2 border-[#2a3b61] flex items-center justify-between gap-2 z-20">
+            <div className="flex items-center gap-2">
+              <span className="font-pixel text-[9px] text-[#eef6ff] tracking-wide">
                 aegis.orca
               </span>
               {isTalking && (
                 <span className="inline-flex items-end gap-[2px] h-3" aria-label="говорит">
-                  <span className="orca-eq-bar w-[2px] h-full bg-sky-400 rounded-full" style={{ animationDelay: '0ms' }} />
-                  <span className="orca-eq-bar w-[2px] h-full bg-sky-300 rounded-full" style={{ animationDelay: '110ms' }} />
-                  <span className="orca-eq-bar w-[2px] h-full bg-[#e94a32] rounded-full" style={{ animationDelay: '220ms' }} />
-                  <span className="orca-eq-bar w-[2px] h-full bg-sky-400 rounded-full" style={{ animationDelay: '70ms' }} />
+                  <span className="orca-eq-bar w-[3px] h-full bg-[#56d4b2]" style={{ animationDelay: '0ms' }} />
+                  <span className="orca-eq-bar w-[3px] h-full bg-[#ffe79e]" style={{ animationDelay: '120ms' }} />
+                  <span className="orca-eq-bar w-[3px] h-full bg-[#e94a32]" style={{ animationDelay: '220ms' }} />
+                  <span className="orca-eq-bar w-[3px] h-full bg-[#56d4b2]" style={{ animationDelay: '70ms' }} />
                 </span>
               )}
             </div>
@@ -428,10 +421,10 @@ export function OrcaCompanion({
             {securityScore !== null && (
               <span
                 className={cn(
-                  'hidden sm:inline-block font-mono text-[10.5px] font-semibold tabular-nums px-1.5 py-0.5 rounded',
+                  'hidden sm:inline-block font-mono text-[11px] font-semibold tabular-nums px-1.5 py-0.5 border',
                   securityScore >= 70
-                    ? 'bg-[#3fbf7f]/25 text-[#3fbf7f]'
-                    : 'bg-[#e94a32]/25 text-[#ff735d]'
+                    ? 'bg-[#3fbf7f]/25 text-[#5ee8a7] border-[#47d18c]'
+                    : 'bg-[#e94a32]/25 text-[#ff8573] border-[#e94a32]'
                 )}
               >
                 {securityScore}/100 {grade ?? ''}
@@ -440,15 +433,16 @@ export function OrcaCompanion({
           </div>
         </button>
 
-        {/* Live Talking Speech Bubble (Typewriter + Instant Speak Replay) */}
+        {/* Live Talking RPG Pixel Dialogue Box (Typewriter + Instant Speak Replay) */}
         <div className="flex-1 lg:w-full min-w-0 space-y-2.5">
-          <div className="relative rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-panel)] px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed text-[var(--color-body-text)]">
-            <div className="flex items-center justify-between gap-2 mb-1 font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted-soft)] whitespace-nowrap">
+          <div className="pixel-card relative bg-[var(--color-panel)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--color-body-text)]">
+            <div className="flex items-center justify-between gap-2 mb-1 font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)] whitespace-nowrap">
               <span className="inline-flex items-center gap-1 min-w-0 truncate">
+                <span className="text-[var(--color-aurora)]">▸</span>
                 <span className="hidden sm:inline">Aegis</span>
                 <span>Orca</span>
                 {isTalking && (
-                  <span className="text-sky-400 normal-case truncate">· говорит…</span>
+                  <span className="text-[var(--color-aurora)] normal-case truncate">· говорит…</span>
                 )}
               </span>
               <div className="flex items-center gap-2 shrink-0">
@@ -477,19 +471,19 @@ export function OrcaCompanion({
               {isTypewriting && (
                 <span
                   aria-hidden="true"
-                  className="inline-block w-1.5 h-3.5 ml-0.5 align-middle bg-sky-400 animate-pulse"
+                  className="pixel-blink inline-block w-2 h-3.5 ml-0.5 align-middle bg-[#56d4b2]"
                 />
               )}
             </p>
           </div>
 
-          {/* Primary 1-Click Actions */}
-          <div className="grid grid-cols-2 gap-1.5">
+          {/* Primary 1-Click Pixel Actions */}
+          <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
               disabled={isScanning}
               onClick={onDemoScan}
-              className="min-h-9 px-3 py-1.5 rounded-xl bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white disabled:opacity-50 font-mono text-[11px] font-medium inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              className="pixel-btn-snow min-h-9 px-3 py-1.5 disabled:opacity-50 font-mono text-[12px] font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Zap className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               <span>Демо-аудит</span>
@@ -500,7 +494,7 @@ export function OrcaCompanion({
                 type="button"
                 disabled={isHealing}
                 onClick={onTriggerSelfHeal}
-                className="min-h-9 px-3 py-1.5 rounded-xl bg-[#3fbf7f] hover:bg-[#34a96e] text-[#09120d] disabled:opacity-60 font-mono text-[11px] font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                className="pixel-btn-emerald min-h-9 px-3 py-1.5 disabled:opacity-60 font-mono text-[12px] font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <HeartPulse className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span>{isHealing ? 'Лечу…' : 'Self-Heal'}</span>
@@ -510,7 +504,7 @@ export function OrcaCompanion({
                 type="button"
                 disabled={isScanning}
                 onClick={onUploadZipClick}
-                className="min-h-9 px-3 py-1.5 rounded-xl border border-[var(--color-line-strong)] hover:border-[#e94a32] bg-[var(--color-panel)] text-[var(--color-ink)] disabled:opacity-50 font-mono text-[11px] inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                className="pixel-btn min-h-9 px-3 py-1.5 bg-[var(--color-panel)] text-[var(--color-ink)] disabled:opacity-50 font-mono text-[12px] inline-flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Upload className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span>Свой .zip</span>
@@ -520,12 +514,12 @@ export function OrcaCompanion({
         </div>
       </div>
 
-      {/* Bottom Compact Module Shortcuts */}
-      <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-[var(--color-line)] font-mono text-[11px]">
+      {/* Bottom Compact Pixel Module Shortcuts */}
+      <div className="grid grid-cols-2 gap-2 pt-2.5 border-t-2 border-[var(--color-line)] font-mono text-[12px]">
         <button
           type="button"
           onClick={() => onOpenDrawer('reports')}
-          className="min-h-8 px-2.5 py-1.5 rounded-lg border border-[var(--color-line)] hover:border-[#e94a32] bg-[var(--color-panel)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] flex items-center justify-between gap-1.5 transition-colors cursor-pointer"
+          className="pixel-btn min-h-8 px-2.5 py-1.5 bg-[var(--color-panel)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] flex items-center justify-between gap-1.5 cursor-pointer"
         >
           <span className="inline-flex items-center gap-1 truncate">
             <FileText className="w-3 h-3 text-[#e94a32] shrink-0" aria-hidden="true" />
@@ -537,13 +531,13 @@ export function OrcaCompanion({
         <button
           type="button"
           onClick={() => onOpenDrawer('findings')}
-          className="min-h-8 px-2.5 py-1.5 rounded-lg border border-[var(--color-line)] hover:border-[#e94a32] bg-[var(--color-panel)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] flex items-center justify-between gap-1.5 transition-colors cursor-pointer"
+          className="pixel-btn min-h-8 px-2.5 py-1.5 bg-[var(--color-panel)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] flex items-center justify-between gap-1.5 cursor-pointer"
         >
           <span className="inline-flex items-center gap-1 truncate">
             {findingsCount > 0 ? (
-              <ShieldAlert className="w-3 h-3 text-[#ff735d] shrink-0" aria-hidden="true" />
+              <ShieldAlert className="w-3 h-3 text-[#ff7b66] shrink-0" aria-hidden="true" />
             ) : (
-              <ShieldCheck className="w-3 h-3 text-[#3fbf7f] shrink-0" aria-hidden="true" />
+              <ShieldCheck className="w-3 h-3 text-[#47d18c] shrink-0" aria-hidden="true" />
             )}
             <span className="truncate">Находки</span>
           </span>
@@ -553,13 +547,13 @@ export function OrcaCompanion({
         <button
           type="button"
           onClick={() => onOpenDrawer('authorship')}
-          className="min-h-8 px-2.5 py-1.5 rounded-lg border border-[var(--color-line)] hover:border-[#e94a32] bg-[var(--color-panel)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] flex items-center justify-between gap-1.5 transition-colors cursor-pointer"
+          className="pixel-btn min-h-8 px-2.5 py-1.5 bg-[var(--color-panel)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] flex items-center justify-between gap-1.5 cursor-pointer"
         >
           <span className="inline-flex items-center gap-1 truncate">
-            <Lock className="w-3 h-3 text-[#e8a33d] shrink-0" aria-hidden="true" />
+            <Lock className="w-3 h-3 text-[#f0b541] shrink-0" aria-hidden="true" />
             <span className="truncate">Авторство</span>
           </span>
-          <span className={authorshipVerified ? 'text-[#3fbf7f]' : 'text-[#e8a33d]'}>
+          <span className={authorshipVerified ? 'text-[#47d18c]' : 'text-[#f0b541]'}>
             {authorshipVerified ? 'OK' : 'LOCK'}
           </span>
         </button>
@@ -567,13 +561,13 @@ export function OrcaCompanion({
         <button
           type="button"
           onClick={() => onOpenDrawer('scanner')}
-          className="min-h-8 px-2.5 py-1.5 rounded-lg border border-[var(--color-line)] hover:border-[#e94a32] bg-[var(--color-panel)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] flex items-center justify-between gap-1.5 transition-colors cursor-pointer"
+          className="pixel-btn min-h-8 px-2.5 py-1.5 bg-[var(--color-panel)] text-[var(--color-body-text)] hover:text-[var(--color-ink)] flex items-center justify-between gap-1.5 cursor-pointer"
         >
           <span className="inline-flex items-center gap-1 truncate">
-            <Terminal className="w-3 h-3 text-[var(--color-muted-soft)] shrink-0" aria-hidden="true" />
+            <Terminal className="w-3 h-3 text-[var(--color-aurora)] shrink-0" aria-hidden="true" />
             <span className="truncate">Логи</span>
           </span>
-          <span className="text-[var(--color-faint)]">live</span>
+          <span className="text-[var(--color-aurora)]">live</span>
         </button>
       </div>
     </aside>

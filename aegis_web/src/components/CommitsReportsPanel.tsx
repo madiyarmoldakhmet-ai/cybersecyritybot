@@ -119,7 +119,7 @@ export function CommitsReportsPanel({
           </div>
         </div>
 
-        <div className="flex gap-1.5">
+        <div className="flex gap-2">
           <label htmlFor="cg-quick-repo" className="visually-hidden">
             GitHub репозиторий для проверки коммитов
           </label>
@@ -130,12 +130,12 @@ export function CommitsReportsPanel({
             onChange={(e) => setQuickRepo(e.target.value)}
             placeholder="owner/repo или github.com/..."
             disabled={isScanning}
-            className="flex-1 min-w-0 min-h-9 px-3 py-1.5 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] focus:border-[#e94a32] text-xs font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
+            className="pixel-input flex-1 min-w-0 min-h-9 px-3 py-1.5 bg-[var(--color-panel)] focus:border-[#56d4b2] text-xs font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
           />
           <button
             type="submit"
             disabled={isScanning || !quickRepo.trim()}
-            className="min-h-9 px-3 rounded-lg bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white disabled:opacity-45 font-mono text-xs inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+            className="pixel-btn-snow min-h-9 px-3 disabled:opacity-45 font-mono text-xs inline-flex items-center gap-1 cursor-pointer shrink-0"
           >
             <Search className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Скан</span>
@@ -145,25 +145,25 @@ export function CommitsReportsPanel({
 
       {/* Compact Live KPI Strip from SQLite */}
       <div className="grid grid-cols-4 gap-1.5 font-mono">
-        <div className="rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] px-2.5 py-2">
+        <div className="pixel-panel bg-[var(--color-panel)] px-2.5 py-2">
           <div className="text-[10px] text-[var(--color-muted-soft)]">АУДИТОВ</div>
           <div className="text-sm font-semibold tabular-nums text-[var(--color-ink)]">
             {feed?.total_scans ?? 0}
           </div>
         </div>
-        <div className="rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] px-2.5 py-2">
+        <div className="pixel-panel bg-[var(--color-panel)] px-2.5 py-2">
           <div className="text-[10px] text-[var(--color-muted-soft)]">CRIT</div>
-          <div className="text-sm font-semibold tabular-nums text-[#ff735d]">
+          <div className="text-sm font-semibold tabular-nums text-[#ff7b66]">
             {feed?.critical_found ?? 0}
           </div>
         </div>
-        <div className="rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] px-2.5 py-2">
+        <div className="pixel-panel bg-[var(--color-panel)] px-2.5 py-2">
           <div className="text-[10px] text-[var(--color-muted-soft)]">FP</div>
-          <div className="text-sm font-semibold tabular-nums text-[#3fbf7f]">
+          <div className="text-sm font-semibold tabular-nums text-[#47d18c]">
             {feed?.appeals_count ?? 0}
           </div>
         </div>
-        <div className="rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] px-2.5 py-2">
+        <div className="pixel-panel bg-[var(--color-panel)] px-2.5 py-2">
           <div className="text-[10px] text-[var(--color-muted-soft)]">СРЕДН.</div>
           <div className="text-sm font-semibold tabular-nums text-[var(--color-ink)]">
             {feed?.avg_scan_seconds != null ? `${feed.avg_scan_seconds.toFixed(1)}с` : '—'}
@@ -173,7 +173,7 @@ export function CommitsReportsPanel({
 
       {/* Real Git Commits of Currently Scanned Repository */}
       {activeCommits.length > 0 && (
-        <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3 space-y-2">
+        <div className="pixel-panel bg-[var(--color-panel)] p-3 space-y-2">
           <div className="flex items-center justify-between gap-2 font-mono text-[10.5px] uppercase tracking-wider text-[var(--color-muted-soft)]">
             <span className="inline-flex items-center gap-1.5 truncate">
               <GitCommitHorizontal className="w-3.5 h-3.5 text-[#e94a32] shrink-0" aria-hidden="true" />
@@ -188,24 +188,24 @@ export function CommitsReportsPanel({
                 <li
                   key={c.sha}
                   className={cn(
-                    'rounded-lg px-2.5 py-1.5 border text-xs flex flex-col gap-0.5',
+                    'px-2.5 py-1.5 border-2 text-xs flex flex-col gap-0.5',
                     isGhost
-                      ? 'border-[#e94a32]/50 bg-[#e94a32]/10'
+                      ? 'border-[#e94a32] bg-[#e94a32]/15'
                       : 'border-[var(--color-line)] bg-[var(--color-paper)]'
                   )}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <code className="font-mono text-[10.5px] text-[#e94a32] shrink-0">{c.short}</code>
+                      <code className="text-[10.5px] text-[#ff7b66] shrink-0">{c.short}</code>
                       <span className="text-[var(--color-ink)] truncate font-medium">{c.subject}</span>
                     </div>
                     {isGhost && (
-                      <span className="font-mono text-[9.5px] px-1.5 py-0.5 rounded bg-[#e94a32]/20 text-[#ff735d] shrink-0">
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 border border-[#e94a32] bg-[#e94a32]/25 text-[#ff8573] shrink-0">
                         GHOST SECRET
                       </span>
                     )}
                   </div>
-                  <div className="font-mono text-[10px] text-[var(--color-muted-soft)] flex items-center justify-between gap-2">
+                  <div className="font-mono text-[10.5px] text-[var(--color-muted-soft)] flex items-center justify-between gap-2">
                     <span className="truncate">{c.author}</span>
                     <span className="shrink-0">{c.date.slice(0, 10)}</span>
                   </div>
@@ -217,14 +217,14 @@ export function CommitsReportsPanel({
       )}
 
       {/* Persisted Audited Commits & Downloadable Compliance PDF / MD Reports */}
-      <div className="flex-1 min-h-0 flex flex-col rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden">
-        <div className="px-3 py-2 border-b border-[var(--color-line)] flex items-center justify-between font-mono text-[10.5px] uppercase tracking-wider text-[var(--color-muted-soft)]">
+      <div className="pixel-card flex-1 min-h-0 flex flex-col bg-[var(--color-panel)] overflow-hidden">
+        <div className="px-3 py-2 border-b-2 border-[var(--color-line)] flex items-center justify-between font-mono text-[10.5px] uppercase tracking-wider text-[var(--color-muted-soft)]">
           <span>Журнал коммитов и PDF-отчётов</span>
           <span className="tabular-nums">{audits.length}</span>
         </div>
 
         {audits.length > 0 ? (
-          <ul className="divide-y divide-[var(--color-line)] overflow-y-auto cg-scroll max-h-[300px]">
+          <ul className="divide-y-2 divide-[var(--color-line)] overflow-y-auto cg-scroll max-h-[300px]">
             {audits.map((a, idx) => {
               const hasRisk = a.status !== 'failed' && (a.critical > 0 || a.high > 0);
               const isClean = a.status !== 'failed' && a.critical === 0 && a.high === 0;
@@ -237,15 +237,15 @@ export function CommitsReportsPanel({
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         {hasRisk ? (
-                          <ShieldAlert className="w-3.5 h-3.5 text-[#ff735d] shrink-0" aria-hidden="true" />
+                          <ShieldAlert className="w-3.5 h-3.5 text-[#ff7b66] shrink-0" aria-hidden="true" />
                         ) : (
-                          <ShieldCheck className="w-3.5 h-3.5 text-[#3fbf7f] shrink-0" aria-hidden="true" />
+                          <ShieldCheck className="w-3.5 h-3.5 text-[#47d18c] shrink-0" aria-hidden="true" />
                         )}
                         <span className="font-mono text-xs font-medium text-[var(--color-ink)] truncate">
                           {a.repo_name}
                         </span>
                       </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10.5px] text-[var(--color-muted-soft)]">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-[var(--color-muted-soft)]">
                         <span className="inline-flex items-center gap-0.5">
                           <GitBranch className="w-3 h-3" aria-hidden="true" />
                           {a.branch || 'main'}
@@ -255,13 +255,13 @@ export function CommitsReportsPanel({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       {a.pdf_url && (
                         <a
                           href={a.pdf_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="min-h-7 px-2 py-1 rounded-md bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-[10px] inline-flex items-center gap-1 transition-colors"
+                          className="pixel-btn-snow min-h-7 px-2 py-1 font-mono text-[10.5px] inline-flex items-center gap-1"
                         >
                           <FileDown className="w-3 h-3" aria-hidden="true" />
                           <span>PDF</span>
@@ -272,7 +272,7 @@ export function CommitsReportsPanel({
                           href={a.md_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="min-h-7 px-2 py-1 rounded-md border border-[var(--color-line-strong)] hover:border-[var(--color-ink)] bg-[var(--color-paper)] text-[var(--color-ink)] font-mono text-[10px] inline-flex items-center gap-1 transition-colors"
+                          className="pixel-btn min-h-7 px-2 py-1 bg-[var(--color-paper)] text-[var(--color-ink)] font-mono text-[10.5px] inline-flex items-center gap-1"
                         >
                           <FileText className="w-3 h-3" aria-hidden="true" />
                           <span>MD</span>
@@ -281,27 +281,27 @@ export function CommitsReportsPanel({
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 font-mono text-[10.5px] tabular-nums">
+                  <div className="flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums">
                     <div className="flex items-center gap-1.5">
-                      <span className={cn('px-1.5 py-0.5 rounded', a.critical ? 'bg-[#e94a32]/15 text-[#ff735d]' : 'text-[var(--color-faint)]')}>
+                      <span className={cn('px-1.5 py-0.5 border', a.critical ? 'bg-[#e94a32]/20 text-[#ff8573] border-[#e94a32]' : 'border-transparent text-[var(--color-faint)]')}>
                         C:{a.critical}
                       </span>
-                      <span className={cn('px-1.5 py-0.5 rounded', a.high ? 'bg-orange-500/15 text-orange-400' : 'text-[var(--color-faint)]')}>
+                      <span className={cn('px-1.5 py-0.5 border', a.high ? 'bg-orange-500/20 text-orange-300 border-orange-500/60' : 'border-transparent text-[var(--color-faint)]')}>
                         H:{a.high}
                       </span>
-                      <span className={cn('px-1.5 py-0.5 rounded', a.medium ? 'bg-amber-500/15 text-amber-400' : 'text-[var(--color-faint)]')}>
+                      <span className={cn('px-1.5 py-0.5 border', a.medium ? 'bg-amber-500/20 text-[#ffe79e] border-[#f0b541]/60' : 'border-transparent text-[var(--color-faint)]')}>
                         M:{a.medium}
                       </span>
                       <span className="text-[var(--color-muted-soft)]">Σ {a.total_findings}</span>
                     </div>
                     <span
                       className={cn(
-                        'px-2 py-0.5 rounded-full text-[10px]',
+                        'px-2 py-0.5 border text-[10.5px]',
                         a.status === 'failed'
-                          ? 'bg-neutral-500/15 text-[var(--color-muted-soft)]'
+                          ? 'border-[var(--color-line)] text-[var(--color-muted-soft)]'
                           : isClean
-                          ? 'bg-[#3fbf7f]/15 text-[#3fbf7f]'
-                          : 'bg-[#e94a32]/15 text-[#ff735d]'
+                          ? 'bg-[#47d18c]/15 text-[#47d18c] border-[#47d18c]'
+                          : 'bg-[#e94a32]/15 text-[#ff8573] border-[#e94a32]'
                       )}
                     >
                       {a.status === 'failed' ? 'ошибка' : isClean ? 'чисто' : 'риск'}
@@ -320,7 +320,7 @@ export function CommitsReportsPanel({
               type="button"
               onClick={onDemoScan}
               disabled={isScanning}
-              className="min-h-8 px-3.5 py-1.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="pixel-btn-snow min-h-8 px-3.5 py-1.5 font-mono text-xs inline-flex items-center gap-1.5 cursor-pointer"
             >
               <Play className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Запустить Демо KZ</span>

@@ -106,11 +106,11 @@ function computeLocalScore(activeFindings: Finding[]): { score: number; grade: s
 type InspectorTab = 'reports' | 'findings' | 'scanner' | 'authorship';
 
 const SEVERITY_BADGE: Record<string, string> = {
-  CRITICAL: 'bg-[#e94a32]/15 text-[#ff735d] border border-[#e94a32]/40',
-  HIGH: 'bg-orange-500/15 text-orange-400 border border-orange-500/35',
-  MEDIUM: 'bg-amber-500/15 text-amber-400 border border-amber-500/35',
-  LOW: 'bg-sky-500/15 text-sky-400 border border-sky-500/35',
-  INFO: 'bg-neutral-500/15 text-[var(--color-muted-soft)] border border-[var(--color-line)]',
+  CRITICAL: 'bg-[#e94a32]/20 text-[#ff8573] border-2 border-[#e94a32]',
+  HIGH: 'bg-orange-500/20 text-orange-300 border-2 border-orange-500/70',
+  MEDIUM: 'bg-[#f0b541]/20 text-[#ffe79e] border-2 border-[#f0b541]/70',
+  LOW: 'bg-[#2da890]/20 text-[#56d4b2] border-2 border-[#2da890]',
+  INFO: 'bg-[var(--color-raised)] text-[var(--color-muted-soft)] border-2 border-[var(--color-line)]',
 };
 
 const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
@@ -1670,17 +1670,20 @@ export default function Home() {
         }}
       />
 
-      {/* Single Compact 52px App Top Bar (content-first, <12% viewport height) */}
-      <header className="h-[52px] shrink-0 border-b border-[var(--color-line)] bg-[var(--color-paper)] px-4 sm:px-5 flex items-center justify-between gap-3 z-20">
+      {/* 4px Stepped Pixel Aurora Ribbon across the very top */}
+      <div className="pixel-aurora-bar" aria-hidden="true" />
+
+      {/* Single Compact 54px Pixel App Top Bar */}
+      <header className="h-[54px] shrink-0 border-b-2 border-[var(--color-line)] bg-[var(--color-paper)] px-4 sm:px-5 flex items-center justify-between gap-3 z-20">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="grid grid-cols-2 gap-0.5 w-3.5 h-3.5 shrink-0" aria-hidden="true">
+          <div className="flex items-center gap-2.5 shrink-0">
+            <span className="grid grid-cols-2 gap-[2px] w-4 h-4 shrink-0 border border-[var(--color-line-strong)] p-[1px] bg-[#0b0e18]" aria-hidden="true">
               <span className="bg-[#e94a32]" />
-              <span className="bg-[var(--color-ink)]" />
-              <span className="bg-[var(--color-ink)]" />
-              <span className="bg-[var(--color-ink)] opacity-45" />
+              <span className="bg-[#56d4b2]" />
+              <span className="bg-[#ffe79e]" />
+              <span className="bg-[#5e4ca8]" />
             </span>
-            <span className="font-sans text-[15px] font-medium tracking-tight">
+            <span className="font-pixel text-[11px] sm:text-[12px] tracking-tight leading-none">
               commit<span className="text-[#e94a32]">.</span>guardian
             </span>
           </div>
@@ -1695,7 +1698,7 @@ export default function Home() {
         <div className="flex items-center gap-2 shrink-0">
           <a
             href="/dashboard"
-            className="hidden sm:inline-flex items-center gap-1 min-h-8 px-2.5 rounded-lg border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] font-mono text-[11px] transition-colors"
+            className="pixel-btn hidden sm:inline-flex items-center gap-1 min-h-8 px-2.5 bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] font-mono text-[11.5px]"
           >
             <span>/dashboard</span>
             <ExternalLink className="w-3 h-3" aria-hidden="true" />
@@ -1711,10 +1714,10 @@ export default function Home() {
               }
             }}
             className={cn(
-              'min-h-8 px-2.5 rounded-lg border font-mono text-[11px] inline-flex items-center gap-1.5 transition-colors cursor-pointer',
+              'pixel-btn min-h-8 px-2.5 font-mono text-[11.5px] inline-flex items-center gap-1.5 cursor-pointer',
               drawerOpen
-                ? 'border-[#e94a32] bg-[#e94a32]/12 text-[var(--color-ink)]'
-                : 'border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                ? '!border-[#e94a32] bg-[#e94a32]/20 text-[var(--color-ink)]'
+                : 'bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
             )}
           >
             {drawerOpen ? (
@@ -1731,7 +1734,7 @@ export default function Home() {
             type="button"
             onClick={handleDemoScan}
             disabled={isScanning}
-            className="min-h-8 px-3.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white disabled:opacity-55 text-xs font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="pixel-btn-primary min-h-8 px-3.5 disabled:opacity-55 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
           >
             <Zap className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Демо-аудит</span>
@@ -1741,7 +1744,7 @@ export default function Home() {
 
       {/* Pure Full-Viewport Companion + Chat Shell */}
       <main id="chat-workspace" className="flex-1 min-h-0 flex flex-col lg:flex-row relative overflow-hidden">
-        {/* Left: Live Animated Cyber-Orca Companion */}
+        {/* Left: Live Animated 16-Bit Pixel-Art Orca Companion */}
         <div className="lg:w-[320px] xl:w-[348px] lg:h-full shrink-0 flex flex-col">
           <OrcaCompanion
             mood={companionMood}
@@ -1800,20 +1803,20 @@ export default function Home() {
           />
         </div>
 
-        {/* Right: On-Demand Collapsible Inspector Drawer (Reports / Findings+Risk+SelfHeal / Logs / Authorship) */}
+        {/* Right: On-Demand Collapsible Pixel Inspector Drawer */}
         <AnimatePresence>
           {drawerOpen && (
             <motion.aside
               aria-label="Инспектор аудита, коммитов и авторства"
-              initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, x: 24 }}
+              initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, x: 24 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-              className="fixed inset-y-[52px] right-0 z-30 w-full max-w-[440px] lg:static lg:inset-auto lg:w-[410px] xl:w-[440px] lg:h-full border-l border-[var(--color-line)] bg-[var(--color-paper)] flex flex-col min-h-0 shadow-2xl lg:shadow-none shrink-0"
+              exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, x: 20 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className="fixed inset-y-[58px] right-0 z-30 w-full max-w-[440px] lg:static lg:inset-auto lg:w-[410px] xl:w-[440px] lg:h-full border-l-2 border-[var(--color-line)] bg-[var(--color-paper)] flex flex-col min-h-0 shadow-[-4px_0_0_var(--pixel-shadow)] lg:shadow-none shrink-0"
             >
               {/* Drawer Tabs + Close */}
-              <div className="px-3 py-2.5 border-b border-[var(--color-line)] flex items-center justify-between gap-2 shrink-0">
-                <div className="grid grid-cols-4 gap-1 flex-1 min-w-0" role="tablist" aria-label="Разделы инспектора">
+              <div className="px-3 py-2.5 border-b-2 border-[var(--color-line)] flex items-center justify-between gap-2 shrink-0">
+                <div className="grid grid-cols-4 gap-1.5 flex-1 min-w-0" role="tablist" aria-label="Разделы инспектора">
                   {(
                     [
                       { id: 'reports', label: 'Отчёты', badge: `${reportsFeed?.total_scans ?? 0}` },
@@ -1831,14 +1834,14 @@ export default function Home() {
                         aria-selected={active}
                         onClick={() => setInspectorTab(tab.id)}
                         className={cn(
-                          'min-h-8 px-2 py-1 rounded-lg border font-mono text-[10.5px] flex items-center justify-center gap-1 transition-colors cursor-pointer truncate',
+                          'pixel-btn min-h-8 px-2 py-1 font-mono text-[11px] flex items-center justify-center gap-1 cursor-pointer truncate',
                           active
-                            ? 'border-[#e94a32] bg-[#e94a32]/12 text-[var(--color-ink)] font-medium'
-                            : 'border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                            ? '!border-[#e94a32] bg-[#e94a32]/20 text-[var(--color-ink)] font-semibold'
+                            : 'bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
                         )}
                       >
                         <span className="truncate">{tab.label}</span>
-                        <span className="tabular-nums opacity-70">{tab.badge}</span>
+                        <span className="tabular-nums opacity-75">{tab.badge}</span>
                       </button>
                     );
                   })}
@@ -1848,7 +1851,7 @@ export default function Home() {
                   type="button"
                   onClick={() => setDrawerOpen(false)}
                   aria-label="Скрыть панель инспектора"
-                  className="min-h-8 min-w-8 rounded-lg border border-[var(--color-line)] hover:border-[#e94a32] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] flex items-center justify-center shrink-0 cursor-pointer transition-colors"
+                  className="pixel-btn min-h-8 min-w-8 bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] flex items-center justify-center shrink-0 cursor-pointer"
                 >
                   <X className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
@@ -1892,7 +1895,7 @@ export default function Home() {
                         e.preventDefault();
                         if (repoScanUrl.trim()) startScan(repoScanUrl);
                       }}
-                      className="space-y-2"
+                      className="space-y-2.5"
                     >
                       <label htmlFor="cg-repo-url" className="visually-hidden">
                         GitHub URL репозитория для локального аудита
@@ -1904,13 +1907,13 @@ export default function Home() {
                         onChange={(e) => setRepoScanUrl(e.target.value)}
                         placeholder="https://github.com/owner/repo"
                         disabled={isScanning}
-                        className="w-full min-h-9 px-3 py-1.5 rounded-lg bg-[var(--color-panel)] border border-[var(--color-line)] focus:border-[#e94a32] text-sm font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
+                        className="pixel-input w-full min-h-9 px-3 py-1.5 bg-[var(--color-panel)] focus:border-[#56d4b2] text-sm font-mono text-[var(--color-ink)] placeholder:text-[var(--color-faint)] focus:outline-none"
                       />
                       <div className="flex gap-2">
                         <button
                           type="submit"
                           disabled={isScanning || !repoScanUrl.trim()}
-                          className="flex-1 min-h-9 px-3 py-1.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white disabled:opacity-45 font-mono text-xs inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          className="pixel-btn-snow flex-1 min-h-9 px-3 py-1.5 disabled:opacity-45 font-mono text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
                         >
                           <Terminal className="w-3.5 h-3.5" aria-hidden="true" />
                           <span>{isScanning ? 'Сканирую…' : 'Сканировать URL'}</span>
@@ -1919,7 +1922,7 @@ export default function Home() {
                           type="button"
                           onClick={handleDemoScan}
                           disabled={isScanning}
-                          className="min-h-9 px-3 py-1.5 rounded-full border border-[var(--color-line-strong)] hover:border-[var(--color-ink)] font-mono text-xs text-[var(--color-ink)] transition-colors cursor-pointer"
+                          className="pixel-btn min-h-9 px-3 py-1.5 bg-[var(--color-panel)] font-mono text-xs text-[var(--color-ink)] cursor-pointer"
                         >
                           Демо KZ
                         </button>
@@ -1948,7 +1951,7 @@ export default function Home() {
                         type="button"
                         disabled={isHealing}
                         onClick={handleDemoHeal}
-                        className="w-full min-h-10 px-4 py-2 rounded-xl bg-[#3fbf7f] hover:bg-[#34a96e] text-[#09120d] disabled:opacity-60 font-mono text-xs font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                        className="pixel-btn-emerald w-full min-h-10 px-4 py-2 disabled:opacity-60 font-mono text-xs font-semibold inline-flex items-center justify-center gap-2 cursor-pointer"
                       >
                         <HeartPulse className="w-4 h-4" aria-hidden="true" />
                         <span>{isHealing ? 'Исцеляю и пересканирую…' : 'Исцелить автоматически (Self-Heal)'}</span>
@@ -1960,8 +1963,8 @@ export default function Home() {
                     {ghostSecrets.length > 0 && <GhostSecretsCard ghosts={ghostSecrets} />}
 
                     {auditSummary && (
-                      <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3 text-xs leading-relaxed text-[var(--color-body-text)]">
-                        <span className="font-mono text-[10.5px] uppercase tracking-wider text-[var(--color-muted-soft)] mr-1.5">
+                      <div className="pixel-panel bg-[var(--color-panel)] p-3 text-xs leading-relaxed text-[var(--color-body-text)]">
+                        <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)] mr-1.5">
                           Заключение:
                         </span>
                         {auditSummary}
@@ -1969,14 +1972,14 @@ export default function Home() {
                     )}
 
                     {appealedCount > 0 && (
-                      <div className="rounded-lg border border-[#3fbf7f]/35 bg-[#3fbf7f]/10 px-3 py-1.5 font-mono text-[11px] text-[#3fbf7f] flex items-center justify-between gap-2">
+                      <div className="border-2 border-[#47d18c] bg-[#47d18c]/15 px-3 py-1.5 font-mono text-[11.5px] text-[#5ee8a7] flex items-center justify-between gap-2">
                         <span>Оспорено FP: {appealedCount}</span>
                         <span>Score пересчитан</span>
                       </div>
                     )}
 
                     {findings.length > 0 ? (
-                      <div className="space-y-2">
+                      <div className="space-y-2.5">
                         {findings.map((f, idx) => {
                           const fKey = makeFindingKey(f);
                           const isAppealed = Boolean(appealedMap[fKey]);
@@ -1984,29 +1987,29 @@ export default function Home() {
                             <div
                               key={`${f.id}-${idx}`}
                               className={cn(
-                                'rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3 space-y-2',
+                                'pixel-panel bg-[var(--color-panel)] p-3 space-y-2',
                                 isAppealed && 'opacity-55'
                               )}
                             >
                               <div className="flex items-start justify-between gap-2">
-                                <span className={cn('font-mono text-[10px] px-2 py-0.5 rounded shrink-0', SEVERITY_BADGE[f.severity] || SEVERITY_BADGE.INFO)}>
+                                <span className={cn('font-mono text-[10.5px] px-2 py-0.5 shrink-0', SEVERITY_BADGE[f.severity] || SEVERITY_BADGE.INFO)}>
                                   {f.severity}
                                 </span>
-                                <span className="font-mono text-[10.5px] text-[var(--color-muted-soft)]">
+                                <span className="font-mono text-[11px] text-[var(--color-muted-soft)]">
                                   {formatCweShort(f.cwe)}
                                 </span>
                               </div>
-                              <div className={cn('text-xs font-medium text-[var(--color-ink)] leading-snug', isAppealed && 'line-through')}>
+                              <div className={cn('text-xs font-semibold text-[var(--color-ink)] leading-snug', isAppealed && 'line-through')}>
                                 {f.title}
                               </div>
-                              <div className="font-mono text-[11px] text-[var(--color-muted-soft)] truncate">
-                                {f.file_path}:{f.line_start || 1}
+                              <div className="text-[11px] text-[var(--color-muted-soft)] truncate">
+                                <code>{f.file_path}:{f.line_start || 1}</code>
                               </div>
-                              <div className="flex items-center gap-1.5 pt-0.5">
+                              <div className="flex items-center gap-2 pt-0.5">
                                 <button
                                   type="button"
                                   onClick={() => handleOpenRemediation(f)}
-                                  className="min-h-7 px-2.5 py-1 rounded-md border border-[var(--color-line-strong)] hover:border-[#e94a32] bg-[var(--color-paper)] font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors"
+                                  className="pixel-btn min-h-7 px-2.5 py-1 bg-[var(--color-paper)] font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer"
                                 >
                                   <Wrench className="w-3 h-3" aria-hidden="true" />
                                   <span>Патч</span>
@@ -2015,10 +2018,10 @@ export default function Home() {
                                   type="button"
                                   onClick={() => handleToggleAppeal(f)}
                                   className={cn(
-                                    'min-h-7 px-2.5 py-1 rounded-md border font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer transition-colors',
+                                    'pixel-btn min-h-7 px-2.5 py-1 font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer',
                                     isAppealed
-                                      ? 'border-[#3fbf7f]/45 bg-[#3fbf7f]/15 text-[#3fbf7f]'
-                                      : 'border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                                      ? '!border-[#47d18c] bg-[#47d18c]/20 text-[#5ee8a7]'
+                                      : 'bg-[var(--color-paper)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
                                   )}
                                 >
                                   {isAppealed ? <Undo2 className="w-3 h-3" aria-hidden="true" /> : <Flag className="w-3 h-3" aria-hidden="true" />}
@@ -2030,7 +2033,7 @@ export default function Home() {
                         })}
                       </div>
                     ) : (
-                      <div className="rounded-xl border border-dashed border-[var(--color-line-strong)] p-5 text-center space-y-2">
+                      <div className="border-2 border-dashed border-[var(--color-line-strong)] p-5 text-center space-y-2.5">
                         <p className="font-mono text-xs text-[var(--color-muted-soft)]">
                           Находок пока нет — запусти «Демо-аудит» или проверь свой репозиторий.
                         </p>
@@ -2038,7 +2041,7 @@ export default function Home() {
                           type="button"
                           onClick={handleDemoScan}
                           disabled={isScanning}
-                          className="min-h-8 px-4 py-1.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs cursor-pointer transition-colors"
+                          className="pixel-btn-primary min-h-8 px-4 py-1.5 font-mono text-xs cursor-pointer"
                         >
                           Запустить Демо-аудит →
                         </button>
@@ -2061,7 +2064,7 @@ export default function Home() {
               </div>
 
               {/* Drawer Bottom Privacy Note */}
-              <div className="px-4 py-2 border-t border-[var(--color-line)] font-mono text-[10.5px] text-[var(--color-faint)] flex items-center justify-between gap-2 shrink-0">
+              <div className="px-4 py-2 border-t-2 border-[var(--color-line)] font-mono text-[11px] text-[var(--color-faint)] flex items-center justify-between gap-2 shrink-0">
                 <span className="inline-flex items-center gap-1">
                   <Lock className="w-3 h-3 text-[#e94a32]" aria-hidden="true" />
                   <span>Строгое авторство · локальный контур</span>
@@ -2077,16 +2080,16 @@ export default function Home() {
       <dialog
         ref={fixDialogRef}
         aria-labelledby="remediation-dialog-title"
-        className="m-auto w-[min(92vw,740px)] rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-ink)] p-6 shadow-2xl"
+        className="pixel-card m-auto w-[min(92vw,740px)] bg-[var(--color-paper)] text-[var(--color-ink)] p-6"
       >
-        <div className="flex items-start justify-between gap-4 mb-4 pb-3 border-b border-[var(--color-line)]">
+        <div className="flex items-start justify-between gap-4 mb-4 pb-3 border-b-2 border-[var(--color-line)]">
           <div>
-            <h2 id="remediation-dialog-title" className="font-sans text-xl font-medium">
+            <h2 id="remediation-dialog-title" className="font-sans text-xl font-semibold">
               {selectedFinding?.title || 'Патч безопасности'}
             </h2>
             {selectedFinding && (
               <p className="text-xs font-mono text-[var(--color-muted-soft)] mt-1">
-                {selectedFinding.file_path}:{selectedFinding.line_start || 1} · {formatCweShort(selectedFinding.cwe)}
+                <code>{selectedFinding.file_path}:{selectedFinding.line_start || 1}</code> · {formatCweShort(selectedFinding.cwe)}
               </p>
             )}
           </div>
@@ -2094,7 +2097,7 @@ export default function Home() {
             <button
               type="submit"
               aria-label="Закрыть окно патча"
-              className="min-h-9 min-w-9 p-1.5 rounded-full border border-[var(--color-line)] hover:border-[#e94a32] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer inline-flex items-center justify-center"
+              className="pixel-btn min-h-9 min-w-9 p-1.5 bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer inline-flex items-center justify-center"
             >
               <X className="w-4 h-4" aria-hidden="true" />
             </button>
@@ -2110,7 +2113,7 @@ export default function Home() {
             <div>
               <div className="text-xs font-mono uppercase text-[var(--color-muted-soft)] mb-1">Причина и риск</div>
               <p className="text-[var(--color-ink)] leading-relaxed">{remediation.explanation_ru}</p>
-              <p className="text-[#e94a32] text-xs mt-1">{remediation.impact_analysis}</p>
+              <p className="text-[#ff7b66] text-xs mt-1">{remediation.impact_analysis}</p>
             </div>
             {remediation.remediation_steps.length > 0 && (
               <div>
@@ -2126,34 +2129,34 @@ export default function Home() {
               <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                 <div className="text-xs font-mono uppercase text-[var(--color-muted-soft)]">Безопасный код</div>
                 {remediation.syntax_validated !== false && (
-                  <span className="inline-flex items-center gap-1 font-mono text-[10.5px] px-2 py-0.5 rounded-full bg-[#3fbf7f]/15 text-[#3fbf7f] border border-[#3fbf7f]/35">
+                  <span className="inline-flex items-center gap-1 font-mono text-[11px] px-2 py-0.5 bg-[#47d18c]/20 text-[#5ee8a7] border-2 border-[#47d18c]">
                     <CheckCircle2 className="w-3 h-3" aria-hidden="true" />
                     <span>AST ✓ Синтаксис проверен</span>
                   </span>
                 )}
               </div>
               {remediation.validation_note && (
-                <p className="text-[11px] font-mono text-[var(--color-muted-soft)] mb-1.5">
+                <p className="text-[11.5px] font-mono text-[var(--color-muted-soft)] mb-1.5">
                   {remediation.validation_note}
                 </p>
               )}
-              <pre className="p-3 rounded-lg bg-[#0a0a0a] border border-[#232323] font-mono text-xs overflow-x-auto text-[#3fbf7f]">
+              <pre className="p-3 bg-[#080c16] border-2 border-[#30436b] text-xs overflow-x-auto text-[#5ee8a7]">
                 {remediation.fixed_code}
               </pre>
             </div>
 
             {authorship.canCreatePr && authorship.githubToken && activeTarget.includes('/') && !activeTarget.startsWith('demo/') && !activeTarget.startsWith('upload/') && (
-              <div className="pt-2 border-t border-[var(--color-line)] flex flex-wrap items-center justify-between gap-3">
+              <div className="pt-2 border-t-2 border-[var(--color-line)] flex flex-wrap items-center justify-between gap-3">
                 <button
                   type="button"
                   disabled={creatingPr}
                   onClick={handleCreatePR}
-                  className="min-h-9 px-4 py-1.5 rounded-full bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white font-mono text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  className="pixel-btn-emerald min-h-9 px-4 py-1.5 font-mono text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <GitPullRequest className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>{creatingPr ? 'Создаю PR...' : 'Создать Pull Request'}</span>
                 </button>
-                {prStatus && <span className="font-mono text-xs text-[#3fbf7f] break-all">{prStatus}</span>}
+                {prStatus && <span className="font-mono text-xs text-[#47d18c] break-all">{prStatus}</span>}
               </div>
             )}
           </div>

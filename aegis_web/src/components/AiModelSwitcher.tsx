@@ -179,15 +179,15 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
         onClick={openModal}
         aria-haspopup="dialog"
         aria-label="Настройки AI-модели и режима приватности"
-        className="hidden md:inline-flex items-center gap-1.5 font-mono text-[10.5px] px-2.5 py-1 rounded-full border border-[var(--color-line)] hover:border-[var(--color-line-strong)] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] transition-colors cursor-pointer"
+        className="pixel-btn hidden md:inline-flex items-center gap-1.5 font-mono text-[11px] px-2.5 py-1 bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer"
       >
         <span
-          className={`w-1.5 h-1.5 rounded-full ${
+          className={`w-2 h-2 shrink-0 ${
             isLocal
               ? status?.ollama_reachable === false
-                ? 'bg-amber-400'
-                : 'bg-[#3fbf7f]'
-              : 'bg-sky-400'
+                ? 'bg-[#f0b541]'
+                : 'bg-[#47d18c]'
+              : 'bg-[#56d4b2]'
           }`}
           aria-hidden="true"
         />
@@ -203,12 +203,13 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
           if (e.target === dialogRef.current) closeModal();
         }}
         aria-labelledby={`${baseId}-title`}
-        className="m-auto w-[min(92vw,460px)] rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-ink)] p-0 shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-xs"
+        className="pixel-card m-auto w-[min(92vw,460px)] bg-[var(--color-paper)] text-[var(--color-ink)] p-0"
       >
-        <div className="px-4 py-3 border-b border-[var(--color-line)] flex items-center justify-between gap-2">
+        <div className="pixel-aurora-bar" aria-hidden="true" />
+        <div className="px-4 py-3 border-b-2 border-[var(--color-line)] flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <Cpu className="w-4 h-4 text-[#e94a32] shrink-0" aria-hidden="true" />
-            <h2 id={`${baseId}-title`} className="text-sm font-medium truncate">
+            <h2 id={`${baseId}-title`} className="text-sm font-semibold truncate">
               AI-движок аудита и авто-фикса
             </h2>
           </div>
@@ -216,7 +217,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
             type="button"
             onClick={closeModal}
             aria-label="Закрыть настройки AI-модели"
-            className="w-7 h-7 rounded-lg inline-flex items-center justify-center border border-[var(--color-line)] hover:border-[var(--color-line-strong)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer"
+            className="pixel-btn w-7 h-7 bg-[var(--color-panel)] inline-flex items-center justify-center text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer"
           >
             <X className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
@@ -224,7 +225,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
 
         <form onSubmit={handleSave} className="p-4 space-y-4">
           {/* Mode segmented buttons */}
-          <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)]">
+          <div className="grid grid-cols-2 gap-1.5 p-1 border-2 border-[var(--color-line)] bg-[var(--color-panel)]">
             <button
               type="button"
               onClick={() => {
@@ -232,10 +233,10 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                 setError(null);
               }}
               aria-pressed={mode === 'local'}
-              className={`px-3 py-2 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              className={`px-3 py-2 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
                 mode === 'local'
-                  ? 'bg-[var(--color-ink)] text-[var(--color-canvas)]'
-                  : 'text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                  ? 'bg-[var(--color-ink)] text-[var(--color-canvas)] border-2 border-[var(--color-ink)]'
+                  : 'text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] border-2 border-transparent'
               }`}
             >
               <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
@@ -248,10 +249,10 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                 setError(null);
               }}
               aria-pressed={mode === 'byok'}
-              className={`px-3 py-2 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              className={`px-3 py-2 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
                 mode === 'byok'
-                  ? 'bg-[var(--color-ink)] text-[var(--color-canvas)]'
-                  : 'text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
+                  ? 'bg-[var(--color-ink)] text-[var(--color-canvas)] border-2 border-[var(--color-ink)]'
+                  : 'text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] border-2 border-transparent'
               }`}
             >
               <Cloud className="w-3.5 h-3.5" aria-hidden="true" />
@@ -261,21 +262,21 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
 
           {mode === 'local' ? (
             <div className="space-y-3">
-              <div className="rounded-xl border border-[#3fbf7f]/30 bg-[#3fbf7f]/8 px-3 py-2.5 text-[11.5px] leading-relaxed">
-                <span className="font-medium text-[#3fbf7f]">100% On-Premise:</span> 0 байт исходного
+              <div className="border-2 border-[#47d18c] bg-[#47d18c]/12 px-3 py-2.5 text-[12px] leading-relaxed">
+                <span className="font-semibold text-[#47d18c]">100% On-Premise:</span> 0 байт исходного
                 кода уходит в облако. Используется локальная Ollama для Business-Logic аудита (IDOR/Auth/SSRF),
                 чат-ассистента и LLM-автофикса.
               </div>
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label htmlFor={`${baseId}-local-model`} className="font-mono text-[11px] text-[var(--color-muted-soft)]">
+                  <label htmlFor={`${baseId}-local-model`} className="font-mono text-[11.5px] text-[var(--color-muted-soft)]">
                     Локальная модель Ollama
                   </label>
                   <button
                     type="button"
                     onClick={() => void loadStatus()}
-                    className="font-mono text-[10.5px] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] inline-flex items-center gap-1 cursor-pointer"
+                    className="font-mono text-[11px] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] inline-flex items-center gap-1 cursor-pointer"
                   >
                     <RefreshCw className="w-3 h-3" aria-hidden="true" />
                     <span>Обновить</span>
@@ -285,7 +286,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                   id={`${baseId}-local-model`}
                   value={localModel}
                   onChange={(e) => setLocalModel(e.target.value)}
-                  className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 font-mono text-xs text-[var(--color-ink)]"
+                  className="pixel-input w-full bg-[var(--color-panel)] px-3 py-2 font-mono text-xs text-[var(--color-ink)]"
                 >
                   {installedModels.map((m) => (
                     <option key={m} value={m}>
@@ -293,7 +294,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                     </option>
                   ))}
                 </select>
-                <p className="font-mono text-[10.5px] text-[var(--color-muted-soft)]">
+                <p className="font-mono text-[11px] text-[var(--color-muted-soft)]">
                   Статус Ollama:{' '}
                   {status?.ollama_reachable
                     ? `online (${installedModels.length} моделей)`
@@ -303,8 +304,8 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
             </div>
           ) : (
             <div className="space-y-3">
-              <div className="rounded-xl border border-sky-500/30 bg-sky-500/8 px-3 py-2.5 text-[11.5px] leading-relaxed flex items-start gap-2">
-                <Lock className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" aria-hidden="true" />
+              <div className="border-2 border-[#2da890] bg-[#2da890]/12 px-3 py-2.5 text-[12px] leading-relaxed flex items-start gap-2">
+                <Lock className="w-3.5 h-3.5 text-[#56d4b2] shrink-0 mt-0.5" aria-hidden="true" />
                 <span>
                   Режим <strong>BYOK</strong> подключает Claude / GPT / Gemini / OpenRouter для максимальной
                   глубины поиска бизнес-логики. Ключ хранится <strong>только в RAM сервера</strong> до
@@ -322,9 +323,9 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                       setByokModel(p.defaultModel);
                     }}
                     aria-pressed={byokProvider === p.id}
-                    className={`px-2 py-1.5 rounded-lg border font-mono text-[10.5px] transition-colors cursor-pointer ${
+                    className={`px-2 py-1.5 border-2 font-mono text-[11px] transition-colors cursor-pointer ${
                       byokProvider === p.id
-                        ? 'border-[#e94a32] bg-[#e94a32]/12 text-[var(--color-ink)] font-medium'
+                        ? 'border-[#e94a32] bg-[#e94a32]/20 text-[var(--color-ink)] font-semibold'
                         : 'border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
                     }`}
                   >
@@ -334,7 +335,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
               </div>
 
               <div className="space-y-1">
-                <label htmlFor={`${baseId}-byok-model`} className="font-mono text-[11px] text-[var(--color-muted-soft)]">
+                <label htmlFor={`${baseId}-byok-model`} className="font-mono text-[11.5px] text-[var(--color-muted-soft)]">
                   Модель
                 </label>
                 <input
@@ -344,7 +345,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                   value={byokModel}
                   onChange={(e) => setByokModel(e.target.value)}
                   placeholder={activeByokMeta.defaultModel}
-                  className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 font-mono text-xs text-[var(--color-ink)]"
+                  className="pixel-input w-full bg-[var(--color-panel)] px-3 py-2 font-mono text-xs text-[var(--color-ink)]"
                 />
                 {byokProvider === 'gemini' && status?.gemini_models && status.gemini_models.length > 0 && (
                   <datalist id={`${baseId}-gemini-models`}>
@@ -356,7 +357,7 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
               </div>
 
               <div className="space-y-1">
-                <label htmlFor={`${baseId}-byok-key`} className="font-mono text-[11px] text-[var(--color-muted-soft)]">
+                <label htmlFor={`${baseId}-byok-key`} className="font-mono text-[11.5px] text-[var(--color-muted-soft)]">
                   API-ключ ({activeByokMeta.label})
                 </label>
                 <input
@@ -370,19 +371,19 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                       ? '•••••••• (ключ уже активен в RAM)'
                       : activeByokMeta.hint
                   }
-                  className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 font-mono text-xs text-[var(--color-ink)]"
+                  className="pixel-input w-full bg-[var(--color-panel)] px-3 py-2 font-mono text-xs text-[var(--color-ink)]"
                 />
               </div>
             </div>
           )}
 
           {error && (
-            <p role="alert" className="text-xs text-[#e94a32] font-mono">
+            <p role="alert" className="text-xs text-[#ff7b66] font-mono">
               ⛔ {error}
             </p>
           )}
           {savedNotice && (
-            <p role="status" className="text-xs text-[#3fbf7f] font-mono">
+            <p role="status" className="text-xs text-[#47d18c] font-mono">
               ✓ {savedNotice}
             </p>
           )}
@@ -393,19 +394,19 @@ export function AiModelSwitcher({ onStatusChange }: AiModelSwitcherProps) {
                 type="button"
                 onClick={() => void handleResetLocal()}
                 disabled={saving}
-                className="px-3 py-2 rounded-xl border border-[var(--color-line)] hover:border-[var(--color-line-strong)] font-mono text-[11px] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer"
+                className="pixel-btn px-3 py-2 bg-[var(--color-panel)] font-mono text-[11.5px] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] cursor-pointer"
               >
                 Сбросить на On-Prem
               </button>
             ) : (
-              <span className="font-mono text-[10.5px] text-[var(--color-muted-soft)]">
+              <span className="font-mono text-[11px] text-[var(--color-muted-soft)]">
                 14 сканеров + Backdoor + System Analyst + Auto-Fix
               </span>
             )}
             <button
               type="submit"
               disabled={saving}
-              className="px-4 py-2 rounded-xl bg-[var(--color-ink)] hover:bg-[#e94a32] text-[var(--color-canvas)] hover:text-white disabled:opacity-55 text-xs font-medium transition-colors cursor-pointer"
+              className="pixel-btn-snow px-4 py-2 disabled:opacity-55 text-xs font-semibold cursor-pointer"
             >
               {saving ? 'Применяю…' : 'Применить'}
             </button>
