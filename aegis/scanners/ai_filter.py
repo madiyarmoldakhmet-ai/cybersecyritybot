@@ -3,7 +3,8 @@ import json
 import logging
 from typing import Dict, List
 
-from aegis.core.llm_runtime import chat_completion
+from aegis.core.config import LLMProvider, settings
+from aegis.core.llm_runtime import build_openai_client, chat_completion
 from aegis.scanners.models import ScannerType, VulnerabilityFinding
 
 logger = logging.getLogger("aegis.ai_filter")
@@ -41,6 +42,9 @@ class AIFalsePositiveFilter:
         self.timeout_seconds = timeout_seconds
         self.max_candidates = max_candidates
         self.enabled = True
+        provider = LLMProvider.OLLAMA if settings.air_gapped else settings.llm_provider
+        api_key = None if settings.air_gapped else (settings.openrouter_api_key or settings.gemini_api_key)
+        self.client = build_openai_client(provider, api_key, timeout=float(timeout_seconds))
 
     async def filter_findings(self, findings: List[VulnerabilityFinding]) -> List[VulnerabilityFinding]:
         """Batch-filter ambiguous findings in one fast LLM call with strict timeout."""
