@@ -658,7 +658,7 @@ export function OrcaRigSvg({
   );
 }
 
-/** Crisp lightweight 16x16 pixel-art Orca sprite badge for chat headers & message bubbles. */
+/** Crisp lightweight 16x16 Christmas pixel-art Orca sprite badge wearing a Santa hat. */
 export function OrcaMiniAvatar({
   mood = 'idle',
   className,
@@ -675,31 +675,32 @@ export function OrcaMiniAvatar({
     <span
       aria-hidden="true"
       className={cn(
-        'inline-flex items-center justify-center w-7 h-7 border-2 border-[var(--color-line-strong)] bg-[#0b0e18] shadow-[2px_2px_0_var(--pixel-shadow)] shrink-0 overflow-hidden',
+        'inline-flex items-center justify-center w-7 h-7 border-2 border-[#ffd866] bg-[#081119] shadow-[2px_2px_0_var(--pixel-shadow)] shrink-0 overflow-hidden',
         className
       )}
     >
       <svg viewBox="0 0 16 16" shapeRendering="crispEdges" className="pixel-art w-full h-full">
-        {/* Midnight aurora sky backdrop */}
-        <rect x="0" y="0" width="16" height="16" fill="#0b0e18" />
-        <rect x="0" y="2" width="10" height="2" fill="#1f6e6c" />
-        <rect x="6" y="3" width="10" height="2" fill="#4c3e8f" />
-        <rect x="13" y="1" width="2" height="2" fill="#ffe79e" />
-        {/* Pixel dorsal fin + mood LED */}
-        <rect x="4" y="3" width="2" height="2" fill="#151f38" />
-        <rect x="5" y="4" width="3" height="2" fill="#151f38" />
-        <rect x="4" y="3" width="1" height="2" fill={pal.accent} />
+        {/* Christmas Eve night backdrop */}
+        <rect x="0" y="0" width="16" height="16" fill="#081119" />
+        <rect x="0" y="2" width="9" height="2" fill="#185942" />
+        <rect x="13" y="1" width="2" height="2" fill="#ffd866" />
+        <rect x="2" y="2" width="1" height="1" fill="#f2f8ff" />
+        {/* Tiny Pixel Santa Hat! */}
+        <rect x="6" y="2" width="4" height="2" fill="#e93e32" />
+        <rect x="5" y="4" width="6" height="1" fill="#ffffff" />
+        <rect x="4" y="2" width="2" height="2" fill="#ffffff" />
         {/* Pixel Orca head & obsidian body */}
-        <rect x="2" y="6" width="12" height="7" fill="#151f38" />
-        <rect x="3" y="5" width="10" height="2" fill="#23345c" />
-        <rect x="13" y="8" width="2" height="4" fill="#151f38" />
+        <rect x="2" y="6" width="12" height="7" fill="#132133" />
+        <rect x="3" y="5" width="10" height="2" fill="#1d344d" />
+        <rect x="13" y="8" width="2" height="4" fill="#132133" />
         {/* White belly jaw */}
-        <rect x="4" y="12" width="10" height="2" fill="#eef6ff" />
-        <rect x="11" y="11" width="3" height="2" fill="#eef6ff" />
+        <rect x="4" y="12" width="10" height="2" fill="#f2f8ff" />
+        <rect x="11" y="11" width="3" height="2" fill="#f2f8ff" />
         {/* White post-ocular patch */}
-        <rect x="4" y="7" width="3" height="2" fill="#eef6ff" />
-        {/* Cozy red winter scarf accent */}
-        <rect x="2" y="10" width="2" height="3" fill="#e94a32" />
+        <rect x="4" y="7" width="3" height="2" fill="#f2f8ff" />
+        {/* Red-and-gold Christmas scarf */}
+        <rect x="2" y="10" width="2" height="3" fill="#e93e32" />
+        <rect x="2" y="11" width="2" height="1" fill="#ffd866" />
         {/* Expressive pixel eye */}
         {happy ? (
           <>
@@ -709,10 +710,10 @@ export function OrcaMiniAvatar({
           </>
         ) : (
           <>
-            <rect x="9" y="8" width="3" height="3" fill="#05070e" />
+            <rect x="9" y="8" width="3" height="3" fill="#04080d" />
             <rect x="10" y="9" width="2" height="2" fill={pal.irisTop} />
             <rect x="10" y="9" width="1" height="1" fill="#ffffff" />
-            {angry && <rect x="9" y="7" width="3" height="1" fill="#ff6b57" />}
+            {angry && <rect x="9" y="7" width="3" height="1" fill="#ff6e61" />}
           </>
         )}
         {/* Pixel cyber-visor when scanning */}

@@ -5,10 +5,10 @@
   --color-paper: var(--bg-paper);
   --color-panel: var(--bg-panel);
   --color-raised: var(--bg-raised);
-  --color-primary: #e94a32;
-  --color-primary-active: #c83822;
+  --color-primary: #e93e32;
+  --color-primary-active: #c42c21;
   --color-ok: #47d18c;
-  --color-warn: #f0b541;
+  --color-warn: #ffd866;
   --color-aurora: var(--aurora-teal);
   --color-violet-glow: var(--aurora-violet);
   --color-moon: var(--moon-gold);
@@ -29,47 +29,47 @@
 :root {
   color-scheme: light dark;
 
-  /* Raw Snowy Arctic Daylight Pixel tokens (light) */
-  --bg-canvas-light: #dcecff;
-  --bg-paper-light: #f4f9ff;
-  --bg-panel-light: #e5f0fc;
-  --bg-raised-light: #d2e3f8;
-  --fg-ink-light: #10172a;
-  --fg-body-light: #203052;
-  --fg-muted-light: #3f5580;
-  --fg-faint-light: #4f6694;
-  --border-line-light: #7c97c2;
-  --border-line-strong-light: #314670;
-  --pixel-shadow-light: #223254;
-  --star-dim-light: rgba(49, 70, 112, 0.14);
-  --star-bright-light: rgba(45, 168, 144, 0.28);
-  --scrollbar-thumb-light: #445e8e;
-  --scrollbar-track-light: #d2e3f8;
-  --accent-ui-light: #c83822;
-  --aurora-teal-light: #1e8270;
-  --aurora-violet-light: #53429c;
-  --moon-gold-light: #9e6c11;
+  /* Raw Snowy Christmas Morning Pixel tokens (light) */
+  --bg-canvas-light: #e4f2ff;
+  --bg-paper-light: #ffffff;
+  --bg-panel-light: #edf7f2;
+  --bg-raised-light: #fceee9;
+  --fg-ink-light: #0d1f1a;
+  --fg-body-light: #1e3b31;
+  --fg-muted-light: #355c4e;
+  --fg-faint-light: #4a6f61;
+  --border-line-light: #629682;
+  --border-line-strong-light: #215240;
+  --pixel-shadow-light: #183d2f;
+  --star-dim-light: rgba(33, 82, 64, 0.14);
+  --star-bright-light: rgba(233, 62, 50, 0.22);
+  --scrollbar-thumb-light: #2e6e56;
+  --scrollbar-track-light: #d7ebe2;
+  --accent-ui-light: #c42c21;
+  --aurora-teal-light: #1f7d58;
+  --aurora-violet-light: #a82b3a;
+  --moon-gold-light: #9e6a08;
 
-  /* Raw Midnight Aurora Winter Pixel tokens (dark — matched to reference scene) */
-  --bg-canvas-dark: #0b0e18;
-  --bg-paper-dark: #121829;
-  --bg-panel-dark: #19223a;
-  --bg-raised-dark: #233052;
-  --fg-ink-dark: #eef6ff;
-  --fg-body-dark: #c9e4ff;
-  --fg-muted-dark: #93add1;
-  --fg-faint-dark: #7893ba;
-  --border-line-dark: #324670;
-  --border-line-strong-dark: #5270ab;
-  --pixel-shadow-dark: #05070e;
-  --star-dim-dark: rgba(201, 228, 255, 0.13);
-  --star-bright-dark: rgba(86, 212, 178, 0.22);
-  --scrollbar-thumb-dark: #5270ab;
-  --scrollbar-track-dark: #121829;
-  --accent-ui-dark: #e94a32;
-  --aurora-teal-dark: #56d4b2;
-  --aurora-violet-dark: #8e7ef0;
-  --moon-gold-dark: #ffe79e;
+  /* Raw 16-Bit Christmas Eve Night Pixel tokens (dark — pine, crimson, starlight gold & snow) */
+  --bg-canvas-dark: #081119;
+  --bg-paper-dark: #0f1c24;
+  --bg-panel-dark: #152730;
+  --bg-raised-dark: #281924;
+  --fg-ink-dark: #f2f8ff;
+  --fg-body-dark: #d1e9ff;
+  --fg-muted-dark: #94b8b0;
+  --fg-faint-dark: #7ba09a;
+  --border-line-dark: #255044;
+  --border-line-strong-dark: #3e806a;
+  --pixel-shadow-dark: #04080d;
+  --star-dim-dark: rgba(242, 248, 255, 0.14);
+  --star-bright-dark: rgba(255, 216, 102, 0.28);
+  --scrollbar-thumb-dark: #3e806a;
+  --scrollbar-track-dark: #0f1c24;
+  --accent-ui-dark: #e93e32;
+  --aurora-teal-dark: #56e0a8;
+  --aurora-violet-dark: #ff6e61;
+  --moon-gold-dark: #ffd866;
 
   /* Default light tokens (fallback when light-dark() is unsupported) */
   --bg-canvas: var(--bg-canvas-light);
@@ -222,42 +222,34 @@ pre {
   image-rendering: crisp-edges;
 }
 
-/* 16-bit Pixel Aurora Top Ribbon (zero raster assets, echoes winter aurora sky) */
+/* 16-Bit Christmas Candy-Cane & Holly Top Ribbon */
 .pixel-aurora-bar {
-  height: 4px;
+  height: 5px;
   width: 100%;
   flex-shrink: 0;
   background-image: repeating-linear-gradient(
     90deg,
-    #1f6e6c 0px,
-    #1f6e6c 24px,
-    #2da890 24px,
-    #2da890 48px,
-    #56d4b2 48px,
-    #56d4b2 64px,
-    #5e4ca8 64px,
-    #5e4ca8 96px,
-    #3d3572 96px,
-    #3d3572 120px,
-    #2da890 120px,
-    #2da890 144px,
-    #ffe79e 144px,
-    #ffe79e 152px,
-    #e94a32 152px,
-    #e94a32 164px
+    #e93e32 0px,
+    #e93e32 16px,
+    #f2f8ff 16px,
+    #f2f8ff 32px,
+    #2d8a5b 32px,
+    #2d8a5b 48px,
+    #ffd866 48px,
+    #ffd866 60px
   );
 }
 
-/* 16-bit Pixel Midnight Sky & Stepped Starfield Backdrop for the Chat Stream */
+/* 16-Bit Christmas Eve Starry Pine Sky Backdrop for the Chat Stream */
 .pixel-sky-bg {
   background-color: var(--bg-canvas);
   background-image:
     linear-gradient(
       180deg,
-      rgba(45, 168, 144, 0.1) 0px,
-      rgba(45, 168, 144, 0.06) 28px,
-      rgba(94, 76, 168, 0.07) 56px,
-      transparent 112px
+      rgba(45, 138, 91, 0.14) 0px,
+      rgba(233, 62, 50, 0.06) 44px,
+      rgba(255, 216, 102, 0.04) 92px,
+      transparent 160px
     ),
     radial-gradient(var(--star-bright) 1px, transparent 0),
     radial-gradient(var(--star-dim) 1px, transparent 0);
@@ -265,17 +257,28 @@ pre {
   background-position: 0 0, 12px 10px, 0 0;
 }
 
-/* Crisp 16-Bit Pixel Component Primitives (0px corners, 2px borders, stepped pixel drop-shadows) */
+/* Decorative accessible snowflake badge prefix (screen readers skip decorative glyph) */
+.xmas-frost-tag::before {
+  content: "❄ ";
+  content: "❄ " / "";
+  color: #6ce4ff;
+}
+
+/* Crisp 16-Bit Christmas Pixel Component Primitives (0px corners, 2px pine borders, frost cap & pixel shadows) */
 .pixel-card {
   border-radius: 0;
   border: 2px solid var(--border-line-strong);
-  box-shadow: 4px 4px 0 var(--pixel-shadow);
+  box-shadow: inset 0 2px 0 rgba(242, 248, 255, 0.14), 4px 4px 0 var(--pixel-shadow);
 }
 
 .pixel-panel {
   border-radius: 0;
   border: 2px solid var(--border-line);
   box-shadow: 3px 3px 0 var(--pixel-shadow);
+}
+
+.pixel-snow-cap {
+  border-top: 3px solid #eef7ff;
 }
 
 .pixel-btn {
@@ -286,7 +289,7 @@ pre {
 }
 
 .pixel-btn:hover:not(:disabled) {
-  border-color: var(--aurora-teal);
+  border-color: var(--moon-gold);
 }
 
 .pixel-btn:active:not(:disabled) {
@@ -296,15 +299,15 @@ pre {
 
 .pixel-btn-primary {
   border-radius: 0;
-  border: 2px solid #ff8c78;
-  background-color: #e94a32;
+  border: 2px solid #ffd866;
+  background-color: #e93e32;
   color: #ffffff;
   box-shadow: 3px 3px 0 var(--pixel-shadow);
   transition: background-color 110ms ease, transform 75ms steps(2);
 }
 
 .pixel-btn-primary:hover:not(:disabled) {
-  background-color: #ff5b42;
+  background-color: #ff5447;
 }
 
 .pixel-btn-primary:active:not(:disabled) {
@@ -314,15 +317,15 @@ pre {
 
 .pixel-btn-emerald {
   border-radius: 0;
-  border: 2px solid #96f2c2;
-  background-color: #3fbf7f;
-  color: #07140d;
+  border: 2px solid #a8f7cb;
+  background-color: #2f9e66;
+  color: #ffffff;
   box-shadow: 3px 3px 0 var(--pixel-shadow);
   transition: background-color 110ms ease, transform 75ms steps(2);
 }
 
 .pixel-btn-emerald:hover:not(:disabled) {
-  background-color: #52d996;
+  background-color: #3cb879;
 }
 
 .pixel-btn-emerald:active:not(:disabled) {
@@ -332,16 +335,16 @@ pre {
 
 .pixel-btn-snow {
   border-radius: 0;
-  border: 2px solid var(--fg-ink);
-  background-color: var(--fg-ink);
-  color: var(--bg-canvas);
+  border: 2px solid #ffffff;
+  background-color: #f2f8ff;
+  color: #0d1f1a;
   box-shadow: 3px 3px 0 var(--pixel-shadow);
   transition: background-color 110ms ease, border-color 110ms ease, color 110ms ease, transform 75ms steps(2);
 }
 
 .pixel-btn-snow:hover:not(:disabled) {
-  background-color: #e94a32;
-  border-color: #ff8c78;
+  background-color: #e93e32;
+  border-color: #ffd866;
   color: #ffffff;
 }
 
@@ -353,7 +356,7 @@ pre {
 .pixel-input {
   border-radius: 0;
   border: 2px solid var(--border-line-strong);
-  box-shadow: inset 2px 2px 0 rgba(5, 7, 14, 0.35);
+  box-shadow: inset 2px 2px 0 rgba(4, 8, 13, 0.35);
 }
 
 .pixel-chip {
@@ -361,7 +364,7 @@ pre {
   border: 2px solid var(--border-line);
 }
 
-/* Forced Colors Mode accessibility fallback (never rely solely on box-shadow or background gradients) */
+/* Forced Colors Mode accessibility fallback */
 @media (forced-colors: active) {
   .pixel-card,
   .pixel-panel,
@@ -393,7 +396,7 @@ pre {
 }
 
 :where(a:any-link, button, input, textarea, select, summary, [tabindex="0"]):focus-visible {
-  outline: 2px solid #ffe79e;
+  outline: 2px solid #ffd866;
   outline-offset: 2px;
 }
 
@@ -473,7 +476,7 @@ dialog:modal {
 }
 
 dialog::backdrop {
-  background: rgba(6, 9, 18, 0.82);
+  background: rgba(5, 11, 16, 0.84);
   overscroll-behavior: contain;
 }
 
@@ -535,7 +538,7 @@ dialog::backdrop {
   }
 }
 
-/* Retro Stepped Pixel Animations (compositor-only, <=2Hz, opt-in under prefers-reduced-motion: no-preference) */
+/* Retro Stepped Christmas Pixel Animations (compositor-only, <=2Hz, opt-in under prefers-reduced-motion: no-preference) */
 @keyframes orca-eq-bar {
   0%, 100% {
     transform: scaleY(0.28);
@@ -550,7 +553,28 @@ dialog::backdrop {
     opacity: 1;
   }
   50%, 100% {
-    opacity: 0.2;
+    opacity: 0.25;
+  }
+}
+
+@keyframes xmas-twinkle {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes xmas-snow-fall {
+  0% {
+    transform: translate3d(0, -10px, 0);
+  }
+  50% {
+    transform: translate3d(10px, 38vh, 0);
+  }
+  100% {
+    transform: translate3d(-6px, 82vh, 0);
   }
 }
 
@@ -564,6 +588,27 @@ dialog::backdrop {
 .pixel-blink {
   @media (prefers-reduced-motion: no-preference) {
     animation: pixel-cursor-blink 1.05s steps(2) infinite;
+  }
+}
+
+.xmas-bulb-a {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: xmas-twinkle 2.2s steps(2) infinite;
+  }
+}
+
+.xmas-bulb-b {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: xmas-twinkle 2.2s steps(2) 1.1s infinite;
+  }
+}
+
+.xmas-snow-flake {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: xmas-snow-fall 12s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    display: none;
   }
 }
 

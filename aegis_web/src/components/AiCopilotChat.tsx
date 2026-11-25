@@ -26,6 +26,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { OrcaMiniAvatar, OrcaMood } from '@/components/OrcaRigSvg';
+import { PixelSnowfallLayer, PixelWinterHorizon } from '@/components/ChristmasDecor';
 import { cn } from '@/lib/utils';
 
 export type ChatVerifyCard = {
@@ -132,6 +133,7 @@ interface AiCopilotChatProps {
   pendingVerifyChecks?: number;
   isCheckingVerify?: boolean;
   companionMood?: OrcaMood;
+  motionPaused?: boolean;
   isHealing?: boolean;
   isTyping: boolean;
   isScanning: boolean;
@@ -815,6 +817,7 @@ export function AiCopilotChat({
   pendingVerifyChecks = 0,
   isCheckingVerify = false,
   companionMood = 'idle',
+  motionPaused = false,
   isHealing,
   isTyping,
   isScanning,
@@ -910,110 +913,114 @@ export function AiCopilotChat({
         </div>
       </div>
 
-      {/* Pixel Starry Sky Message Stream */}
-      <div
-        ref={logContainerRef}
-        role="log"
-        aria-live="polite"
-        aria-relevant="additions"
-        aria-label="Переписка с Aegis Orca"
-        className="cg-scroll flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4 space-y-4 pixel-sky-bg"
-      >
-        {messages.map((msg) => {
-          const isUser = msg.role === 'user';
-          const isStreaming = msg.id === 'streaming' || msg.id === 'scan-status';
-          const avatarMood: OrcaMood = msg.commitCard
-            ? msg.commitCard.committed
+      {/* Pixel Christmas Eve Starry Sky + Gentle Snowfall Message Stream */}
+      <div className="relative flex-1 min-h-0 flex flex-col pixel-sky-bg overflow-hidden">
+        <PixelSnowfallLayer paused={motionPaused} />
+        <div
+          ref={logContainerRef}
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-label="Переписка с Aegis Orca"
+          className="cg-scroll relative z-10 flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pt-5 pb-4 flex flex-col gap-4"
+        >
+          {messages.map((msg) => {
+            const isUser = msg.role === 'user';
+            const isStreaming = msg.id === 'streaming' || msg.id === 'scan-status';
+            const avatarMood: OrcaMood = msg.commitCard
+              ? msg.commitCard.committed
+                ? 'happy'
+                : 'idle'
+              : msg.verifyCard
+              ? msg.verifyCard.verified
+                ? 'happy'
+                : 'blocked'
+              : msg.content.startsWith('⛔')
+              ? 'alert'
+              : msg.auditCard && msg.auditCard.critical === 0 && msg.auditCard.high === 0
               ? 'happy'
-              : 'idle'
-            : msg.verifyCard
-            ? msg.verifyCard.verified
-              ? 'happy'
-              : 'blocked'
-            : msg.content.startsWith('⛔')
-            ? 'alert'
-            : msg.auditCard && msg.auditCard.critical === 0 && msg.auditCard.high === 0
-            ? 'happy'
-            : msg.auditCard
-            ? 'alert'
-            : isStreaming
-            ? 'scanning'
-            : 'idle';
+              : msg.auditCard
+              ? 'alert'
+              : isStreaming
+              ? 'scanning'
+              : 'idle';
 
-          const isPollingThisCard = Boolean(
-            msg.verifyCard &&
-              !msg.verifyCard.verified &&
-              pendingVerifyRepo &&
-              pendingVerifyRepo.toLowerCase() === msg.verifyCard.repoName.toLowerCase()
-          );
+            const isPollingThisCard = Boolean(
+              msg.verifyCard &&
+                !msg.verifyCard.verified &&
+                pendingVerifyRepo &&
+                pendingVerifyRepo.toLowerCase() === msg.verifyCard.repoName.toLowerCase()
+            );
 
-          return (
-            <motion.div
-              key={msg.id}
-              initial={prefersReducedMotion ? false : { opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.16, ease: 'easeOut' }}
-              className={cn('flex items-end gap-2.5', isUser ? 'justify-end' : 'justify-start')}
-            >
-              {!isUser && <OrcaMiniAvatar mood={avatarMood} className="mb-0.5" />}
-              <div
-                className={cn(
-                  'max-w-[88%] sm:max-w-[78%] px-4 py-3 flex flex-col gap-1.5 border-2 shadow-[4px_4px_0_var(--pixel-shadow)]',
-                  isUser
-                    ? 'bg-[var(--color-raised)] border-[#5e4ca8] text-[var(--color-ink)]'
-                    : 'bg-[var(--color-paper)] border-[var(--color-line-strong)] text-[var(--color-body-text)]'
-                )}
+            return (
+              <motion.div
+                key={msg.id}
+                initial={prefersReducedMotion ? false : { opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.16, ease: 'easeOut' }}
+                className={cn('flex items-end gap-2.5', isUser ? 'justify-end' : 'justify-start')}
               >
-                {msg.content && <FormattedBubbleContent content={msg.content} />}
-                {msg.verifyCard && (
-                  <InlineVerifyCard
-                    card={msg.verifyCard}
-                    isPolling={isPollingThisCard}
-                    checks={isPollingThisCard ? pendingVerifyChecks : 0}
-                    isCheckingNow={isPollingThisCard && isCheckingVerify}
-                    onCheckNow={
-                      onCheckVerifyNow
-                        ? () => onCheckVerifyNow(msg.verifyCard!.repoName, msg.verifyCard!.challengeCode)
-                        : undefined
-                    }
-                    onOpenAuthorshipDrawer={onOpenAuthorshipDrawer}
-                  />
-                )}
-                {msg.commitCard && (
-                  <InlineCommitCard
-                    card={msg.commitCard}
-                    messageId={msg.id}
-                    isHealing={isHealing}
-                    onCommitWithToken={onAutoFixRepo}
-                  />
-                )}
-                {msg.auditCard && (
-                  <TelegramAuditCard
-                    card={msg.auditCard}
-                    onTriggerSelfHeal={onTriggerSelfHeal}
-                    onAutoFixRepo={onAutoFixRepo}
-                    onOpenFindingsDrawer={onOpenFindingsDrawer}
-                    isHealing={isHealing}
-                  />
-                )}
+                {!isUser && <OrcaMiniAvatar mood={avatarMood} className="mb-0.5" />}
                 <div
                   className={cn(
-                    'font-mono text-[11px] tabular-nums flex items-center gap-1.5 text-[var(--color-faint)]',
-                    isUser ? 'justify-end' : 'justify-start'
+                    'max-w-[88%] sm:max-w-[78%] px-4 py-3 flex flex-col gap-1.5 border-2 shadow-[4px_4px_0_var(--pixel-shadow)]',
+                    isUser
+                      ? 'bg-[var(--color-raised)] border-[#e93e32] text-[var(--color-ink)]'
+                      : 'bg-[var(--color-paper)] border-[var(--color-line-strong)] pixel-snow-cap text-[var(--color-body-text)]'
                   )}
                 >
-                  <span>{isUser ? 'you' : 'orca'} · {msg.timestamp}</span>
-                  {isStreaming && (
-                    <span
-                      className="pixel-blink inline-block w-2 h-3 bg-[#e94a32]"
-                      aria-label="печатает"
+                  {msg.content && <FormattedBubbleContent content={msg.content} />}
+                  {msg.verifyCard && (
+                    <InlineVerifyCard
+                      card={msg.verifyCard}
+                      isPolling={isPollingThisCard}
+                      checks={isPollingThisCard ? pendingVerifyChecks : 0}
+                      isCheckingNow={isPollingThisCard && isCheckingVerify}
+                      onCheckNow={
+                        onCheckVerifyNow
+                          ? () => onCheckVerifyNow(msg.verifyCard!.repoName, msg.verifyCard!.challengeCode)
+                          : undefined
+                      }
+                      onOpenAuthorshipDrawer={onOpenAuthorshipDrawer}
                     />
                   )}
+                  {msg.commitCard && (
+                    <InlineCommitCard
+                      card={msg.commitCard}
+                      messageId={msg.id}
+                      isHealing={isHealing}
+                      onCommitWithToken={onAutoFixRepo}
+                    />
+                  )}
+                  {msg.auditCard && (
+                    <TelegramAuditCard
+                      card={msg.auditCard}
+                      onTriggerSelfHeal={onTriggerSelfHeal}
+                      onAutoFixRepo={onAutoFixRepo}
+                      onOpenFindingsDrawer={onOpenFindingsDrawer}
+                      isHealing={isHealing}
+                    />
+                  )}
+                  <div
+                    className={cn(
+                      'font-mono text-[11px] tabular-nums flex items-center gap-1.5 text-[var(--color-faint)]',
+                      isUser ? 'justify-end' : 'justify-start'
+                    )}
+                  >
+                    <span>{isUser ? 'you' : 'orca'} · {msg.timestamp}</span>
+                    {isStreaming && (
+                      <span
+                        className="pixel-blink inline-block w-2 h-3 bg-[#e93e32]"
+                        aria-label="печатает"
+                      />
+                    )}
+                  </div>
                 </div>
-              </div>
-            </motion.div>
-          );
-        })}
+              </motion.div>
+            );
+          })}
+          <PixelWinterHorizon />
+        </div>
       </div>
 
       {/* Crisp Pixel Prompt Chips */}

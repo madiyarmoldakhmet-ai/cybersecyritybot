@@ -34,6 +34,8 @@ interface OrcaCompanionProps {
   reportsCount: number;
   authorshipVerified: boolean;
   canSelfHeal: boolean;
+  motionPaused: boolean;
+  onToggleMotionPaused: () => void;
   onDemoScan: () => void;
   onTriggerSelfHeal: () => void;
   onUploadZipClick: () => void;
@@ -81,8 +83,8 @@ const MOOD_CONFIG: Record<
 };
 
 const POKE_LINES = [
-  'Привет! Пинг сонаром — ни один утёкший ИИН или секретный ключ не проплывёт мимо.',
-  'Кинь ссылку на свой GitHub — я сама выдам кнопку подтверждения, проверю её и сразу запущу аудит!',
+  'С наступающими праздниками! Пинг сонаром — ни один утёкший ИИН или секретный ключ не проплывёт мимо ёлки.',
+  'Кинь ссылку на свой GitHub — я сама выдам кнопку подтверждения, проверю её и подарю полный отчёт!',
   'Жми «Демо-аудит» — за 5 секунд поймаю 17 багов и починю их кнопкой Self-Heal!',
   'Работаю 100% локально on-prem: ноль байт твоего кода уходит в облако.',
   'Нажми «Голос» наверху — я буду озвучивать всё голосом на русском и шевелить ртом в такт!',
@@ -119,13 +121,14 @@ export function OrcaCompanion({
   reportsCount,
   authorshipVerified,
   canSelfHeal,
+  motionPaused,
+  onToggleMotionPaused,
   onDemoScan,
   onTriggerSelfHeal,
   onUploadZipClick,
   onOpenDrawer,
 }: OrcaCompanionProps) {
   const prefersReducedMotion = useReducedMotion();
-  const [motionPaused, setMotionPaused] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [ttsSpeaking, setTtsSpeaking] = useState(false);
   const [pokeState, setPokeState] = useState<{ index: number; forSpeech: string } | null>(null);
@@ -359,8 +362,8 @@ export function OrcaCompanion({
 
           <button
             type="button"
-            onClick={() => setMotionPaused((p) => !p)}
-            title={motionPaused ? 'Включить анимацию косатки' : 'Поставить анимацию на паузу'}
+            onClick={onToggleMotionPaused}
+            title={motionPaused ? 'Включить анимацию снега, гирлянды и косатки' : 'Поставить анимацию на паузу'}
             className="pixel-btn min-h-7 px-2 py-1 bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)] font-mono text-[11px] inline-flex items-center gap-1 cursor-pointer"
           >
             {motionPaused ? (
@@ -378,15 +381,15 @@ export function OrcaCompanion({
         </div>
       </div>
 
-      {/* Live 16-Bit Pixel-Art Aurora & Orca Stage (Ultra-Lightweight 2D Canvas) */}
+      {/* Live 16-Bit Pixel-Art Christmas & Orca Stage (Ultra-Lightweight 2D Canvas) */}
       <div className="flex flex-row lg:flex-col items-center gap-3.5 my-auto">
         <button
           ref={stageRef}
           type="button"
           onClick={handlePoke}
-          aria-label="Кликнуть по пиксельной косатке Aegis Orca, чтобы она заговорила"
+          aria-label="Кликнуть по рождественской пиксельной косатке Aegis Orca, чтобы она заговорила"
           className={cn(
-            'group relative w-28 h-28 sm:w-36 sm:h-36 lg:w-full lg:h-[246px] shrink-0 overflow-hidden border-2 bg-[#0b0e18] shadow-[4px_4px_0_var(--pixel-shadow)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffe79e] transition-colors',
+            'group relative w-28 h-28 sm:w-36 sm:h-36 lg:w-full lg:h-[246px] shrink-0 overflow-hidden border-2 pixel-snow-cap bg-[#081119] shadow-[4px_4px_0_var(--pixel-shadow)] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ffd866] transition-colors',
             cfg.ringColor
           )}
         >
@@ -403,17 +406,17 @@ export function OrcaCompanion({
           </div>
 
           {/* Crisp 16-bit Pixel Frame Nameplate + Talking Equalizer Bars */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 px-2.5 py-1.5 bg-[#0b0e18]/90 border-t-2 border-[#2a3b61] flex items-center justify-between gap-2 z-20">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 px-2.5 py-1.5 bg-[#081119]/92 border-t-2 border-[#255044] flex items-center justify-between gap-2 z-20">
             <div className="flex items-center gap-2">
-              <span className="font-pixel text-[9px] text-[#eef6ff] tracking-wide">
+              <span className="font-pixel text-[9px] text-[#ffd866] tracking-wide">
                 aegis.orca
               </span>
               {isTalking && (
                 <span className="inline-flex items-end gap-[2px] h-3" aria-label="говорит">
-                  <span className="orca-eq-bar w-[3px] h-full bg-[#56d4b2]" style={{ animationDelay: '0ms' }} />
-                  <span className="orca-eq-bar w-[3px] h-full bg-[#ffe79e]" style={{ animationDelay: '120ms' }} />
-                  <span className="orca-eq-bar w-[3px] h-full bg-[#e94a32]" style={{ animationDelay: '220ms' }} />
-                  <span className="orca-eq-bar w-[3px] h-full bg-[#56d4b2]" style={{ animationDelay: '70ms' }} />
+                  <span className="orca-eq-bar w-[3px] h-full bg-[#47d18c]" style={{ animationDelay: '0ms' }} />
+                  <span className="orca-eq-bar w-[3px] h-full bg-[#ffd866]" style={{ animationDelay: '120ms' }} />
+                  <span className="orca-eq-bar w-[3px] h-full bg-[#e93e32]" style={{ animationDelay: '220ms' }} />
+                  <span className="orca-eq-bar w-[3px] h-full bg-[#6ce4ff]" style={{ animationDelay: '70ms' }} />
                 </span>
               )}
             </div>
@@ -423,8 +426,8 @@ export function OrcaCompanion({
                 className={cn(
                   'hidden sm:inline-block font-mono text-[11px] font-semibold tabular-nums px-1.5 py-0.5 border',
                   securityScore >= 70
-                    ? 'bg-[#3fbf7f]/25 text-[#5ee8a7] border-[#47d18c]'
-                    : 'bg-[#e94a32]/25 text-[#ff8573] border-[#e94a32]'
+                    ? 'bg-[#2f9e66]/25 text-[#63f0aa] border-[#47d18c]'
+                    : 'bg-[#e93e32]/25 text-[#ff877a] border-[#e93e32]'
                 )}
               >
                 {securityScore}/100 {grade ?? ''}
@@ -433,16 +436,15 @@ export function OrcaCompanion({
           </div>
         </button>
 
-        {/* Live Talking RPG Pixel Dialogue Box (Typewriter + Instant Speak Replay) */}
+        {/* Live Talking RPG Pixel Christmas Dialogue Box */}
         <div className="flex-1 lg:w-full min-w-0 space-y-2.5">
-          <div className="pixel-card relative bg-[var(--color-panel)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--color-body-text)]">
+          <div className="pixel-card pixel-snow-cap relative bg-[var(--color-panel)] px-3.5 py-2.5 text-[13px] leading-relaxed text-[var(--color-body-text)]">
             <div className="flex items-center justify-between gap-2 mb-1 font-mono text-[11px] uppercase tracking-wider text-[var(--color-muted-soft)] whitespace-nowrap">
-              <span className="inline-flex items-center gap-1 min-w-0 truncate">
-                <span className="text-[var(--color-aurora)]">▸</span>
+              <span className="xmas-frost-tag inline-flex items-center gap-1 min-w-0 truncate">
                 <span className="hidden sm:inline">Aegis</span>
                 <span>Orca</span>
                 {isTalking && (
-                  <span className="text-[var(--color-aurora)] normal-case truncate">· говорит…</span>
+                  <span className="text-[#ffd866] normal-case truncate">· говорит…</span>
                 )}
               </span>
               <div className="flex items-center gap-2 shrink-0">

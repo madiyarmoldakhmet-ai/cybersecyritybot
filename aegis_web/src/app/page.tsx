@@ -32,6 +32,7 @@ import { AiModelSwitcher } from '@/components/AiModelSwitcher';
 import { AuthorshipPanel, AuthorshipState, PendingVerifyChallenge } from '@/components/AuthorshipPanel';
 import { CommitsReportsPanel, RepoCommit, ReportsFeedData } from '@/components/CommitsReportsPanel';
 import { CompanionMood, OrcaCompanion } from '@/components/OrcaCompanion';
+import { ChristmasLightsGarland, ChristmasTreeBadge } from '@/components/ChristmasDecor';
 import {
   FinancialRisk,
   GhostSecret,
@@ -117,7 +118,7 @@ const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
   id: 'welcome-1',
   role: 'assistant',
   content:
-    'Привет! Я **Aegis Orca**, твоя локальная говорящая косатка-страж (0 байт кода уходит в облако).\n' +
+    'С наступающими праздниками! 🎄 Я **Aegis Orca**, твоя локальная говорящая косатка-страж (0 байт кода уходит в облако).\n' +
     'Просто вставь ссылку на свой GitHub — я выдам кнопку подтверждения в 1 клик, сама всё проверю и сразу запущу аудит! Или жми **«Демо-аудит»** / перетащи сюда `.zip`.',
   timestamp: 'Сегодня',
 };
@@ -220,6 +221,7 @@ function buildAuditChatCard(data: {
 
 export default function Home() {
   const prefersReducedMotion = useReducedMotion();
+  const [motionPaused, setMotionPaused] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('reports');
   const [messages, setMessages] = useState<ChatMessage[]>([INITIAL_ASSISTANT_MESSAGE]);
@@ -1670,21 +1672,19 @@ export default function Home() {
         }}
       />
 
-      {/* 4px Stepped Pixel Aurora Ribbon across the very top */}
+      {/* 5px Stepped 16-Bit Candy-Cane & Holly Christmas Ribbon */}
       <div className="pixel-aurora-bar" aria-hidden="true" />
 
-      {/* Single Compact 54px Pixel App Top Bar */}
-      <header className="h-[54px] shrink-0 border-b-2 border-[var(--color-line)] bg-[var(--color-paper)] px-4 sm:px-5 flex items-center justify-between gap-3 z-20">
+      {/* Single Compact 54px Christmas Pixel App Top Bar */}
+      <header className="h-[54px] shrink-0 border-b-2 border-[var(--color-line)] bg-[var(--color-paper)] px-4 sm:px-5 flex items-center justify-between gap-3 z-30">
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-center gap-2.5 shrink-0">
-            <span className="grid grid-cols-2 gap-[2px] w-4 h-4 shrink-0 border border-[var(--color-line-strong)] p-[1px] bg-[#0b0e18]" aria-hidden="true">
-              <span className="bg-[#e94a32]" />
-              <span className="bg-[#56d4b2]" />
-              <span className="bg-[#ffe79e]" />
-              <span className="bg-[#5e4ca8]" />
-            </span>
+            <ChristmasTreeBadge />
             <span className="font-pixel text-[11px] sm:text-[12px] tracking-tight leading-none">
-              commit<span className="text-[#e94a32]">.</span>guardian
+              commit<span className="text-[#e93e32]">.</span>guardian
+            </span>
+            <span className="hidden xl:inline-block font-pixel text-[8px] px-1.5 py-0.5 bg-[#e93e32] text-[#ffd866] border border-[#ffd866] shadow-[2px_2px_0_var(--pixel-shadow)]">
+              XMAS
             </span>
           </div>
           <AiModelSwitcher
@@ -1716,7 +1716,7 @@ export default function Home() {
             className={cn(
               'pixel-btn min-h-8 px-2.5 font-mono text-[11.5px] inline-flex items-center gap-1.5 cursor-pointer',
               drawerOpen
-                ? '!border-[#e94a32] bg-[#e94a32]/20 text-[var(--color-ink)]'
+                ? '!border-[#e93e32] bg-[#e93e32]/20 text-[var(--color-ink)]'
                 : 'bg-[var(--color-panel)] text-[var(--color-muted-soft)] hover:text-[var(--color-ink)]'
             )}
           >
@@ -1742,10 +1742,13 @@ export default function Home() {
         </div>
       </header>
 
+      {/* Hanging 16-Bit Pixel Pine Garland & Twinkling Christmas Fairy Lights */}
+      <ChristmasLightsGarland paused={motionPaused || Boolean(prefersReducedMotion)} />
+
       {/* Pure Full-Viewport Companion + Chat Shell */}
       <main id="chat-workspace" className="flex-1 min-h-0 flex flex-col lg:flex-row relative overflow-hidden">
-        {/* Left: Live Animated 16-Bit Pixel-Art Orca Companion */}
-        <div className="lg:w-[320px] xl:w-[348px] lg:h-full shrink-0 flex flex-col">
+        {/* Left: Live Animated 16-Bit Christmas Pixel-Art Orca Companion */}
+        <div className="lg:w-[320px] xl:w-[348px] lg:h-full shrink-0 flex flex-col pt-3 lg:pt-3.5 bg-[var(--color-paper)]">
           <OrcaCompanion
             mood={companionMood}
             speech={companionSpeech}
@@ -1758,6 +1761,8 @@ export default function Home() {
             reportsCount={reportsFeed?.total_scans ?? 0}
             authorshipVerified={authorship.verified}
             canSelfHeal={canSelfHealDemo}
+            motionPaused={motionPaused}
+            onToggleMotionPaused={() => setMotionPaused((p) => !p)}
             onDemoScan={handleDemoScan}
             onTriggerSelfHeal={() => {
               if (isRealActiveRepo) {
@@ -1772,7 +1777,7 @@ export default function Home() {
         </div>
 
         {/* Center: Full-Height Pure Chat Stream */}
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col pt-3 lg:pt-3.5 bg-[var(--color-paper)]">
           <AiCopilotChat
             messages={messages}
             input={input}
@@ -1794,6 +1799,7 @@ export default function Home() {
             pendingVerifyChecks={pendingVerify?.checks ?? 0}
             isCheckingVerify={isCheckingVerify}
             companionMood={companionMood}
+            motionPaused={motionPaused || Boolean(prefersReducedMotion)}
             isHealing={isHealing}
             isTyping={isTyping}
             isScanning={isScanning}
@@ -1812,7 +1818,7 @@ export default function Home() {
               animate={{ opacity: 1, x: 0 }}
               exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, x: 20 }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
-              className="fixed inset-y-[58px] right-0 z-30 w-full max-w-[440px] lg:static lg:inset-auto lg:w-[410px] xl:w-[440px] lg:h-full border-l-2 border-[var(--color-line)] bg-[var(--color-paper)] flex flex-col min-h-0 shadow-[-4px_0_0_var(--pixel-shadow)] lg:shadow-none shrink-0"
+              className="fixed inset-y-[58px] right-0 z-30 w-full max-w-[440px] lg:static lg:inset-auto lg:w-[410px] xl:w-[440px] lg:h-full lg:pt-3.5 border-l-2 border-[var(--color-line)] bg-[var(--color-paper)] flex flex-col min-h-0 shadow-[-4px_0_0_var(--pixel-shadow)] lg:shadow-none shrink-0"
             >
               {/* Drawer Tabs + Close */}
               <div className="px-3 py-2.5 border-b-2 border-[var(--color-line)] flex items-center justify-between gap-2 shrink-0">

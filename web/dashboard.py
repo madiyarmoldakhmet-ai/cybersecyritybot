@@ -134,46 +134,46 @@ def _render(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Commit Guardian — мониторинг</title>
+<title>Commit Guardian — рождественский мониторинг</title>
 <style>
   :root {{
     color-scheme: dark;
-    --bg: #0b0e18; --panel: #121829; --panel-2: #19223a;
-    --line: #324670; --line-strong: #5270ab; --shadow: #05070e;
-    --text: #eef6ff; --body: #c9e4ff; --muted: #93add1;
-    --accent: #56d4b2; --violet: #8e7ef0; --moon: #ffe79e;
-    --ok: #47d18c; --crit: #ff6b57; --high: #f0b541;
+    --bg: #081119; --panel: #0f1c24; --panel-2: #152730;
+    --line: #255044; --line-strong: #3e806a; --shadow: #04080d;
+    --text: #f2f8ff; --body: #d1e9ff; --muted: #94b8b0;
+    --accent: #56e0a8; --crimson: #e93e32; --moon: #ffd866;
+    --ok: #47d18c; --crit: #ff6e61; --high: #ffd866;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
   }}
   * {{ box-sizing: border-box; margin: 0; border-radius: 0 !important; }}
   body {{
     background-color: var(--bg);
     background-image:
-      linear-gradient(180deg, rgba(45,168,144,.14) 0px, rgba(94,76,168,.09) 72px, transparent 150px),
-      radial-gradient(rgba(201,228,255,.16) 1px, transparent 0);
-    background-size: 100% 100%, 28px 28px;
+      linear-gradient(180deg, rgba(45,138,91,.18) 0px, rgba(233,62,50,.07) 64px, transparent 150px),
+      radial-gradient(rgba(255,216,102,.22) 1px, transparent 0),
+      radial-gradient(rgba(242,248,255,.16) 1px, transparent 0);
+    background-size: 100% 100%, 48px 48px, 24px 24px;
+    background-position: 0 0, 14px 12px, 0 0;
     color: var(--text);
     font: 14px/1.55 var(--mono);
     padding: 0 24px 40px;
   }}
   .aurora-bar {{
-    height: 4px; margin: 0 -24px 32px;
+    height: 5px; margin: 0 -24px 28px;
     background-image: repeating-linear-gradient(
       90deg,
-      #1f6e6c 0px, #1f6e6c 24px, #2da890 24px, #2da890 48px,
-      #56d4b2 48px, #56d4b2 64px, #5e4ca8 64px, #5e4ca8 96px,
-      #3d3572 96px, #3d3572 120px, #ffe79e 120px, #ffe79e 132px,
-      #e94a32 132px, #e94a32 148px
+      #e93e32 0px, #e93e32 16px, #f2f8ff 16px, #f2f8ff 32px,
+      #2d8a5b 32px, #2d8a5b 48px, #ffd866 48px, #ffd866 60px
     );
   }}
   .wrap {{ max-width: 1180px; margin: 0 auto; }}
   header {{ display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: flex-end; margin-bottom: 28px; }}
-  .eyebrow {{ font: 12px var(--mono); color: var(--accent); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }}
+  .eyebrow {{ font: 12px var(--mono); color: var(--moon); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }}
   h1 {{ font-size: 26px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; text-shadow: 3px 3px 0 var(--shadow); }}
   .status {{ display: flex; gap: 10px; flex-wrap: wrap; }}
   .chip {{
     font: 12px var(--mono); color: var(--body); background: var(--panel);
-    border: 2px solid var(--line-strong); padding: 6px 12px;
+    border: 2px solid var(--line-strong); border-top: 3px solid #f2f8ff; padding: 6px 12px;
     box-shadow: 3px 3px 0 var(--shadow);
   }}
   .chip b {{ color: var(--moon); font-weight: 600; }}
@@ -181,7 +181,7 @@ def _render(
   .dot-standby {{ background: var(--high); }}
   .kpis {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }}
   .kpi {{
-    background: var(--panel); border: 2px solid var(--line-strong); padding: 20px;
+    background: var(--panel); border: 2px solid var(--line-strong); border-top: 3px solid #f2f8ff; padding: 20px;
     box-shadow: 4px 4px 0 var(--shadow);
   }}
   .kpi .label {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }}
@@ -198,12 +198,12 @@ def _render(
   .stat .value {{ font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; color: var(--text); }}
   h2 {{ font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--moon); margin-bottom: 12px; }}
   .table-wrap {{
-    background: var(--panel); border: 2px solid var(--line-strong); overflow-x: auto;
+    background: var(--panel); border: 2px solid var(--line-strong); border-top: 3px solid #f2f8ff; overflow-x: auto;
     box-shadow: 4px 4px 0 var(--shadow);
   }}
   table {{ width: 100%; border-collapse: collapse; min-width: 760px; }}
   th, td {{ padding: 11px 14px; text-align: left; border-bottom: 2px solid var(--line); vertical-align: top; }}
-  th {{ color: var(--accent); background: var(--panel-2); font-weight: 600; font-size: 12px; text-transform: uppercase; }}
+  th {{ color: var(--moon); background: var(--panel-2); font-weight: 600; font-size: 12px; text-transform: uppercase; }}
   tr:last-child td {{ border-bottom: none; }}
   .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
   th.num {{ text-align: right; }}
@@ -214,12 +214,12 @@ def _render(
   .high {{ color: var(--high); font-weight: 700; }}
   .pill {{ font: 11px var(--mono); padding: 2px 8px; border: 2px solid; white-space: nowrap; text-transform: uppercase; }}
   .pill-ok {{ color: var(--ok); border-color: var(--ok); background: rgba(71,209,140,.14); }}
-  .pill-risk {{ color: var(--crit); border-color: #e94a32; background: rgba(233,74,50,.18); }}
+  .pill-risk {{ color: var(--crit); border-color: #e93e32; background: rgba(233,62,50,.18); }}
   .pill-fail {{ color: var(--muted); border-color: var(--line); background: rgba(255,255,255,.05); }}
   .link {{ color: var(--accent); text-decoration: none; }}
   .link:hover {{ text-decoration: underline; color: var(--moon); }}
-  .nav-link {{ color: var(--text); text-decoration: none; background: #e94a32; border-color: #ff8c78; }}
-  .nav-link:hover {{ background: #ff5b42; }}
+  .nav-link {{ color: var(--text); text-decoration: none; background: #e93e32; border-color: #ffd866; border-top-color: #ffd866; }}
+  .nav-link:hover {{ background: #ff5447; }}
   .empty {{ color: var(--muted); text-align: center; padding: 36px; }}
   footer {{ color: var(--muted); font-size: 12px; margin-top: 24px; }}
   @media (forced-colors: active) {{
@@ -237,7 +237,7 @@ def _render(
 <div class="wrap">
   <header>
     <div>
-      <div class="eyebrow">// commit-guardian</div>
+      <div class="eyebrow">// commit-guardian · 16-bit christmas edition</div>
       <h1>Мониторинг безопасности</h1>
     </div>
     <div class="status">

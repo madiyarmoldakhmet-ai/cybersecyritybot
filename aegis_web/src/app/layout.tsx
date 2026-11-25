@@ -19,9 +19,9 @@ const pressStart2P = Press_Start_2P({
 });
 
 export const metadata: Metadata = {
-  title: "Commit Guardian — 16-Bit On-Premise AI AppSec & Chat",
+  title: "Commit Guardian — 16-Bit Christmas AI AppSec & Chat",
   description:
-    "Лёгкий пиксельный AI-аудитор безопасности коммитов: Aegis Orca, 14 сканеров, системный анализ, защита ИИН и PDF-отчёты.",
+    "Праздничный 16-битный пиксельный AI-аудитор безопасности коммитов: Aegis Orca, 14 сканеров, системный анализ, защита ИИН и PDF-отчёты.",
 };
 
 export const viewport: Viewport = {
